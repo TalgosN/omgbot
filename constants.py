@@ -38,9 +38,21 @@ CLUBS_PATH = os.path.join(BASE_DIR, "data", "clubs.json")
 with open(PHRASES_PATH, "r", encoding="utf-8") as f:
     TEXTS = json.load(f)
 
-with open(CLUBS_PATH, "r", encoding="utf-8") as f:
-    CLUBS = json.load(f)
 
+
+def get_clubs():
+    try:
+        # Проверяем, существует ли файл, чтобы не уронить бота
+        if not os.path.exists(CLUBS_PATH):
+            print(f"Ошибка: Файл {CLUBS_PATH} не найден!")
+            return {}
+            
+        with open(CLUBS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Критическая ошибка чтения JSON: {e}")
+        return {}
+    
 col=3 # Пока не знаю что это
 
 ### Кнопки
@@ -67,11 +79,11 @@ funclist_acc=("💬 Сменить ник","👤 Я сменил юзерней�
 
 ## Клубы
 clublist = tuple(
-    name for name, info in CLUBS.items() 
+    name for name, info in get_clubs().items() 
     if info.get('is_physical') is True
 )
 
-clublist_task = tuple(CLUBS.keys())
+clublist_task = tuple(get_clubs().keys())
 
 ### Всячина
 emojis={"roll":("⚡️","🦄","👻"),

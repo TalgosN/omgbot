@@ -1,12 +1,13 @@
 import sqlite3
 import pytz
 from telebot import *
-from constants import *
+#from constants import *
+from constants import get_clubs, funclist_today, CHATS, TEXTS, tags_main, clublist
 from sheets import *
 from datetime import datetime,timedelta
 
 
-
+CLUBS=get_clubs()
 ############################# core openclose
 
 def func_today (message,bot):
@@ -188,7 +189,6 @@ def confirm_enter(message, a, club, tooearly, bot):
         questions = q_variants[variant_index]
         
         # 3. Приветствие
-        # Индекс для текстов берем аккуратно
         try:
             action_idx = funclist_today.index(a)
             ui_text = TEXTS['ui']['login_logout'][action_idx]
@@ -211,39 +211,36 @@ def confirm_enter(message, a, club, tooearly, bot):
         log_msg = "зашёл в" if a == '✅ Открыть смену' else "начинает закрывать"
         bot.send_message(CHATS['reports'], f"⚠️ {name} {log_msg} {club} в {current_datetime}")
 
-        # 5. Сброс состояния и запуск шагов
-        if hasattr(run_step, 'current_q_type'): del run_step.current_q_type
-        
-        run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly)
+        # 5. ЗАПУСК ОПРОСА
+        # Важно: передаем expected_type=None, так как это первый шаг и проверять пока нечего
+        run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None)
         
     else:
-        # Если нажал "Нет" или что-то левое при открытии
         check_club(message, a, bot)
 
-def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly):
+def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None):
     # 0. ГЛАВНАЯ ПРОВЕРКА: Хочет ли юзер вернуться?
-    # Проверяем text, так как кнопка отправляет именно текст
     if message.text == "Вернуться" or message.text == "⬅️ Вернуться":
         from main import hello
         bot.send_message(message.chat.id, "Отмена операции. Возвращаемся в меню.")
         hello(message.chat.id, bot)
         return
 
-    # 1. Обработка ответа на ПРЕДЫДУЩИЙ вопрос (если это не первый запуск)
-    if hasattr(run_step, 'current_q_type'):
-        req_type = run_step.current_q_type
-        
+    # 1. ВАЛИДАЦИЯ ПРЕДЫДУЩЕГО ВОПРОСА (если expected_type передан)
+    if expected_type:
         # Валидация фото
-        if req_type == "photo" and not message.photo:
+        if expected_type == "photo" and not message.photo:
             bot.send_message(message.chat.id, "Стой! Здесь нужно именно фото 📸 (или нажми 'Вернуться')")
-            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly)
+            # Рекурсия: просим повторить ввод, передавая ТЕ ЖЕ параметры
+            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type)
         
         # Валидация числа
-        if req_type == "num" and (not message.text or not message.text.isnumeric()):
+        if expected_type == "num" and (not message.text or not message.text.isnumeric()):
             bot.send_message(message.chat.id, "Нужно ввести число (только цифры) 🔢")
-            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly)
+            # Рекурсия: просим повторить ввод
+            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type)
 
-        # Сохранение данных
+        # Сохранение данных (если прошли проверку)
         if message.photo:
             photos.append(types.InputMediaPhoto(message.photo[-1].file_id))
         elif message.text:
@@ -254,47 +251,57 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
         finish_report(message, bot, a, club, answers, photos, start_time, tooearly)
         return
 
-    # 3. Подготовка СЛЕДУЮЩЕГО вопроса
-    q_data = remaining_questions[0]
-    run_step.current_q_type = q_data['type']
+    # 3. ЗАДАЕМ СЛЕДУЮЩИЙ ВОПРОС
+    current_q_data = remaining_questions[0]
+    next_expected_type = current_q_data['type'] # Запоминаем тип этого вопроса для СЛЕДУЮЩЕГО шага
 
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("Вернуться")
     
-    bot.send_message(message.chat.id, q_data['text'], reply_markup=markup)
-    # Важно: content_types=['photo', 'text'] чтобы бот видел и фото, и текст
-    bot.register_next_step_handler(message, run_step, bot, a, club, 
-                                   remaining_questions[1:], answers, photos, start_time, tooearly)
+    bot.send_message(message.chat.id, current_q_data['text'], reply_markup=markup)
     
+    # 4. РЕГИСТРИРУЕМ СЛЕДУЮЩИЙ ШАГ
+    # Передаем next_expected_type в следующий вызов функции
+    bot.register_next_step_handler(message, run_step, bot, a, club, 
+                                   remaining_questions[1:], answers, photos, start_time, tooearly, 
+                                   expected_type=next_expected_type)
+
 def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     from main import define_name, hello
     
     # 1. Инициализация данных
     users = define_name(message)
     name = users[0][4]
-    now = datetime.now(pytz.timezone('Europe/Moscow'))
-    today_db = now.strftime('%Y-%m-%d %H:%M:%S')
     
+    # Текущее время (когда закончил заполнять)
+    tz = pytz.timezone('Europe/Moscow')
+    now = datetime.now(tz)
+    today_db = now.strftime('%Y-%m-%d %H:%M:%S')
 
-    # --- РАСЧЕТ ОПОЗДАНИЯ (Вынесли наверх) ---
+    # --- ИСПРАВЛЕННЫЙ РАСЧЕТ ОПОЗДАНИЯ ---
     diff_minutes = 0
     if a == '✅ Открыть смену':
         try:
-            # start_time это строка "dd.mm.yyyy HH:MM"
-            start_dt = datetime.strptime(start_time, "%d.%m.%Y %H:%M")
+            # 1. start_time это просто "HH:MM" (например, "10:05")
+            # Нам нужно добавить к нему сегодняшнюю дату, чтобы считать разницу
+            current_date = now.date()
+            start_t = datetime.strptime(start_time, "%H:%M").time()
+            start_dt = datetime.combine(current_date, start_t) # Получили полноценный datetime
             
-            # Определяем целевое время из JSON
+            # 2. Определяем целевое время из JSON
             sched = CLUBS[club]['schedule']['open_strict']
+            
+            # Проверяем день недели (0-4 будни, 5-6 выходные)
             is_weekend = start_dt.weekday() >= 5 
             target_str = sched['weekend'] if is_weekend else sched['weekdays']
             
-            # Собираем datetime открытия
+            # 3. Собираем целевой datetime (сегодня + время из расписания)
             target_time = datetime.strptime(target_str, "%H:%M:%S").time()
-            target_dt = start_dt.replace(hour=target_time.hour, minute=target_time.minute, second=0)
+            target_dt = datetime.combine(current_date, target_time)
             
-            # Разница в минутах
+            # 4. Считаем разницу в секундах
             diff_sec = (start_dt - target_dt).total_seconds()
-            diff_minutes = int(diff_sec / 60)
+            diff_minutes = int(diff_sec / 60) # Переводим в минуты
             
         except Exception as e:
             print(f"Ошибка расчета времени: {e}")
@@ -324,28 +331,33 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
         if tooearly and a == '🚫 Закрыть смену':
             bot.send_message(CHATS['reports'], f"⚠️ Внимание! Раннее закрытие!\n{tags_main}")
 
-        # Уведомление об опоздании (в канал отчетов)
+        # Уведомление об опоздании (для админов)
         if a == '✅ Открыть смену' and diff_minutes > 5:
              bot.send_message(CHATS['reports'], f"😡 Внимание! ОПОЗДАНИЕ на {diff_minutes} мин!\n{tags_main}")
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка при отправке отчета: {e}")
 
-    # 4. Уведомление в ОБЩУЮ ГРУППУ (CHATS['main_group'])
-    # Твоя логика со штрафами
+    # 4. Уведомление в ОБЩУЮ ГРУППУ (CHATS['main_group']) + ЛОГИКА ШТРАФОВ
     penalty_text = ""
+    msg_type = 'good_morning' # Дефолтное значение
     
     if a == '✅ Открыть смену':
         if diff_minutes > 5:
+            # Опоздал больше чем на 5 минут
             msg_type = 'penalty_phrases'
-            penalty_text = '🚨 ШТРАФ! 🚨 '
+            penalty_text = f'🚨 ШТРАФ (опоздание {diff_minutes} мин)! 🚨\n' 
         else:
+            # Пришел вовремя
             msg_type = 'good_morning'    
     else:
+        # Закрытие смены
         msg_type = 'good_night'
     
-    # Чтобы не упало, если penalty_phrases нет в файле, добавил fallback список
-    phrases = TEXTS.get(msg_type, ["Смена открыта с опозданием!", "Не опаздывай!"])
+    # Безопасное получение фраз (если вдруг в TEXTS нет penalty_phrases)
+    phrases = TEXTS.get(msg_type, ["Смена открыта/закрыта.", "Хорошего отдыха!"])
+    
+    # Собираем итоговое сообщение
     compliment = f"{penalty_text}{random.choice(phrases)}"
     
     bot.send_message(
@@ -363,8 +375,9 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
             (today_db, f"@{message.from_user.username}", club, a)
         )
 
+        # Запись нала (если первый ответ - число)
         if answers and (a == '✅ Открыть смену' or a == '🚫 Закрыть смену'):
-             if answers[0].isdigit(): 
+             if str(answers[0]).isdigit(): 
                 try:
                     cur.execute(
                         "INSERT INTO nal (drep, club, amount) VALUES (?, ?, ?)",
@@ -382,6 +395,7 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     # 6. Финал
     bot.send_message(message.chat.id, "Отчет успешно принят! Спасибо за работу. 😎")
     hello(message.chat.id, bot)
+
 ############################# common functions
 
 ##### openclose

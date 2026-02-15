@@ -13,7 +13,8 @@ def chatid_to_users(chatid):
     conn.close()
     return users
 
-def hello(chatid, bot): 
+def hello(chatid, bot):
+    bot.clear_step_handler_by_chat_id(chatid) 
     users = chatid_to_users(chatid)
 
     if len(users) == 0:

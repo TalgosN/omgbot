@@ -46,35 +46,68 @@ def send_status_bot(): #отправка статуса о работе бота
     bot.send_message(CHATS['me'], f'Опять работа:(')
     
 
-def schedule_func():
-    # Базовые задачи
+
+
+
+def check_dynamic_events(bot):
+    """Эта функция запускается каждую минуту"""
+    
+    # 1. Читаем СВЕЖИЙ конфиг
+    clubs = get_clubs()
+    
+    # 2. Получаем текущее время и день недели
+    tz = pytz.timezone('Europe/Moscow')
+    now = datetime.now(tz)
+    current_time = now.strftime("%H:%M:00") # "10:00:00"
+    weekday = now.weekday() # 0 = Понедельник, 6 = Воскресенье
+
+    # 3. Проверяем каждый клуб
+    for club_name, info in clubs.items():
+        # Пропускаем виртуальные клубы (если есть такая логика)
+        if not info.get('is_physical'):
+            continue
+            
+        conf = info['schedule']
+
+        # --- ПРОВЕРКА НА ЗАКРЫТИЕ (status_close_time) ---
+        if current_time == conf['status_close_time']:
+            send_status_close(club_name, bot)
+
+        # --- ПРОВЕРКА НА ОТКРЫТИЕ ---
+        # Если будни (0-4)
+        if 0 <= weekday <= 4:
+            if current_time == conf['open']['weekdays']:
+                send_status_open(club_name, bot)
+        
+        # Если выходные (5-6)
+        else:
+            if current_time == conf['open']['weekend']:
+                send_status_open(club_name, bot)
+
+def schedule_func(bot): # Не забудь передать bot!
+    # --- БАЗОВЫЕ ЗАДАЧИ (Статические) ---
+    # Эти задачи не зависят от clubs.json, их можно оставить жесткими
     schedule.every().day.at("10:00:00", 'Europe/Moscow').do(init)
     schedule.every().monday.at("09:00:00", 'Europe/Moscow').do(all_active_tasks_schedule)
     schedule.every().day.at("09:00:00", 'Europe/Moscow').do(today_sched)
+    
+    # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
+    # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
+    # Можно оставить так, пробежавшись один раз при старте
+    startup_clubs = get_clubs()
+    for club_name, info in startup_clubs.items():
+        if info.get('is_physical'):
+            schedule.every().day.at("05:00:00", 'Europe/Moscow').do(close_club, club_name, bot)
 
-    for club_name in clublist:
-        conf = CLUBS[club_name]['schedule']
-        
-        # Закрытие
-        schedule.every().day.at("05:00:00", 'Europe/Moscow').do(close_club, club_name, bot)
-        schedule.every().day.at(conf['status_close_time'], 'Europe/Moscow').do(send_status_close, club_name, bot)
+    # --- ДИНАМИЧЕСКИЕ ЗАДАЧИ (Из таблицы) ---
+    # Запускаем проверку каждую минуту. 
+    # Она внутри себя сама разберется, во сколько кого открывать.
+    schedule.every(1).minutes.do(check_dynamic_events, bot)
 
-        # Открытие (Будни)
-        weekdays = [schedule.every().monday, schedule.every().tuesday, 
-                    schedule.every().wednesday, schedule.every().thursday, schedule.every().friday]
-        for day in weekdays:
-            day.at(conf['open']['weekdays'], 'Europe/Moscow').do(send_status_open, club_name, bot)
-
-        # Открытие (Выходные)
-        weekends = [schedule.every().saturday, schedule.every().sunday]
-        for day in weekends:
-            day.at(conf['open']['weekend'], 'Europe/Moscow').do(send_status_open, club_name, bot)
-
+    # Вечный цикл
     while True:
         schedule.run_pending()
         time.sleep(1)
-
-
 
 
 
@@ -495,7 +528,7 @@ register_callback2 (bot)
 
 
 if __name__ == "__main__":
-    threading.Thread(target=schedule_func).start()
+    threading.Thread(target=schedule_func, args=(bot,)).start()
     update_users()
     init()
 

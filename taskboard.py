@@ -82,7 +82,7 @@ def add_task_type(message,bot):
         add_task(message,bot)
 
 def club_task(message,task_type,bot):
-
+     
      markup=types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
      markup.add(*clublist_task,"Вернуться")
      bot.send_message(message.chat.id, f'К какому клубу относится твое обращение?',reply_markup=markup)
@@ -225,13 +225,15 @@ def send_task(message,task_type,title, descrip,club_task,bot):
     # 2. Подготовка данных
     t_type_low = task_type.lower()
     clean_title = title.strip()
-    club_tag = CLUBS[club_task]['tag']
+
+    clubs = get_clubs()
+    club_tag = clubs[club_task]['tag']
     
     # 3. Логика определения тегов (убираем кучу if/else)
     mentions = ""
     if task_type == 'Ремонт':
         extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
-        mentions = f"{extra}{club_tag}"
+        mentions = f"{extra} {club_tag}"
         # Отправка в доп. чат для ремонта
         bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\nДобавлена новая проблема-{t_type_low}: <b>{clean_title}</b>", parse_mode='html')
     
@@ -360,41 +362,66 @@ def show_active_type(message, bot, category):
 def register_callback(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('all_'))
     def callback(call):
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
-        data = call.data[4:]
-
-        if data == "back":
-            returnback(call.message, bot)
-        else:
+        try:
+            # Убираем часики загрузки у кнопки
+            bot.answer_callback_query(call.id) 
             
-            task_id = int(data)  # Преобразуем callback_data в число (id задачи)
+            data = call.data[4:]
+
+            if data == "back":
+                bot.clear_step_handler_by_chat_id(call.message.chat.id)
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
+                returnback(call.message, bot)
+                return
+
+            task_id = int(data)
+            
             conn = sqlite3.connect('db/omgbot.sql')
+            # МАГИЯ ЗДЕСЬ: Позволяет обращаться по именам колонок
+            conn.row_factory = sqlite3.Row 
             cur = conn.cursor()
+            
+            # Используем безопасный запрос (?)
             cur.execute("SELECT * FROM tasks WHERE id=? AND status='В работе'", (task_id,))
             task = cur.fetchone()
             cur.close()
             conn.close()
 
-            dtrep=task[1]
-            tasktype=task[2]
-            club_task=task[3]
-            title=task[4]
-            photo=task[5]
-            desc=task[6]
-            status=task[7]
-            text=f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}"
+            if not task:
+                bot.send_message(call.message.chat.id, "⚠️ Эта задача уже не актуальна (удалена или закрыта).")
+                return
+
+            # Теперь берем данные БЕЗОПАСНО по именам колонок
+            # (Имена должны совпадать с названиями в твоей базе данных!)
+            dtrep = task['dtrep']      # Было task[1]
+            tasktype = task['type']    # Было task[2]
+            club_task = task['club']   # Было task[3]
+            title = task['title']      # Было task[4]
+            photo = task['photo']      # Было task[5]
+            desc = task['desc']        # Было task[6]
+            status = task['status']    # Было task[7]
+
+            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}"
+
+            # Убираем кнопки у старого сообщения
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
 
             if photo is not None:
-                namephoto=f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
-                writeTofile(photo,namephoto)
-                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'),caption=text,parse_mode= 'html')
+                namephoto = f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
+                writeTofile(photo, namephoto)
+                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'), caption=text, parse_mode='html')
             else:
-                bot.send_message(call.message.chat.id,text,parse_mode= 'html')
+                bot.send_message(call.message.chat.id, text, parse_mode='html')
 
             markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
             markup.add(*taskto)
-            bot.send_message(call.message.chat.id,"Что вы хотите сделать с этим обращением?",reply_markup=markup)
-            bot.register_next_step_handler(call.message, dotask,task_id,bot)
+            bot.send_message(call.message.chat.id, "Что вы хотите сделать с этим обращением?", reply_markup=markup)
+            bot.register_next_step_handler(call.message, dotask, task_id, bot)
+
+        except Exception as e:
+            # Если что-то сломается, ты увидишь это прямо в боте
+            bot.send_message(call.message.chat.id, f"🔥 Ошибка при открытии задачи: {e}")
+            print(f"ERROR in taskboard: {e}") # И в консоли
 
 def dotask(message,task,bot):
 
@@ -565,48 +592,65 @@ def show_done_tasks(message, page, bot):
 def register_callback2(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('don_'))
     def callback2(call):
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
-        data = call.data[4:]
+        try:
+            bot.answer_callback_query(call.id)
+            data = call.data[4:]
 
-        if data == "back":
-            returnback(call.message, bot)
-        elif data.startswith("page_"):
-            # Обработка переключения страниц
-            page = int(data[5:])
-            show_done_tasks(call.message, page, bot)
-        else:
-           
-            task_id = int(data)  # Преобразуем callback_data в ID задачи
+            if data == "back":
+                bot.clear_step_handler_by_chat_id(call.message.chat.id)
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
+                returnback(call.message, bot)
+                return
+            
+            elif data.startswith("page_"):
+                page = int(data[5:])
+                show_done_tasks(call.message, page, bot)
+                return
+
+            # Если это открытие задачи
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
+            
+            task_id = int(data)
             conn = sqlite3.connect('db/omgbot.sql')
+            conn.row_factory = sqlite3.Row # <-- Важно!
             cur = conn.cursor()
-            # Используем параметризованный запрос
             cur.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
             task = cur.fetchone()
             cur.close()
             conn.close()
 
-            dtrep=task[1]
-            tasktype=task[2]
-            club_task=task[3]
-            title=task[4]
-            photo=task[5]
-            desc=task[6]
-            status=task[7]
-            dtfb=task[8]
-            feedback=task[9]
-            text=f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}\n\n<b>Ответ:</b> {feedback}\n\n<b>Дата ответа:</b> {dtfb}"
+            if not task:
+                bot.send_message(call.message.chat.id, "⚠️ Задача не найдена.")
+                return
+
+            # Безопасное получение данных
+            dtrep = task['dtrep']
+            tasktype = task['type']
+            club_task = task['club']
+            title = task['title']
+            photo = task['photo']
+            desc = task['desc']
+            status = task['status']
+            # Проверь, есть ли эти колонки в выполненных задачах, иногда они NULL
+            dtfb = task['dtfb'] if 'dtfb' in task.keys() else 'Не указано'
+            feedback = task['feedback'] if 'feedback' in task.keys() else 'Нет ответа'
+
+            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}\n\n<b>Ответ:</b> {feedback}\n\n<b>Дата ответа:</b> {dtfb}"
 
             if photo is not None:
-                namephoto=f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
-                writeTofile(photo,namephoto)
-                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'),caption=text,parse_mode= 'html')
+                namephoto = f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
+                writeTofile(photo, namephoto)
+                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'), caption=text, parse_mode='html')
             else:
-                bot.send_message(call.message.chat.id,text,parse_mode= 'html')
+                bot.send_message(call.message.chat.id, text, parse_mode='html')
 
             markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
             markup.add("Вернуться")
-            bot.send_message(call.message.chat.id,"Выберете другое обращение или нажмите 'Вернуться'",reply_markup=markup)
-            bot.register_next_step_handler(call.message, ret,bot)
+            bot.send_message(call.message.chat.id, "Выберете другое обращение или нажмите 'Вернуться'", reply_markup=markup)
+            bot.register_next_step_handler(call.message, ret, bot)
+
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"🔥 Ошибка: {e}")
 
 def ret (message,bot):
 
