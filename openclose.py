@@ -213,12 +213,12 @@ def confirm_enter(message, a, club, tooearly, bot):
 
         # 5. ЗАПУСК ОПРОСА
         # Важно: передаем expected_type=None, так как это первый шаг и проверять пока нечего
-        run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None)
+        run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None, current_q_text=None)
         
     else:
         check_club(message, a, bot)
 
-def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None):
+def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None, current_q_text=None):
     # 0. ГЛАВНАЯ ПРОВЕРКА: Хочет ли юзер вернуться?
     if message.text == "Вернуться" or message.text == "⬅️ Вернуться":
         from main import hello
@@ -226,25 +226,31 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
         hello(message.chat.id, bot)
         return
 
-    # 1. ВАЛИДАЦИЯ ПРЕДЫДУЩЕГО ВОПРОСА (если expected_type передан)
+    # 1. ВАЛИДАЦИЯ ПРЕДЫДУЩЕГО ВОПРОСА
     if expected_type:
         # Валидация фото
         if expected_type == "photo" and not message.photo:
             bot.send_message(message.chat.id, "Стой! Здесь нужно именно фото 📸 (или нажми 'Вернуться')")
-            # Рекурсия: просим повторить ввод, передавая ТЕ ЖЕ параметры
-            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type)
+            # Передаем current_q_text обратно, чтобы не потерять контекст
+            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type, current_q_text)
         
         # Валидация числа
         if expected_type == "num" and (not message.text or not message.text.isnumeric()):
             bot.send_message(message.chat.id, "Нужно ввести число (только цифры) 🔢")
-            # Рекурсия: просим повторить ввод
-            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type)
+            return bot.register_next_step_handler(message, run_step, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type, current_q_text)
 
-        # Сохранение данных (если прошли проверку)
+        # --- СОХРАНЕНИЕ ДАННЫХ (ИЗМЕНЕНИЯ ЗДЕСЬ) ---
         if message.photo:
             photos.append(types.InputMediaPhoto(message.photo[-1].file_id))
         elif message.text:
-            answers.append(message.text)
+            # Берем первые 2 слова из вопроса
+            if current_q_text:
+                label = " ".join(current_q_text.split()[:2])
+            else:
+                label = "Ответ"
+            
+            # Сохраняем как КОРТЕЖ (Метка, Значение), чтобы не сломать БД
+            answers.append((label, message.text))
 
     # 2. ПРОВЕРКА: Если вопросы закончились
     if not remaining_questions:
@@ -253,18 +259,19 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
 
     # 3. ЗАДАЕМ СЛЕДУЮЩИЙ ВОПРОС
     current_q_data = remaining_questions[0]
-    next_expected_type = current_q_data['type'] # Запоминаем тип этого вопроса для СЛЕДУЮЩЕГО шага
+    next_expected_type = current_q_data['type']
+    next_q_text = current_q_data['text'] # Запоминаем текст вопроса
 
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("Вернуться")
     
-    bot.send_message(message.chat.id, current_q_data['text'], reply_markup=markup)
+    bot.send_message(message.chat.id, next_q_text, reply_markup=markup)
     
     # 4. РЕГИСТРИРУЕМ СЛЕДУЮЩИЙ ШАГ
-    # Передаем next_expected_type в следующий вызов функции
+    # Передаем next_q_text в следующий вызов
     bot.register_next_step_handler(message, run_step, bot, a, club, 
                                    remaining_questions[1:], answers, photos, start_time, tooearly, 
-                                   expected_type=next_expected_type)
+                                   next_expected_type, next_q_text)
 
 def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     from main import define_name, hello
@@ -308,7 +315,7 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
             diff_minutes = 0
 
     # 2. Формируем текст отчета
-    answers_text = "\nОтветы на вопросы:\n" + "\n".join([f"— {ans}" for ans in answers]) if answers else ""
+    answers_text = "\nОтветы на вопросы:\n" + "\n".join([f"— {ans[0]}: {ans[1]}" for ans in answers]) if answers else ""
     
     report_caption = (
         f"📍 Клуб: {club}\n"
@@ -375,13 +382,15 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
             (today_db, f"@{message.from_user.username}", club, a)
         )
 
-        # Запись нала (если первый ответ - число)
+        # Запись нала: берем answers[0][1] — это само значение (число)
         if answers and (a == '✅ Открыть смену' or a == '🚫 Закрыть смену'):
-             if str(answers[0]).isdigit(): 
+             # answers[0] теперь выглядит как ('Касса', '1000')
+             # Нам нужен второй элемент -> answers[0][1]
+             if str(answers[0][1]).isdigit(): 
                 try:
                     cur.execute(
                         "INSERT INTO nal (drep, club, amount) VALUES (?, ?, ?)",
-                        (today_db, club, answers[0])
+                        (today_db, club, answers[0][1])
                     )
                 except Exception as e:
                     print(f"Ошибка записи нала: {e}")
