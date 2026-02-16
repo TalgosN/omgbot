@@ -74,7 +74,7 @@ def check_club(message, a, bot):
     btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
     
     # Кнопка 2: Тот самый "СКИП" (Ручной выбор)
-    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Если GPS глючит или для КЦ)")
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для КЦ / GPS глючит)")
     
     markup.add(btn_geo, btn_skip, "Вернуться")
     
