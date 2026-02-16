@@ -107,7 +107,7 @@ def geo_router(message, a, tooearly, bot):
     
     markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
     btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
-    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Если GPS глючит)")
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для КЦ / GPS глючит)")
     markup.add(btn_geo, btn_skip, "Вернуться")
     
     bot.send_message(message.chat.id, "Не то нажал! Нажми кнопку 📍 или 📝 👇", reply_markup=markup)
