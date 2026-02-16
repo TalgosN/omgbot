@@ -5,6 +5,7 @@ from telebot import *
 from constants import get_clubs, funclist_today, CHATS, TEXTS, tags_main, clublist
 from sheets import *
 from datetime import datetime,timedelta
+import math
 
 
 CLUBS=get_clubs()
@@ -67,27 +68,113 @@ def do_report(message,bot):
     
     
 def check_club(message, a, bot):
-    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(*clublist, "Вернуться")
-    bot.send_message(message.chat.id, 'Какой клуб?', reply_markup=markup)
-    bot.register_next_step_handler(message, check_club_status, a, False, bot)
-
-def check_club_status(message, a, tooearly, bot):
-    club = message.text
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
     
-    if club == "Вернуться":
+    # Кнопка 1: Красивая авто-проверка
+    btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
+    
+    # Кнопка 2: Тот самый "СКИП" (Ручной выбор)
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Если GPS глючит или для КЦ)")
+    
+    markup.add(btn_geo, btn_skip, "Вернуться")
+    
+    bot.send_message(message.chat.id, 
+                     f'Подтверждение локации для "{a}".\n\n'
+                     f'1. Нажми "📍 Я на месте", чтобы я сам понял, где ты\n'
+                     f'2. Если GPS не ловит — выбери "📝 Выбрать из списка"', 
+                     reply_markup=markup)
+    
+    # Регистрируем роутер, который поймет, что нажал юзер
+    bot.register_next_step_handler(message, geo_router, a, False, bot)
+
+# --- 2. РОУТЕР (Распределяет на Гео или Ручной ввод) ---
+def geo_router(message, a, tooearly, bot):
+    # Если прислали Гео (Контент location)
+    if message.content_type == 'location':
+        find_club_by_geo(message, a, tooearly, bot)
+        return
+
+    # Если нажали кнопку "Выбрать из списка"
+    if message.text == "📝 Выбрать из списка (Если GPS глючит)":
+        manual_club_selection(message, a, tooearly, bot)
+        return
+
+    # Если вернулись
+    if message.text in ["Вернуться", "⬅️ Вернуться"]:
         func_today(message, bot)
         return
     
-    if club not in clublist:
-        bot.send_message(message.chat.id, "Извините, такого клуба у нас нет")
+    # Если прислали ерунду
+    bot.send_message(message.chat.id, "Нажми кнопку 📍 или 📝!")
+    bot.register_next_step_handler(message, geo_router, a, tooearly, bot)
+
+# --- 3. АВТО-ПОИСК (Твой старый код, чуть доработанный) ---
+def find_club_by_geo(message, a, tooearly, bot):
+    if message.forward_date is not None:
+        bot.send_message(message.chat.id, "❌ Пересланные сообщения не принимаются!")
         check_club(message, a, bot)
         return
+
+    user_lat = message.location.latitude
+    user_lon = message.location.longitude
+    current_clubs = get_clubs()
     
-    # Проверка статуса клуба
+    nearest_club = None
+    min_dist = 99999999
+    found_radius = 0
+
+    for club_name, data in current_clubs.items():
+        if 'coords' not in data: continue
+        target = data['coords']
+        dist = get_distance(user_lat, user_lon, target['lat'], target['lon'])
+        if dist < min_dist:
+            min_dist = dist
+            nearest_club = club_name
+            found_radius = data.get('radius', 500)
+
+    if nearest_club and min_dist <= found_radius:
+        bot.send_message(message.chat.id, f"✅ Локация подтверждена: {nearest_club} (до клуба {int(min_dist)}м)")
+        # ВАЖНО: is_geo_verified = True
+        check_club_status_logic(message, a, nearest_club, tooearly, True, bot)
+    else:
+        bot.send_message(message.chat.id, f"❌ Не нашел клубов рядом! Ближайший: {nearest_club} ({int(min_dist)}м).")
+        # Предлагаем выбрать вручную
+        manual_club_selection(message, a, tooearly, bot)
+
+# --- 4. РУЧНОЙ ВЫБОР (ТОТ САМЫЙ СКИП) ---
+def manual_club_selection(message, a, tooearly, bot):
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(*clublist, "Вернуться")
+    bot.send_message(message.chat.id, 'Выбери клуб из списка:', reply_markup=markup)
+    bot.register_next_step_handler(message, manual_selection_handler, a, tooearly, bot)
+
+def manual_selection_handler(message, a, tooearly, bot):
+    club = message.text
+    if club in ["Вернуться", "⬅️ Вернуться"]:
+        func_today(message, bot)
+        return
+    if club not in clublist:
+        bot.send_message(message.chat.id, "Нет такого клуба.")
+        manual_club_selection(message, a, tooearly, bot)
+        return
+    
+    # ВАЖНО: is_geo_verified = False (так как выбрали руками)
+    check_club_status_logic(message, a, club, tooearly, False, bot)
+
+# --- 5. ФИНАЛЬНАЯ ЛОГИКА (С ПРОВЕРКОЙ ФЛАГА) ---
+def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
+    # 1. Проверяем конфиг для предупреждения ПОЛЬЗОВАТЕЛЮ
+    current_clubs = get_clubs()
+    req_geo = current_clubs[club].get('require_geo', False)
+    
+    if req_geo and not is_geo_verified:
+        bot.send_message(message.chat.id, f"⚠️ Внимание! Ты открываешь смену без подтверждения геопозиции. Это будет зафиксировано.")
+        # СООБЩЕНИЕ АДМИНАМ ОТСЮДА УБРАЛИ, ОНО БУДЕТ В КОНЦЕ
+
+    # 2. Стандартная проверка БД
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT status FROM clubs WHERE club='%s'"%(club))
+    cur.execute("SELECT status FROM clubs WHERE club=?", (club,))
     result = cur.fetchone()
     cur.close()
     conn.close()
@@ -95,51 +182,48 @@ def check_club_status(message, a, tooearly, bot):
     status = result[0] if result else None
    
     if a == '✅ Открыть смену' and status == 'Открыт':
-        bot.send_message(message.chat.id, f'Дружок, ты что-то перепутал! {club} уже открыт!')
-        check_club(message, a, bot)
+        bot.send_message(message.chat.id, f'{club} уже открыт!')
+        func_today(message, bot)
         return
     elif a == '🚫 Закрыть смену' and status == 'Закрыт':
-        bot.send_message(message.chat.id, f'Дружок, ты что-то перепутал! {club} уже закрыт!')
-        check_club(message, a, bot)
+        bot.send_message(message.chat.id, f'{club} уже закрыт!')
+        func_today(message, bot)
         return
     
+    # 3. Пускаем дальше (передаем is_geo_verified дальше по цепочке)
     if a == '✅ Открыть смену':
-        enter_club(message, a, club, tooearly, bot)
+        enter_club(message, a, club, tooearly, is_geo_verified, bot)
     else:
-        is_early(message, a, club, bot)  # Передаем club как параметр
+        is_early(message, a, club, is_geo_verified, bot)
 
-def is_early(message, a, club, bot):
-    # Берем конфиг из нашего нового JSON
+def is_early(message, a, club, is_geo_verified, bot):
     conf = CLUBS[club]['schedule']
     now = datetime.now(pytz.timezone('Europe/Moscow'))
     
-    # Парсим время "21:45:00" в объект time
     limit_t = datetime.strptime(conf['early_check_time'], "%H:%M:%S").time()
-    # Создаем datetime на сегодня с этим временем
     limit_dt = now.replace(hour=limit_t.hour, minute=limit_t.minute, second=0, microsecond=0)
 
-    # Если сейчас раннее утро (до 5 утра), значит дедлайн был вчера вечером
     if now.hour < 5:
         limit_dt -= timedelta(days=1)
 
-    # Считаем разницу
     late = (limit_dt - now).total_seconds()
 
     if late > 0:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add(*TEXTS['ui']['answer_options'])
         bot.send_message(message.chat.id, 'Что-то ты рановато! Ты уверен, что хочешь закрыть смену?', reply_markup=markup)
-        bot.register_next_step_handler(message, closeconfirm, a, club, bot)
+        # Передаем is_geo_verified дальше
+        bot.register_next_step_handler(message, closeconfirm, a, club, is_geo_verified, bot)
     else:
-        enter_club(message, a, club, False, bot)
+        enter_club(message, a, club, False, is_geo_verified, bot)
 
-def closeconfirm(message, a, club, bot):
+def closeconfirm(message, a, club, is_geo_verified, bot):
     if message.text == TEXTS['ui']['answer_options'][0]:
-        enter_club(message, a, club, True, bot)
+        enter_club(message, a, club, True, is_geo_verified, bot)
     else:
         func_today(message, bot)
 
-def enter_club(message, a, club, tooearly, bot):
+def enter_club(message, a, club, tooearly, is_geo_verified, bot):
     # 1. Обработка кнопки возврата
     if club == "⬅️ Вернуться" or club == "Вернуться":
         func_today(message, bot)
@@ -151,72 +235,70 @@ def enter_club(message, a, club, tooearly, bot):
         check_club(message, a, bot)
         return
 
-    # 3. Развилка логики
-    if a == '🚫 Закрыть смену':
-        # Если закрываем — сразу идем в подтверждение, пропускаем глупый вопрос
-        confirm_enter(message, a, club, tooearly, bot)
-    else:
-        # Если открываем — спрашиваем подтверждение
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
-        markup.add('Да, я на месте!', 'Нет, я ещё не зашёл...')
-        bot.send_message(message.chat.id, f"Ты точно на рабочем месте ({club})? Только не ври!", reply_markup=markup)
-        bot.register_next_step_handler(message, confirm_enter, a, club, tooearly, bot)
+    # 3. СРАЗУ ЗАПУСКАЕМ (Убрали лишний вопрос "Ты точно на месте?")
+    confirm_enter(message, a, club, tooearly, is_geo_verified, bot)
 
 
-def confirm_enter(message, a, club, tooearly, bot):
-    # Условие: Либо юзер нажал "Да", ЛИБО это закрытие смены (тогда кнопка не нужна)
-    if message.text == 'Да, я на месте!' or a == '🚫 Закрыть смену':
-        
-        # 1. Обновляем статус в БД
-        new_status = 'Открыт' if a == '✅ Открыть смену' else 'Закрыт'
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("UPDATE clubs SET status = ? WHERE club = ?", (new_status, club))
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        # 2. Подготовка данных
-        current_datetime = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%H:%M")
-        
-        # Чек-лист
-        checklist = CLUBS[club].get('checklists', {}).get(a, [])
-        check_list_text = "\n– " + "\n– ".join(checklist) if checklist else " Отсутствует"
+def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
+    # Условие: Либо юзер нажал "Да" (если мы вернем кнопку), либо просто прошел enter_club
+    # Так как мы убрали кнопку, условие if message.text == ... можно упростить, 
+    # но оставим универсальным на случай возврата кнопки
+    
+    # 1. Обновляем статус в БД
+    new_status = 'Открыт' if a == '✅ Открыть смену' else 'Закрыт'
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    cur.execute("UPDATE clubs SET status = ? WHERE club = ?", (new_status, club))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # 2. Подготовка данных
+    current_datetime = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%H:%M")
+    
+    # Чек-лист
+    checklist = CLUBS[club].get('checklists', {}).get(a, [])
+    check_list_text = "\n– " + "\n– ".join(checklist) if checklist else " Отсутствует"
 
-        # Выбор варианта вопросов
-        q_variants = CLUBS[club]['questions'].get(a, [[]])
-        variant_index = datetime.now().weekday() % len(q_variants)
-        questions = q_variants[variant_index]
-        
-        # 3. Приветствие
-        try:
-            action_idx = funclist_today.index(a)
-            ui_text = TEXTS['ui']['login_logout'][action_idx]
-            readiness_text = TEXTS['ui']['readiness'][action_idx]
-        except:
-            ui_text = "Действие"
-            readiness_text = "готовности"
+    # Выбор варианта вопросов
+    q_variants = CLUBS[club]['questions'].get(a, [[]])
+    variant_index = datetime.now().weekday() % len(q_variants)
+    questions = q_variants[variant_index]
+    
+    # 3. Приветствие
+    try:
+        action_idx = funclist_today.index(a)
+        ui_text = TEXTS['ui']['login_logout'][action_idx]
+        readiness_text = TEXTS['ui']['readiness'][action_idx]
+    except:
+        ui_text = "Действие"
+        readiness_text = "готовности"
 
-        response = (f"{ui_text} {club} в {current_datetime}\n"
-                    f"Самое время отправить отчет {readiness_text}!\n\n"
-                    f"Чек лист:{check_list_text}")
-        
-        bot.send_message(message.chat.id, response, reply_markup=types.ReplyKeyboardRemove())
-        
-        # 4. Лог в репорты
-        from main import define_name
-        users = define_name(message)
-        name = users[0][4] if users else "Сотрудник"
-        
-        log_msg = "зашёл в" if a == '✅ Открыть смену' else "начинает закрывать"
-        bot.send_message(CHATS['reports'], f"⚠️ {name} {log_msg} {club} в {current_datetime}")
+    response = (f"{ui_text} {club} в {current_datetime}\n"
+                f"Самое время отправить отчет {readiness_text}!\n\n"
+                f"Чек лист:{check_list_text}")
+    
+    bot.send_message(message.chat.id, response, reply_markup=types.ReplyKeyboardRemove())
+    
+    # 4. Лог в репорты (СЮДА ДОБАВИЛИ ЛОГИКУ ГЕО)
+    from main import define_name
+    users = define_name(message)
+    name = users[0][4] if users else "Сотрудник"
+    
+    # Формируем приписку, если пропустили гео
+    current_clubs = get_clubs()
+    req_geo = current_clubs[club].get('require_geo', False)
+    geo_warning = ""
+    if req_geo and not is_geo_verified:
+        geo_warning = "\n🚨 <b>(Пропуск гео-проверки)</b>"
+    
+    log_msg = "зашёл в" if a == '✅ Открыть смену' else "начинает закрывать"
+    
+    # Отправляем единое сообщение
+    bot.send_message(CHATS['reports'], f"⚠️ {name} {log_msg} {club} в {current_datetime}{geo_warning}", parse_mode='HTML')
 
-        # 5. ЗАПУСК ОПРОСА
-        # Важно: передаем expected_type=None, так как это первый шаг и проверять пока нечего
-        run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None, current_q_text=None)
-        
-    else:
-        check_club(message, a, bot)
+    # 5. ЗАПУСК ОПРОСА
+    run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None, current_q_text=None)
 
 def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None, current_q_text=None):
     # 0. ГЛАВНАЯ ПРОВЕРКА: Хочет ли юзер вернуться?
@@ -402,8 +484,18 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
         print(f"Ошибка БД: {e}")
 
     # 6. Финал
-    bot.send_message(message.chat.id, "Отчет успешно принят! Спасибо за работу. 😎")
+    bot.send_message(message.chat.id, "Отчет успешно принят! Спасибо за работу 😎")
     hello(message.chat.id, bot)
+
+
+# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ РАСЧЕТА ---
+def get_distance(lat1, lon1, lat2, lon2):
+    R = 6371000 # Радиус Земли в метрах
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 ############################# common functions
 

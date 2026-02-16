@@ -3,6 +3,9 @@
     "tag": "@bassixxx",
     "acc_name": "Ленинский",
     "is_physical": true,
+	"require_geo": true,
+	"coords": { "lat": 55.695098, "lon": 37.559094 }, 
+    "radius": 500,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "23:59:00",
@@ -292,6 +295,9 @@
     "tag": "@matveevanastya01",
     "acc_name": "Марьино",
     "is_physical": true,
+	"require_geo": true,
+	"coords": { "lat": 55.649237, "lon": 37.744916 }, 
+    "radius": 500,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "22:00:00",
@@ -566,6 +572,9 @@
     "tag": "@matveevanastya01",
     "acc_name": "Каширку",
     "is_physical": true,
+	"require_geo": true,
+	"coords": { "lat": 55.666578, "lon": 37.628694 }, 
+	"radius": 500,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "23:59:00",
@@ -879,6 +888,9 @@
     "tag": "@matveevanastya01",
     "acc_name": "Прокшино",
     "is_physical": true,
+	"require_geo": true,
+	"coords": { "lat": 55.591885, "lon": 37.443088 }, 
+	"radius": 500,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "23:59:00",
@@ -1155,6 +1167,9 @@
     "tag": "@bassixxx",
     "acc_name": "Дмитровку",
     "is_physical": true,
+	"require_geo": true,
+	"coords": { "lat": 55.808137, "lon": 37.583773 }, 
+	"radius": 500,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "23:59:00",
@@ -1431,6 +1446,7 @@
     "tag": "@Lady_in_Reddd",
     "acc_name": "КЦ",
     "is_physical": true,
+	"require_geo": false,
     "schedule": {
       "auto_close_time": "05:00:00",
       "status_close_time": "22:00:00",
@@ -1506,6 +1522,7 @@
   "Глобально": {
     "tag": "@grigorovda, @sermysh, @matveevanastya01",
     "acc_name": "Глобально",
-    "is_physical": false
+    "is_physical": false,
+	  "require_geo": false
   }
 }
