@@ -95,6 +95,7 @@ def geo_router(message, a, tooearly, bot):
         return
 
     # Если нажали кнопку "Выбрать из списка"
+    # (Текст должен совпадать буква в букву с тем, что в check_club!)
     if message.text == "📝 Выбрать из списка (Если GPS глючит)":
         manual_club_selection(message, a, tooearly, bot)
         return
@@ -104,8 +105,12 @@ def geo_router(message, a, tooearly, bot):
         func_today(message, bot)
         return
     
-    # Если прислали ерунду
-    bot.send_message(message.chat.id, "Нажми кнопку 📍 или 📝!")
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+    btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Если GPS глючит)")
+    markup.add(btn_geo, btn_skip, "Вернуться")
+    
+    bot.send_message(message.chat.id, "Не то нажал! Нажми кнопку 📍 или 📝 👇", reply_markup=markup)
     bot.register_next_step_handler(message, geo_router, a, tooearly, bot)
 
 # --- 3. АВТО-ПОИСК (Твой старый код, чуть доработанный) ---
