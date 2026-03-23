@@ -488,6 +488,12 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     except Exception as e:
         print(f"Ошибка БД: {e}")
 
+    # Обновляем Google Таблицу "Открытия и закрытия"
+    try:
+        update_table_open()
+    except Exception as e:
+        print(f"Ошибка выгрузки в Google Таблицы: {e}")
+
     # 6. Финал
     bot.send_message(message.chat.id, "Отчет успешно принят! Спасибо за работу 😎")
     hello(message.chat.id, bot)
