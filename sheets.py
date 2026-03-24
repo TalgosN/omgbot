@@ -3,6 +3,7 @@ import pygsheets
 import sqlite3
 from datetime import date
 import pytz
+import pandas as pd
 
 
 clubs = {'мар':'Марьино','лен':'Ленинский','про':'Прокшино','каш':'Каширка'}
