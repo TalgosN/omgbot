@@ -165,27 +165,21 @@ def update_schedule_table(data):
         pass
 
 
-def update_table_open( ):
+def update_table_open():
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open('Открытия и закрытия')
-    conn=sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM activity")
-    data = cur.fetchall()
-    cur.close()
-    conn.close()
+    
+    # Читаем данные напрямую в DataFrame, менеджер контекста сам закроет соединение
+    with sqlite3.connect('db/omgbot.sql') as conn:
+        df_activity = pd.read_sql_query("SELECT * FROM activity", conn)
 
-    wks = sh[0]
-
-
-    list1 =[]
-
-    for i in range(len(data)):
-        list2=[]
-        for k in range(len(data[i])):
-            list2.append(data[i][k])
-        list1.append(list2)
+    # Ищем лист по названию (замени 'Activity' на реальное имя твоего первого листа)
+    try:
+        wks = sh.worksheet_by_title('Activity')
+    except pygsheets.WorksheetNotFound:
+        wks = sh.add_worksheet('Activity')
+    
+    # Полностью сносим старые данные и заливаем новый срез с автоподгоном границ
+    wks.clear()
+    wks.set_dataframe(df_activity, start='A1', copy_head=True, fit=True)
    
-    rng = wks.get_values(start='A2', end=f'E{len(list1)}', returnas='range')
-    rng.clear()
-    wks.update_values('A2', list1)   
