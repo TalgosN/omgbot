@@ -14,7 +14,7 @@ from kpi import init
 import requests
 
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
-last_message_time = time.time()
+
 ############################# main constants
 
 ##### taskdesk
@@ -200,25 +200,18 @@ def define_name(message):
     conn.close()
     return users
 
-def is_spam (message):
-    global last_message_time
+user_last_message_time = {}
+
+def is_spam(message):
+    user_id = message.from_user.id
     current_time = time.time()
 
-    # Check if the user has sent a message before
-    if last_message_time!=0:
-        time_since_last_message = current_time - last_message_time
-        
-        # If the time since the last message is less than the limit, ignore the message
-        if time_since_last_message < MESSAGE_LIMIT_TIME:
-            bot.reply_to(message, "Пожалуйста, не так часто!")
+    if user_id in user_last_message_time:
+        if current_time - user_last_message_time[user_id] < MESSAGE_LIMIT_TIME:
+            # Молча игнорируем спам, чтобы не засорять чат ответами "не так часто"
             return False
-        else:
-            last_message_time = current_time
-            return True
-
-    # Update the last message time for the user
-    last_message_time = current_time
-    
+            
+    user_last_message_time[user_id] = current_time
     return True
 
 def send_react(message,emoji):
@@ -332,7 +325,13 @@ def repair_list(message):
 
         bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', parse_mode='HTML')
        
-
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🆘 Помощь', '⚙️ Обновить настройки'])
+def handle_main_menu(message):
+    if is_spam(message):
+        bot.clear_step_handler_by_chat_id(message.chat.id)
+        from menu import func
+        func(message, bot)
+        
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and not message.text.startswith('#'))
 def SaySmth(message): #fun talk
     if message.text.lower().find('кц офф')!=-1:
@@ -537,15 +536,7 @@ if __name__ == "__main__":
     cur.execute("SELECT chatid FROM users_new WHERE status <>-1")
     users=cur.fetchall()
     
-    for user in users:
-        if user[0] != None and user[0] != "" :
-        #print (user[1])
-            try:
-                
-                hello(user[0],bot)
-            except Exception as e:
-                print (user[0])
-                continue
+
 
     cur.close()
     conn.close()
