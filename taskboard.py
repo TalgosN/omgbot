@@ -99,7 +99,7 @@ def add_title(message,task_type,bot):
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
         bot.send_message(message.chat.id, TEXTS['messtype_dict'][task_type])
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS['messtype_fill'][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
 
     else:
@@ -119,7 +119,7 @@ def add_desc(message,task_type,club_task,bot):
     elif message.photo:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS['messtype_fill'][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Название не должно быть фотографией!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
         
@@ -127,14 +127,14 @@ def add_desc(message,task_type,club_task,bot):
 
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS['messtype_fill'][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Слишком длинное! Максимум 20 символов!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
 
     elif message.text.isnumeric():
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS['messtype_fill'][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 20-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Название проблемы не должно состоять только из числа!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
         
@@ -144,7 +144,7 @@ def add_desc(message,task_type,club_task,bot):
         title = message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS['messtype_fill'][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
 
 def add_photo(message, task_type,title,club_task,bot):
@@ -156,7 +156,7 @@ def add_photo(message, task_type,title,club_task,bot):
     elif message.photo:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS['messtype_fill'][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Описание не должно быть фотографией! На следующем этапе ты сможешь добавить фото, сейчас напиши только текст.")
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
     
@@ -164,7 +164,7 @@ def add_photo(message, task_type,title,club_task,bot):
 
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS['messtype_fill'][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Слишком длинное! Максимум 1000 символов!")
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
     

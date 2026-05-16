@@ -179,7 +179,7 @@ def stats_acc(message, bot):
 
     
     
-    text = f'{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за месяц:\n\n⏱ Продления: {count_list[0]}\n🎂 Дни рождения: {count_list[1]}\n🌠 Инициативы: {count_list[2]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р.'
+    text = f"{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за месяц:\n\n⏱ Продления: {count_list[0]}\n🎂 Дни рождения: {count_list[1]}\n🌠 Инициативы: {count_list[2]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р."
 
     bot.reply_to(message, text)
 
@@ -210,7 +210,7 @@ def statsall_acc(message, bot):
 
     
     
-    text = f'{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за все время:\n\n⏱ Продления: {count_list[0]}\n🎂 Дни рождения: {count_list[1]}\n🌠 Инициативы: {count_list[2]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р.'
+    text = f"{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за все время:\n\n⏱ Продления: {count_list[0]}\n🎂 Дни рождения: {count_list[1]}\n🌠 Инициативы: {count_list[2]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р."
 
     bot.reply_to(message, text)
   
