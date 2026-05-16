@@ -3,7 +3,7 @@ venv/
 __pycache__/
 *.pyc
 .env
-db/omgbot.sql
+db/
 key/omgbot-430116-e9a4d9c69b7f.json
 Reports/
 dump/
