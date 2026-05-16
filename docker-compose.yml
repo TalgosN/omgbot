@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  bot:
+    build: .
+    restart: always
+    volumes:
+      - ./db:/app/db
+      - ./data:/app/data
+      - ./key:/app/key
+      - ./Reports:/app/Reports
