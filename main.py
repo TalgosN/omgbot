@@ -60,6 +60,33 @@ def check_dynamic_events(bot):
     now = datetime.now(tz)
     current_time = now.strftime("%H:%M:00") # "10:00:00"
     weekday = now.weekday() # 0 = Понедельник, 6 = Воскресенье
+    current_time_short = now.strftime("%H:%M")
+
+    # --- ЛОГИКА РАССЫЛОК ---
+    try:
+        conn = sqlite3.connect('db/omgbot.sql')
+        cur = conn.cursor()
+        cur.execute("SELECT ID, text, photo, trep, freq FROM broadcasts WHERE status = 1")
+        active_broadcasts = cur.fetchall()
+
+        for b_id, b_text, b_photo, b_time, b_freq in active_broadcasts:
+            if b_time == current_time_short:
+                # Если есть file_id фотографии
+                if b_photo and b_photo != "None":
+                    bot.send_photo(CHATS['main_group'], photo=b_photo, caption=b_text, parse_mode='HTML')
+                else:
+                    bot.send_message(CHATS['main_group'], text=b_text, parse_mode='HTML')
+                
+                # Если рассылка одноразовая (freq == 0), отключаем её
+                if b_freq == 0:
+                    cur.execute("UPDATE broadcasts SET status = 0 WHERE ID = ?", (b_id,))
+                    
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Ошибка в рассылках: {e}")
+    # -----------------------
 
     # 3. Проверяем каждый клуб
     for club_name, info in clubs.items():
@@ -144,7 +171,11 @@ def create_tables():
     cur.execute('CREATE TABLE IF NOT EXISTS penalty (ID INTEGER PRIMARY KEY, dt DATE, name varchar(50), desc varchar(50))')
     conn.commit()
     cur.close()
-
+    
+    cur = conn.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS broadcasts (ID INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, photo TEXT, trep TEXT, freq INTEGER, status INTEGER)')
+    conn.commit()
+    cur.close()
     conn.close()
     
     
@@ -524,7 +555,8 @@ def today_sched():
 from taskboard import register_callback,register_callback2
 register_callback (bot)
 register_callback2 (bot)
-
+from admin_panel import register_broadcast_callbacks
+register_broadcast_callbacks(bot)
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,)).start()

@@ -1,7 +1,7 @@
 from telebot import *
 import sqlite3
 from constants import *
-from sync_clubs import sync_config
+from admin_panel import sync_config
 
 def chatid_to_users(chatid):
     conn = sqlite3.connect('db/omgbot.sql')
@@ -70,7 +70,7 @@ def func(message, bot):
             from finance import finance
             finance(message, bot)
     
-    elif a == "⚙️ Обновить настройки": # Кнопка для админов
+    elif a == "🧑🏻‍💻 Админ панель": # Кнопка для админов
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
         cur.execute("SELECT status from users_new WHERE login=?", ("@" + message.from_user.username,))
@@ -83,7 +83,7 @@ def func(message, bot):
             bot.send_message(message.chat.id, "У вас недостаточно прав!")
             hello(message.chat.id, bot)
         else:
-            handle_update_config(message, bot)
+            admin_menu(message, bot)
         
     elif a == '🆘 Помощь':
         help(bot, message)
@@ -92,27 +92,14 @@ def func(message, bot):
         # Если прислали что-то левое — возвращаем в меню
         hello(message.chat.id, bot)
 
-# ИСПРАВЛЕНО: Порядок аргументов (message, bot) теперь совпадает с вызовом
-def handle_update_config(message, bot):
-    # 1. Сообщение "Ждите"
-    msg = bot.send_message(message.chat.id, "⏳ Подключаюсь к таблице 'Виарыч'...")
+def admin_menu(message, bot):
+    from constants import admin_funclist
+    from admin_panel import admin_func_handler # Импортируем обработчик из нового файла
     
-    # 2. Запуск функции
-    try:
-        report = sync_config() # Вызываем функцию из sync_clubs.py
-        
-        # 3. Редактируем сообщение с результатом
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=report)
-        
-    except Exception as e:
-        # Если msg не успел создаться или другая ошибка
-        try:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"Ошибка скрипта: {e}")
-        except:
-            bot.send_message(message.chat.id, f"Ошибка скрипта: {e}")
-        
-    # Возвращаем меню
-    hello(message.chat.id, bot)
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(*admin_funclist)
+    msg = bot.send_message(message.chat.id, 'Панель администратора 🧑🏻‍💻', reply_markup=markup)
+    bot.register_next_step_handler(msg, admin_func_handler, bot)
 
 def help(bot, message):
     bot.send_message(message.chat.id,
