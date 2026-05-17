@@ -289,7 +289,7 @@ create_tables_KPI()
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id,f'message.chat.id')
+    
     if is_spam(message):
         if message.chat.id>0: # Отсев конф
 
