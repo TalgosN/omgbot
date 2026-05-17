@@ -303,6 +303,7 @@ def bc_show_active(message, bot):
         
     markup.add(types.InlineKeyboardButton(text="⬅️ Закрыть список", callback_data="bc_back"))
     bot.send_message(message.chat.id, "".join(text_lines), reply_markup=markup, parse_mode='HTML')
+    bot.send_message(message.chat.id, "Выберите нужную рассылку 👆", reply_markup=types.ReplyKeyboardRemove())
 
 def bc_view_card(message, b_id, bot):
     try:
@@ -348,6 +349,8 @@ def bc_view_card(message, b_id, bot):
     else:
         bot.send_message(message.chat.id, card_text, reply_markup=markup, parse_mode='HTML')
 
+    bot.send_message(message.chat.id, "Выберите действие 👆", reply_markup=types.ReplyKeyboardRemove())
+    
 def register_broadcast_callbacks(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('bc_'))
     def bc_callback(call):

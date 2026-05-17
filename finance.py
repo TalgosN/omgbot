@@ -116,103 +116,138 @@ def returnback(message,bot):
         hello (message.chat.id,bot)
 
 import traceback 
-def func_fin(message,bot):
-   if message.text == '📑 Отчет по приходам' or message.text == '💸 Внести приходы по наличке' or message.text == '💰 Инкассация' or message.text == '👨🏻‍💻 ЗП за период':
-       operation = message.text
-       
-       markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-       markup.add('⬅️ Вернуться')
+
+def func_fin(message, bot):
+    if message.text in ['📑 Отчет по приходам', '💸 Внести приходы по наличке', '💰 Инкассация', '👨🏻‍💻 ЗП за период']:
+        operation = message.text
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         
-       bot.send_message(message.chat.id, 'Введи дату начала отcчета в формате 01.01.2025',reply_markup=markup)
-       bot.register_next_step_handler(message, handle_start,bot, operation)
-   
-   elif message.text =='👀 Сверка финансов':
-       try:
-          text=check_cash(datetime.now(pytz.timezone('Europe/Moscow')).strftime('%d.%m.%Y'))
-          if len(text)>=4096:
-              TEXTS['ui']['login_logout']=text[:4096]
-              TEXTS['ui']['readiness']=text[4096:]
-              bot.send_message(message.chat.id,TEXTS['ui']['login_logout'])
-              bot.send_message(message.chat.id,TEXTS['ui']['readiness'])
-          else:
-            bot.send_message(message.chat.id,text)
-          finance(message,bot)
-       except Exception as er:
-        error_details = traceback.format_exc()  # Получаем traceback в виде строки
-        bot.send_message(message.chat.id, f"Ошибка: {er}\n\nДетали:\n{error_details}")
-        # Продолжаем выполнение
-        finance(message, bot)
-   elif message.text =='⬅️ Вернуться':
-      returnback(message,bot)
-   else:
-      finance(message,bot)
-
-
-def handle_start(message,bot,operation):
-    if message.text=='⬅️ Вернуться':
-        finance(message,bot)
+        # Для инкассации логичнее дни, для остального - периоды
+        if operation == '💰 Инкассация':
+            markup.add('Вчера', 'Сегодня', '⬅️ Вернуться')
+        else:
+            markup.add('Текущий месяц', 'Прошлый месяц')
+            markup.add('Текущая неделя', 'Вчера')
+            markup.add('⬅️ Вернуться')
+            
+        bot.send_message(message.chat.id, 'Выбери быстрый период или введи дату начала вручную (01.01.2025):', reply_markup=markup)
+        bot.register_next_step_handler(message, handle_start, bot, operation)
+        
+    elif message.text == '👀 Сверка финансов':
+        try:
+            text = check_cash(datetime.now(pytz.timezone('Europe/Moscow')).strftime('%d.%m.%Y'))
+            if len(text) >= 4096:
+                TEXTS['ui']['login_logout'] = text[:4096]
+                TEXTS['ui']['readiness'] = text[4096:]
+                bot.send_message(message.chat.id, TEXTS['ui']['login_logout'])
+                bot.send_message(message.chat.id, TEXTS['ui']['readiness'])
+            else:
+                bot.send_message(message.chat.id, text)
+            finance(message, bot)
+        except Exception as er:
+            import traceback
+            error_details = traceback.format_exc()
+            bot.send_message(message.chat.id, f"Ошибка: {er}\n\nДетали:\n{error_details}")
+            finance(message, bot)
+            
+    elif message.text == '⬅️ Вернуться':
+        returnback(message, bot)
     else:
-       try:
-          dt = datetime.strptime(message.text,'%d.%m.%Y')
-          date_start = dt.strftime("%Y-%m-%dT%H:%M:%S")
-          
-          markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-          markup.add('⬅️ Вернуться')
-          
-          bot.send_message(message.chat.id, 'Введи дату конца отcчета в формате 01.02.2025',reply_markup=markup)
-          bot.register_next_step_handler(message, handle_end,date_start,bot,operation)
-       except Exception:
-           
-          markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-          markup.add('⬅️ Вернуться')
-          
-          bot.send_message(message.chat.id, 'Что-то пошло не так!')
-          bot.send_message(message.chat.id, 'Введи дату начала отcчета в формате 01.01.2025',reply_markup=markup)
-                    
-          bot.register_next_step_handler(message, handle_start,bot, operation)
+        finance(message, bot)
 
 
-def handle_end(message,date_start,bot, operation):
-    if message.text=='⬅️ Вернуться':
-        finance(message,bot)
+def handle_start(message, bot, operation):
+    if message.text == '⬅️ Вернуться':
+        finance(message, bot)
+        return
+
+    quick_ranges = ['Текущий месяц', 'Прошлый месяц', 'Текущая неделя', 'Вчера', 'Сегодня']
+    
+    if message.text in quick_ranges:
+        tz = pytz.timezone('Europe/Moscow')
+        today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        if message.text == 'Сегодня':
+            d_start = today
+            d_end = today + timedelta(days=1)
+        elif message.text == 'Вчера':
+            d_start = today - timedelta(days=1)
+            d_end = today
+        elif message.text == 'Текущая неделя':
+            d_start = today - timedelta(days=today.weekday())
+            d_end = today + timedelta(days=1)
+        elif message.text == 'Текущий месяц':
+            d_start = today.replace(day=1)
+            d_end = today + timedelta(days=1)
+        elif message.text == 'Прошлый месяц':
+            d_end = today.replace(day=1)
+            d_start = (d_end - timedelta(days=1)).replace(day=1)
+        
+        date_start = d_start.strftime("%Y-%m-%dT%H:%M:%S")
+        date_end = d_end.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Скрываем клавиатуру и запускаем сразу сбор данных
+        bot.send_message(message.chat.id, f"Выбран период: с {d_start.strftime('%d.%m.%Y')} по {(d_end - timedelta(days=1)).strftime('%d.%m.%Y')}. Собираю данные...", reply_markup=telebot.types.ReplyKeyboardRemove())
+        execute_fin_operation(operation, date_start, date_end, message, bot)
+    else:
+        # Старая логика ручного ввода
+        try:
+            dt = datetime.strptime(message.text, '%d.%m.%Y')
+            date_start = dt.strftime("%Y-%m-%dT%H:%M:%S")
+            
+            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            markup.add('⬅️ Вернуться')
+            bot.send_message(message.chat.id, 'Введи дату конца отcчета в формате 01.02.2025', reply_markup=markup)
+            bot.register_next_step_handler(message, handle_end, date_start, bot, operation)
+        except Exception:
+            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            markup.add('⬅️ Вернуться')
+            bot.send_message(message.chat.id, 'Что-то пошло не так!\nВведи дату начала отcчета в формате 01.01.2025', reply_markup=markup)
+            bot.register_next_step_handler(message, handle_start, bot, operation)
+
+def handle_end(message, date_start, bot, operation):
+    if message.text == '⬅️ Вернуться':
+        finance(message, bot)
     else:
         try:
-            dt = datetime.strptime(message.text,'%d.%m.%Y')
-            dt = dt+timedelta(days=1)
+            dt = datetime.strptime(message.text, '%d.%m.%Y')
+            dt = dt + timedelta(days=1)
             date_end = dt.strftime("%Y-%m-%dT%H:%M:%S")
-
-            if operation == '📑 Отчет по приходам':
             
-                create_otchet (date_start,date_end,message,bot)
+            bot.send_message(message.chat.id, "Собираю данные...", reply_markup=telebot.types.ReplyKeyboardRemove())
+            execute_fin_operation(operation, date_start, date_end, message, bot)
             
-            elif operation == '💰 Инкассация':
-                if is_difference_one_day (date_start,date_end):
-                    inkass(date_start,date_end,message,bot)
-                else:
-                    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-                    markup.add('⬅️ Вернуться')
-                    
-                    bot.send_message(message.chat.id, 'Для проверки списаний разница между датами должна быть ровно сутки')
-                    bot.send_message(message.chat.id, 'Введи дату начала отcчета в формате 01.01.2025',reply_markup=markup)
-                    bot.register_next_step_handler(message, handle_start,bot, operation)
-           
-            elif operation == '💸 Внести приходы по наличке':
-                nal_to_dt(date_start,date_end,message,bot)
-                
-            elif operation == '👨🏻‍💻 ЗП за период':
-                pay_report(date_start,date_end,message,bot)
-              
         except Exception as er:
-          
-          markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-          markup.add('⬅️ Вернуться')
-          
-          bot.send_message(message.chat.id, 'Что-то пошло не так!')
-          bot.send_message(message.chat.id, er)
-          
-          bot.send_message(message.chat.id, 'Введи дату конца отcчета в формате 01.02.2025',reply_markup=markup)
-          bot.register_next_step_handler(message,handle_end,date_start,bot, operation)
+            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            markup.add('⬅️ Вернуться')
+            bot.send_message(message.chat.id, f'Что-то пошло не так!\n{er}\nВведи дату конца отcчета:', reply_markup=markup)
+            bot.register_next_step_handler(message, handle_end, date_start, bot, operation)
 
+def execute_fin_operation(operation, date_start, date_end, message, bot):
+    """Вынесенный роутер операций для того, чтобы не дублировать код в handle_start и handle_end"""
+    try:
+        if operation == '📑 Отчет по приходам':
+            create_otchet(date_start, date_end, message, bot)
+            
+        elif operation == '💰 Инкассация':
+            if is_difference_one_day(date_start, date_end):
+                inkass(date_start, date_end, message, bot)
+            else:
+                markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+                markup.add('⬅️ Вернуться')
+                bot.send_message(message.chat.id, 'Для проверки списаний разница между датами должна быть ровно сутки.\nВведи дату начала:', reply_markup=markup)
+                bot.register_next_step_handler(message, handle_start, bot, operation)
+                
+        elif operation == '💸 Внести приходы по наличке':
+            nal_to_dt(date_start, date_end, message, bot)
+            
+        elif operation == '👨🏻‍💻 ЗП за период':
+            pay_report(date_start, date_end, message, bot)
+            
+    except Exception as er:
+        bot.send_message(message.chat.id, f"Ошибка при формировании отчета: {er}")
+        finance(message, bot)
+        
 ################################ Excel Transactions
 def create_otchet (start_dt,end_dt,message,bot):
 
