@@ -338,11 +338,10 @@ def bc_view_card(message, b_id, bot):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(text=toggle_btn_text, callback_data=f"bc_toggle_{b_id}"))
     markup.add(types.InlineKeyboardButton(text="🗑 Полностью удалить", callback_data=f"bc_delete_{b_id}"))
-    markup.add(types.InlineKeyboardButton(text="⬅️ Вернуться к списку", callback_data=f"bc_back_list"))
     markup.add(
         types.InlineKeyboardButton(text="✏️ Изменить текст", callback_data=f"bc_edittxt_{b_id}"),
         types.InlineKeyboardButton(text="🕒 Изменить время", callback_data=f"bc_edittime_{b_id}"))
-    
+    markup.add(types.InlineKeyboardButton(text="⬅️ Вернуться к списку", callback_data=f"bc_back_list"))
 
     if b['photo'] and b['photo'] != "None":
         bot.send_photo(message.chat.id, photo=b['photo'], caption=card_text, reply_markup=markup, parse_mode='HTML')

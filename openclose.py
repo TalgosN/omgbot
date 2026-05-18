@@ -405,6 +405,7 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     answers_text = "\nОтветы на вопросы:\n" + "\n".join([f"— {ans[0]}: {ans[1]}" for ans in answers]) if answers else ""
     
     report_caption = (
+        f"#отчет\n\n"
         f"📍 Клуб: {club}\n"
         f"👤 Сотрудник: {name} (@{message.from_user.username})\n"
         f"📝 Действие: {a}\n"

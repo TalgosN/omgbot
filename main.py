@@ -36,7 +36,7 @@ def all_active_tasks_schedule():
         list_title.append(f'{i+1}) {titles[i][0]}')
 
     text="\n".join(list_title)
-    bot.send_message(CHATS['reports'], f'Невыполненные задачи:\n\n{text}\n\n @OMGVR_Admin_Bot') #здесь в канал репорт CHATS['reports']
+    bot.send_message(CHATS['reports'], f'🔺 Невыполненные #задачи:\n\n{text}\n\n @OMGVR_Admin_Bot') #здесь в канал репорт CHATS['reports']
 
 
 
@@ -291,25 +291,37 @@ create_tables_KPI()
 def start(message):
     
     if is_spam(message):
-        if message.chat.id>0: # Отсев конф
+        if message.chat.id > 0: # Отсев конф
+            
+            # --- ПРОВЕРКА НА УЧАСТИЕ В ГРУППЕ ---
+            from constants import CHATS
+            try:
+                # Запрашиваем статус пользователя в нужной группе
+                user_status = bot.get_chat_member(CHATS['main_group'], message.from_user.id).status
+                
+                # Если пользователя там нет или он забанен
+                if user_status in ['left', 'kicked']:
+                    bot.send_message(message.chat.id, 'Сначала вступите в рабочую группу!')
+                    return
+            except Exception as e:
+                # Сработает, если бот не админ в группе или указан неверный ID
+                print(f"Ошибка проверки участника конфы: {e}")
+                bot.send_message(message.chat.id, 'Внутренняя ошибка проверки прав доступа.')
+                return
+            # ------------------------------------
 
             users = define_name(message)
 
-            if len(users)==0 or users[0][8]==-1: #отсев посторонних и ушедших
-
+            if len(users) == 0 or users[0][8] == -1: # отсев посторонних и ушедших
                 bot.send_message(message.chat.id, 'Доступ запрещен!')
                 
             else:
-
-                if users[0][9]==None or users[0][9]=="" : # есть в КФ но нет записи в БД, начнем авторизацию
+                if users[0][9] == None or users[0][9] == "": # есть в КФ но нет записи в БД, начнем авторизацию
                     from auth import start_auth
-                    
-                    start_auth(message,bot)
+                    start_auth(message, bot)
                     
                 else:
-                    
-
-                    hello(message.chat.id,bot)
+                    hello(message.chat.id, bot)
 
 
 @bot.message_handler(commands=['weather'])

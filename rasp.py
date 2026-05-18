@@ -146,46 +146,59 @@ def returnback(message,bot):
         hello (message.chat.id,bot)
         
 
-def get_today_schedule (date_start, date_end):
-    
-    response_dict, response_dict_employ = get_shifts_and_employees (date_start, date_end)
+def get_today_schedule(date_start, date_end):
+    response_dict, response_dict_employ = get_shifts_and_employees(date_start, date_end)
 
     today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%d.%m.%Y')
-
     weekday = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%A')
 
-    full_text=f'{today}, {weekday.capitalize()}\n\n'
-    full_text+=f'{get_weather()}\n\n'
+    full_text = f'{today}, {weekday.capitalize()}\n\n'
+    full_text += f'{get_weather()}\n\n'
     
-    for i in response_dict:
-        name = ''
-        for k in response_dict_employ:
-        
-        
-            if k['id']==i["employee_id"]:
-                name = k['full_name']
-          
-        text=f'{name}: {i["location"]["title"]} c {i["planned_from"]} до {i["planned_to"]}'
-   
+    # 1. Достаем юзернеймы из базы данных
+    import sqlite3
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    # Берем всех активных сотрудников
+    cur.execute("SELECT first_name, second_name, login FROM users_new WHERE status <> -1")
+    
+    db_users = {}
+    for f_name, s_name, login in cur.fetchall():
+        if f_name and s_name:
+            # Сохраняем оба варианта склейки на случай, если в ShiftOn они записаны по-разному
+            db_users[f"{f_name.strip()} {s_name.strip()}"] = login
+            db_users[f"{s_name.strip()} {f_name.strip()}"] = login
+    cur.close()
+    conn.close()
 
+    # 2. Формируем текст
     for i in clubs_color:
-        full_text = full_text +f'{clubs_color[i]} {i}\n'
+        full_text += f'{clubs_color[i]} {i}\n'
         for j in response_dict:
             name = ''
             for k in response_dict_employ:
-        
-        
-                if k['id']==j["employee_id"]:
+                if k['id'] == j["employee_id"]:
                     name = k['full_name']
-          
-            text=f'{name} c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
-            if (j["location"]["title"])==i:
-                full_text=full_text+text
-        full_text=full_text+'\n'        
+            
+            if name != "":
+                # Ищем username в нашем словаре. Если нет, возвращаем пустую строку
+                username = db_users.get(name.strip(), "")
+                
+                # Если юзернейм нашелся, приклеиваем его в скобках
+                display_name = f"{name} ({username})" if username else name
+                
+                text = f'{display_name} c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
+            else:
+                text = f'СВОБОДНАЯ СМЕНА c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
+            
+            # Защита от свободных смен без привязки к клубу
+            if j.get("location") is not None:
+                if j["location"]["title"] == i:
+                    full_text += text
+                    
+        full_text += '\n'        
 
-    
-    return full_text
-    
+    return full_text   
     
 def get_shifts_and_employees (date_start, date_end):
 
@@ -396,77 +409,109 @@ def get_week_by_club (date_user):
         
     return full_text
     
+def send_long_text(chat_id, text, bot):
+    """Умная разбивка длинного сообщения, чтобы не ловить лимит Телеграма"""
+    max_length = 4000
+    if len(text) <= max_length:
+        bot.send_message(chat_id, text)
+        return
+        
+    parts = text.split('\n\n')
+    msg = ""
+    for part in parts:
+        # Если добавление нового блока превысит лимит, отправляем то, что накопилось
+        if len(msg) + len(part) + 2 > max_length:
+            bot.send_message(chat_id, msg)
+            msg = part + "\n\n"
+        else:
+            msg += part + "\n\n"
+            
+    # Отправляем остатки
+    if msg.strip():
+        bot.send_message(chat_id, msg)   
     
-    
-def handle_data (message,bot):
-
+def handle_data(message, bot):
     if message.text == '⬅️ Вернуться':
-    
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
         bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
-        bot.register_next_step_handler(message, func_rasp,bot)
+        bot.register_next_step_handler(message, func_rasp, bot)
         
     elif message.text in funclist_rasp_week:
         sched_type = message.text
         
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('⬅️ Вернуться')
-        bot.send_message(message.chat.id, 'Пришли дату в формате 15.04.2024, я пришлю расписание за неделю, на которую выпадает эта дата 🤓',reply_markup=markup)
+        markup.add('Текущая неделя', 'Следующая неделя')
+        markup.add('Прошлая неделя', '⬅️ Вернуться')
+        
+        bot.send_message(message.chat.id, 'Выбери нужную неделю кнопкой или пришли любую дату в формате 15.04.2024 📆', reply_markup=markup)
         bot.register_next_step_handler(message, get_week, sched_type, bot)
         
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
         bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
-        bot.register_next_step_handler(message, func_rasp,bot)
-        
-        
-        
-def get_week (message, sched_type, bot):
+        bot.register_next_step_handler(message, func_rasp, bot)
 
 
+def get_week(message, sched_type, bot):
     if message.text == '⬅️ Вернуться':
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
         bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
-        bot.register_next_step_handler(message, func_rasp,bot)
-    else:
-        try:
+        bot.register_next_step_handler(message, func_rasp, bot)
+        return
+
+    quick_ranges = ['Текущая неделя', 'Следующая неделя', 'Прошлая неделя']
+    
+    try:
+        # Обработка смарт-кнопок
+        if message.text in quick_ranges:
+            today = datetime.now(pytz.timezone('Europe/Moscow'))
+            
+            if message.text == 'Текущая неделя':
+                target_date = today
+            elif message.text == 'Следующая неделя':
+                target_date = today + timedelta(days=7)
+            elif message.text == 'Прошлая неделя':
+                target_date = today - timedelta(days=7)
+                
+            user_date = target_date.strftime('%d.%m.%Y')
+            
+        # Обработка ручного ввода
+        else:
             user_date_dt = datetime.strptime(message.text, '%d.%m.%Y')
             user_date = user_date_dt.strftime('%d.%m.%Y')
-            try:
-                if sched_type=='👨🏻‍💻 По сотрудникам':
-                    mess_text = get_week_by_employee (user_date )
-                    
-                elif sched_type=='🗓 По датам':
-                    mess_text = get_week_by_day (user_date )
-                    
-                elif sched_type== '🔴 По клубам':
-                    mess_text = get_week_by_club(user_date )
-                    
-                bot.send_message(message.chat.id, mess_text)
-                markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-                markup.add(*funclist_rasp)
-                bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
-                bot.register_next_step_handler(message, func_rasp,bot)
+
+        # Убираем клавиатуру на время загрузки
+        bot.send_message(message.chat.id, f"⏳ Собираю расписание... ({user_date})", reply_markup=telebot.types.ReplyKeyboardRemove())
+
+        # Получение расписания
+        if sched_type == '👨🏻‍💻 По сотрудникам':
+            mess_text = get_week_by_employee(user_date)
+        elif sched_type == '🗓 По датам':
+            mess_text = get_week_by_day(user_date)
+        elif sched_type == '🔴 По клубам':
+            mess_text = get_week_by_club(user_date)
             
-            except Exception as e:
-                bot.send_message(message.chat.id, 'Что-то пошло не так! Перешлите ошибку ниже техническому специалисту')
-                bot.send_message(message.chat.id, e)
-                traceback.print_exc()
-                
-                markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-                markup.add('⬅️ Вернуться')
-                bot.send_message(message.chat.id, 'Пришли дату в формате 15.04.2024!',reply_markup=markup)
-                bot.register_next_step_handler(message, get_week, sched_type, bot)
-                
-        except Exception:
-            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-            markup.add('⬅️ Вернуться')
-            bot.send_message(message.chat.id, 'Неверная дата! Пришли дату в формате 15.04.2024!',reply_markup=markup)
-            bot.register_next_step_handler(message, get_week, sched_type, bot)
-            
+        # Используем новую функцию отправки для защиты от лимитов Телеграма
+        send_long_text(message.chat.id, mess_text, bot)
+        
+        # Возвращаем меню
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(*funclist_rasp)
+        bot.send_message(message.chat.id, 'Что вы хотите сделать дальше? 👀', reply_markup=markup)
+        bot.register_next_step_handler(message, func_rasp, bot)
+    
+    except Exception as e:
+        bot.send_message(message.chat.id, f'❌ Ошибка: {e}\nПерешлите её техническому специалисту.')
+        import traceback
+        traceback.print_exc()
+        
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add('Текущая неделя', 'Следующая неделя', 'Прошлая неделя', '⬅️ Вернуться')
+        bot.send_message(message.chat.id, 'Попробуйте нажать кнопку или прислать дату в формате 15.04.2024:', reply_markup=markup)
+        bot.register_next_step_handler(message, get_week, sched_type, bot)           
             
             
 def update_schedule (date_user):

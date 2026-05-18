@@ -235,7 +235,7 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
         mentions = f"{extra} {club_tag}"
         # Отправка в доп. чат для ремонта
-        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\nДобавлена новая проблема-{t_type_low}: <b>{clean_title}</b>", parse_mode='html')
+        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>", parse_mode='html')
     
     elif task_type == 'Улучшение бота':
         mentions = extra_tags[task_type] 
@@ -248,10 +248,10 @@ def send_task(message,task_type,title, descrip,club_task,bot):
     bot.send_message(message.chat.id, f'Отлично, твоя проблема-{t_type_low} добавлена!')
     
     # В канал отчетов
-    bot.send_message(CHATS['reports'], f'Добавлена новая проблема-{t_type_low}: {clean_title} @OMGVR_Admin_Bot')
+    bot.send_message(CHATS['reports'], f'#задачи\n\n⚙️ Добавлена новая проблема-{t_type_low}: {clean_title} @OMGVR_Admin_Bot')
     
     # В основной рабочий чат (одна команда вместо трех разных веток)
-    bot.send_message(CHATS['main_group'], f'{mentions}\n\nДобавлена новая проблема-{t_type_low}: <b>{clean_title}</b>', parse_mode='html')
+    bot.send_message(CHATS['main_group'], f'{mentions}\n\n⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>', parse_mode='html')
 
     returnback(message, bot)
 

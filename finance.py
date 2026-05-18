@@ -130,7 +130,7 @@ def func_fin(message, bot):
             markup.add('Текущая неделя', 'Вчера')
             markup.add('⬅️ Вернуться')
             
-        bot.send_message(message.chat.id, 'Выбери быстрый период или введи дату начала вручную (01.01.2025):', reply_markup=markup)
+        bot.send_message(message.chat.id, 'Выбери быстрый период или введи дату начала вручную (01.01.2025)', reply_markup=markup)
         bot.register_next_step_handler(message, handle_start, bot, operation)
         
     elif message.text == '👀 Сверка финансов':
