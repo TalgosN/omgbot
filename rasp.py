@@ -233,9 +233,8 @@ def get_week_by_club(date_user):
     response_dict, response_dict_employ = get_shifts_and_employees(date_start_iso, date_end_iso)
     
     start_dt = datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S')
-    end_dt = start_dt + timedelta(days=7) # Строго 7 дней (Пн-Вс)
+    end_dt = start_dt + timedelta(days=7)
     
-    # 1. Фильтруем ровно 7 дней и сортируем по дате/времени
     valid_shifts = []
     for j in response_dict:
         shift_dt = datetime.strptime(j['planned_from'], '%Y-%m-%d %H:%M:%S')
@@ -243,7 +242,6 @@ def get_week_by_club(date_user):
             valid_shifts.append(j)
     valid_shifts.sort(key=lambda x: x['planned_from'])
     
-    # 2. Словарь сотрудников для быстрого поиска
     emp_dict = {k['id']: k['full_name'] for k in response_dict_employ}
     
     full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
@@ -254,13 +252,22 @@ def get_week_by_club(date_user):
             continue
             
         full_text += f'{clubs_color[i]} <b>{i}</b>\n'
+        
+        # Группируем по дням внутри клуба
+        shifts_by_day = {}
         for j in club_shifts:
-            name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
             shift_dt = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
             day_str = shift_dt.strftime('%d.%m, %A').capitalize()
+            if day_str not in shifts_by_day:
+                shifts_by_day[day_str] = []
+                
+            name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
             time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
+            shifts_by_day[day_str].append(f'  └ {name} {time_str}')
             
-            full_text += f' • {day_str}: {name} {time_str}\n'
+        for day, shifts in shifts_by_day.items():
+            full_text += f'📅 {day}:\n'
+            full_text += "\n".join(shifts) + "\n"
         full_text += '\n'        
         
     return full_text
@@ -304,7 +311,7 @@ def get_week_by_day(date_user):
             for j in club_shifts:
                 name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
                 time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
-                day_text += f'    {name} {time_str}\n'
+                day_text += f'  └ {name} {time_str}\n'
         
         if day_has_shifts:
             full_text += f"{day_text}\n"
@@ -332,26 +339,34 @@ def get_week_by_employee(date_user):
     
     full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
 
+    # Группируем по человеку, затем по дням
     shifts_by_emp = {}
     for j in valid_shifts:
         name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
         if name not in shifts_by_emp:
-            shifts_by_emp[name] = []
+            shifts_by_emp[name] = {}
         
         shift_dt = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
-        day_str = shift_dt.strftime('%A').capitalize()
+        day_str = shift_dt.strftime('%d.%m, %A').capitalize()
         loc = j.get("location", {}).get("title", "Неизвестно")
+        loc_color = clubs_color.get(loc, "")
+        
         time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
         
-        shifts_by_emp[name].append(f'  • {day_str}: {time_str} ({loc})')
+        if day_str not in shifts_by_emp[name]:
+            shifts_by_emp[name][day_str] = []
+            
+        shifts_by_emp[name][day_str].append(f'  └ {time_str} {loc_color} {loc}')
 
-    for emp, shifts in shifts_by_emp.items():
+    for emp, days_dict in shifts_by_emp.items():
         icon = "👤" if emp == "СВОБОДНАЯ СМЕНА" else random.choice(emojis)
-        full_text += f'{icon} <b>{emp}</b>:\n'
-        full_text += "\n".join(shifts) + "\n\n"
+        full_text += f'{icon} <b>{emp}</b>\n'
+        for day_str, shifts in days_dict.items():
+            full_text += f'📅 {day_str}:\n'
+            full_text += "\n".join(shifts) + "\n"
+        full_text += '\n'
 
-    return full_text  
-
+    return full_text
 
 def send_long_text(chat_id, text, bot):
     """Умная разбивка длинного сообщения с поддержкой HTML"""
