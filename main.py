@@ -312,14 +312,29 @@ def start(message):
 
             users = define_name(message)
 
-            if len(users) == 0 or users[0][8] == -1: # отсев посторонних и ушедших
+            if len(users) == 0:
+                # Человек есть в конфе, но нет в БД (бот спал при входе). Добавляем сами.
+                import sqlite3
+                conn = sqlite3.connect('db/omgbot.sql')
+                cur = conn.cursor()
+                cur.execute("INSERT INTO users_new (login) VALUES (?)", ("@" + message.from_user.username,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                
+                # И сразу отправляем заполнять данные
+                from auth import start_auth
+                start_auth(message, bot)
+
+            elif users[0][8] == -1: 
+                # Бывший сотрудник
                 bot.send_message(message.chat.id, 'Доступ запрещен!')
                 
             else:
-                if users[0][9] == None or users[0][9] == "": # есть в КФ но нет записи в БД, начнем авторизацию
+                # Обычный сценарий: юзер уже есть в БД
+                if users[0][9] == None or users[0][9] == "": 
                     from auth import start_auth
                     start_auth(message, bot)
-                    
                 else:
                     hello(message.chat.id, bot)
 
