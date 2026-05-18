@@ -224,212 +224,154 @@ def get_shifts_and_employees (date_start, date_end):
     
     return  response_dict,response_dict_employ
     
-    
-    
-def get_week_by_employee (date_user):
-    
+
+def get_week_by_club(date_user):
     date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
-   
     date_start_iso = last_monday(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'))
     date_end_iso = add_days(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'), 7, '%Y-%m-%d %H:%M:%S')
     
-    response_dict, response_dict_employ = get_shifts_and_employees (date_start_iso, date_end_iso)
-
-    full_text=f"Расписание на неделю {datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}-{datetime.strptime(date_end_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}\n\n"
-
-    # Словарь для хранения смен сотрудников с группировкой по дням и локациям
-    employee_shifts = {}
-
-    for p in range(7):
+    response_dict, response_dict_employ = get_shifts_and_employees(date_start_iso, date_end_iso)
     
-        str_day = add_days(date_start_iso, p, '%d.%m.%Y')
-        dtt = datetime.strptime(str_day, '%d.%m.%Y')
-        dtt_day = dtt.strftime('%A')
-
-        # Итерируемся по сменам
-        for j in response_dict:
-            name = ''
-            location_title = ''
-            
-            for k in response_dict_employ:
-                if k['id'] == j["employee_id"]:
-                    name = k['full_name']
-            
-            # Получаем название локации
-            if "location" in j:
-                if j["location"] is not None:
-                    location_title = j["location"]["title"]
-                else:
-                    continue
-
-            if name != "":
-                shift_info = f'{dtt_day}: с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)} {location_title}\n'
-            else:
-                shift_info = f'{dtt_day}: СВОБОДНАЯ СМЕНА с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)} {location_title}\n'
-
-            day_shift = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
-            str_day1 = day_shift.strftime('%d.%m.%Y')
-
-            # Если дата совпадает с текущим днем, добавляем информацию о смене
-            if str_day == str_day1:
-                if name not in employee_shifts:
-                    employee_shifts[name] = {}
-                if dtt_day not in employee_shifts[name]:
-                    employee_shifts[name][dtt_day] = []
-                employee_shifts[name][dtt_day].append(shift_info)
-
-    # Теперь формируем текстовый вывод
-    for employee, shifts in employee_shifts.items():
-
-        if employee=="":
-            employee="Свободные смены!"
-        else:
-            employee=f"{random.choice(emojis)} {employee}"
-        full_text += f'{employee}:\n'
-        for day, shift_infos in shifts.items():
-            for shift_info in shift_infos:
-                full_text += f'  {shift_info}'
-        full_text += '\n'
-
-
-
-    # В конце можно вывести или сохранить full_text
-    return full_text
+    start_dt = datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S')
+    end_dt = start_dt + timedelta(days=7) # Строго 7 дней (Пн-Вс)
     
-
-
-def get_week_by_day (date_user):
+    # 1. Фильтруем ровно 7 дней и сортируем по дате/времени
+    valid_shifts = []
+    for j in response_dict:
+        shift_dt = datetime.strptime(j['planned_from'], '%Y-%m-%d %H:%M:%S')
+        if start_dt <= shift_dt < end_dt:
+            valid_shifts.append(j)
+    valid_shifts.sort(key=lambda x: x['planned_from'])
     
-    date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
-   
-    date_start_iso = last_monday(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'))
-    date_end_iso = add_days(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'), 7, '%Y-%m-%d %H:%M:%S')
+    # 2. Словарь сотрудников для быстрого поиска
+    emp_dict = {k['id']: k['full_name'] for k in response_dict_employ}
     
-    response_dict, response_dict_employ = get_shifts_and_employees (date_start_iso, date_end_iso)
-    
-    full_text=f"Расписание на неделю {datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}-{datetime.strptime(date_end_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}\n\n"
-
-
-    for p in range (7):
-        str_day = add_days(date_start_iso,p,'%d.%m.%Y')
-        dtt = datetime.strptime(str_day,'%d.%m.%Y')
-        dtt_day = dtt.strftime('%A')
-        
-        full_text=full_text+f'{str_day}, {dtt_day}\n\n'
-            
-        for i in clubs_color:
-            full_text = full_text +f'{clubs_color[i]} {i}\n'
-            for j in response_dict:
-                name = ''
-                for k in response_dict_employ:
-            
-            
-                    if k['id']==j["employee_id"]:
-                        name = k['full_name']
-              
-                if name!="":
-                    text=f'{name} c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
-                else:
-                    text=f'СВОБОДНАЯ СМЕНА c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
-            
-                day_shift = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
-                str_day1 = day_shift.strftime('%d.%m.%Y')
-
-                
-                if j["location"] is not None:
-                    if (j["location"]["title"])==i and str_day==str_day1:
-                        full_text=full_text+text
-                else:
-                    continue
-
-                
-
-            full_text=full_text+'\n'        
-
-        
-    return full_text
-    
-    
-    
-    
-def get_week_by_club (date_user):
-    
-    date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
-   
-    date_start_iso = last_monday(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'))
-    date_end_iso = add_days(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'), 7, '%Y-%m-%d %H:%M:%S')
-    
-    response_dict, response_dict_employ = get_shifts_and_employees (date_start_iso, date_end_iso)
-    
-    
-    full_text=f"Расписание на неделю {datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}-{datetime.strptime(date_end_iso, '%Y-%m-%d %H:%M:%S').strftime('%d.%m')}\n\n"
-
-    for i in response_dict:
-        name = ''
-        for k in response_dict_employ:
-            
-            
-            if k['id']==i["employee_id"]:
-                name = k['full_name']
-
-        if i["location"] is not None:
-            text=f'{name}: {i["location"]["title"]} c {i["planned_from"]} до {i["planned_to"]}'
-        else:
-            continue      
-        
-        
-
-
+    full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
 
     for i in clubs_color:
-        full_text = full_text +f'{clubs_color[i]} {i}\n'
-        for j in response_dict:
-            name = ''
-            for k in response_dict_employ:
+        club_shifts = [j for j in valid_shifts if j.get("location") and j["location"]["title"] == i]
+        if not club_shifts:
+            continue
             
+        full_text += f'{clubs_color[i]} <b>{i}</b>\n'
+        for j in club_shifts:
+            name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
+            shift_dt = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
+            day_str = shift_dt.strftime('%d.%m, %A').capitalize()
+            time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
             
-                if k['id']==j["employee_id"]:
-                    name = k['full_name']
-            if name!="":
-                text=f'{day_of_week(j["planned_from"]).capitalize()}: {name} c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
-            else:
-                text=f'{day_of_week(j["planned_from"]).capitalize()}: СВОБОДНАЯ СМЕНА! c {add_hours(j["planned_from"],3)} до {add_hours(j["planned_to"],3)}\n'
-
-            
-             
-            
-            if j["location"] is not None:
-                if (j["location"]["title"])==i:
-                    full_text=full_text+text
-            else:
-                continue    
-            
-        full_text=full_text+'\n'        
-
+            full_text += f' • {day_str}: {name} {time_str}\n'
+        full_text += '\n'        
         
     return full_text
+
+def get_week_by_day(date_user):
+    date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
+    date_start_iso = last_monday(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'))
+    date_end_iso = add_days(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'), 7, '%Y-%m-%d %H:%M:%S')
     
+    response_dict, response_dict_employ = get_shifts_and_employees(date_start_iso, date_end_iso)
+    
+    start_dt = datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S')
+    end_dt = start_dt + timedelta(days=7)
+    
+    valid_shifts = []
+    for j in response_dict:
+        shift_dt = datetime.strptime(j['planned_from'], '%Y-%m-%d %H:%M:%S')
+        if start_dt <= shift_dt < end_dt:
+            valid_shifts.append(j)
+    valid_shifts.sort(key=lambda x: x['planned_from'])
+    
+    emp_dict = {k['id']: k['full_name'] for k in response_dict_employ}
+    
+    full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
+
+    for p in range(7):
+        current_dt = start_dt + timedelta(days=p)
+        day_str = current_dt.strftime('%d.%m, %A').capitalize()
+        
+        day_has_shifts = False
+        day_text = f"📅 <b>{day_str}</b>\n"
+        
+        for i in clubs_color:
+            # Ищем смены конкретного клуба в этот конкретный день
+            club_shifts = [j for j in valid_shifts if j.get("location") and j["location"]["title"] == i and datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S').date() == current_dt.date()]
+            if not club_shifts:
+                continue
+                
+            day_has_shifts = True
+            day_text += f' {clubs_color[i]} {i}:\n'
+            for j in club_shifts:
+                name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
+                time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
+                day_text += f'    {name} {time_str}\n'
+        
+        if day_has_shifts:
+            full_text += f"{day_text}\n"
+
+    return full_text
+
+def get_week_by_employee(date_user):
+    date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
+    date_start_iso = last_monday(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'))
+    date_end_iso = add_days(date_start_dt.strftime('%Y-%m-%d %H:%M:%S'), 7, '%Y-%m-%d %H:%M:%S')
+    
+    response_dict, response_dict_employ = get_shifts_and_employees(date_start_iso, date_end_iso)
+    
+    start_dt = datetime.strptime(date_start_iso, '%Y-%m-%d %H:%M:%S')
+    end_dt = start_dt + timedelta(days=7)
+    
+    valid_shifts = []
+    for j in response_dict:
+        shift_dt = datetime.strptime(j['planned_from'], '%Y-%m-%d %H:%M:%S')
+        if start_dt <= shift_dt < end_dt:
+            valid_shifts.append(j)
+    valid_shifts.sort(key=lambda x: x['planned_from'])
+    
+    emp_dict = {k['id']: k['full_name'] for k in response_dict_employ}
+    
+    full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
+
+    shifts_by_emp = {}
+    for j in valid_shifts:
+        name = emp_dict.get(j["employee_id"], "СВОБОДНАЯ СМЕНА")
+        if name not in shifts_by_emp:
+            shifts_by_emp[name] = []
+        
+        shift_dt = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
+        day_str = shift_dt.strftime('%A').capitalize()
+        loc = j.get("location", {}).get("title", "Неизвестно")
+        time_str = f'с {add_hours(j["planned_from"], 3)} до {add_hours(j["planned_to"], 3)}'
+        
+        shifts_by_emp[name].append(f'  • {day_str}: {time_str} ({loc})')
+
+    for emp, shifts in shifts_by_emp.items():
+        icon = "👤" if emp == "СВОБОДНАЯ СМЕНА" else random.choice(emojis)
+        full_text += f'{icon} <b>{emp}</b>:\n'
+        full_text += "\n".join(shifts) + "\n\n"
+
+    return full_text  
+
+
 def send_long_text(chat_id, text, bot):
-    """Умная разбивка длинного сообщения, чтобы не ловить лимит Телеграма"""
+    """Умная разбивка длинного сообщения с поддержкой HTML"""
     max_length = 4000
     if len(text) <= max_length:
-        bot.send_message(chat_id, text)
+        bot.send_message(chat_id, text, parse_mode='HTML')
         return
         
     parts = text.split('\n\n')
     msg = ""
     for part in parts:
-        # Если добавление нового блока превысит лимит, отправляем то, что накопилось
         if len(msg) + len(part) + 2 > max_length:
-            bot.send_message(chat_id, msg)
+            bot.send_message(chat_id, msg, parse_mode='HTML')
             msg = part + "\n\n"
         else:
             msg += part + "\n\n"
             
-    # Отправляем остатки
     if msg.strip():
-        bot.send_message(chat_id, msg)   
-    
+        bot.send_message(chat_id, msg, parse_mode='HTML')
+
 def handle_data(message, bot):
     if message.text == '⬅️ Вернуться':
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
