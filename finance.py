@@ -1158,7 +1158,10 @@ def get_aqsi_data_silent(start_dt, end_dt):
     """Тихая функция получения данных для фоновых задач (без bot.send_message)"""
     response_dict_goods_groups, response_goods = define_goods()
     
-    # Кассы и магазины
+    # Оптимизация поиска: делаем плоские словари для мгновенного доступа O(1)
+    goods_to_group = {n['id']: n.get('group_id') for n in response_goods.get('rows', []) if 'id' in n}
+    group_to_name = {b['id']: b['name'].strip() for b in response_dict_goods_groups if 'id' in b}
+    
     response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers).json()
     response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers).json()
     
@@ -1185,12 +1188,24 @@ def get_aqsi_data_silent(start_dt, end_dt):
                         if remaining_payment > 0:
                             payment_amount = min(remaining_payment, item_total)
                             
+                            # Определяем метод оплаты
+                            pay_type = payments[payment_index]['type']
+                            if pay_type == 1:
+                                pay_type = 2 if payments[payment_index].get("acquiringData", {}).get("apn") == "" else 1
+                            method_name = pay_method.get(pay_type, "Неизвестно")
+                            
+                            # Определяем категорию позиции
+                            g_id = positions[t]['externalId']
+                            group_id = goods_to_group.get(g_id)
+                            category_name = group_to_name.get(group_id, "Без категории")
+                            
                             row_data = {
                                 'Тип': content_type[i['content']['type']],
-                                'Сумма платежа': payment_amount
+                                'Сумма платежа': payment_amount,
+                                'Метод оплаты': method_name,
+                                'Категория позиции': category_name
                             }
                             
-                            # Определяем клуб
                             dev_id_pay = i['deviceSN']
                             shop_id = next((v['shop']['id'] for v in response_dev.get('rows', []) if v['serialNumber'] == dev_id_pay), None)
                             row_data['Место'] = next((b['name'] for b in response_shop if b['id'] == shop_id), 'Неизвестно')
@@ -1222,50 +1237,62 @@ def auto_weekly_report(bot, target_chat_id=None):
     tz = pytz.timezone('Europe/Moscow')
     today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # Даты прошлой недели (с ПН по ВС)
     last_week_start = today - timedelta(days=today.weekday() + 7)
     last_week_end = last_week_start + timedelta(days=7)
     
-    # Даты позапрошлой недели (для сравнения)
     prev_week_start = last_week_start - timedelta(days=7)
     prev_week_end = last_week_start
 
-    # Загружаем данные
     data_last = get_aqsi_data_silent(last_week_start.strftime("%Y-%m-%dT%H:%M:%S"), last_week_end.strftime("%Y-%m-%dT%H:%M:%S"))
     data_prev = get_aqsi_data_silent(prev_week_start.strftime("%Y-%m-%dT%H:%M:%S"), prev_week_end.strftime("%Y-%m-%dT%H:%M:%S"))
     
-    # Считаем тоталы
     def get_totals(data_set):
         total = 0
         clubs = {}
+        methods = {}
+        categories = {}
         for r in data_set:
             amt = r['Сумма платежа']
             if r['Тип'] == 'Возврат прихода': amt = -amt
             elif r['Тип'] != 'Приход': continue
             
             total += amt
+            
             c = r.get('Место', 'Неизвестно')
             clubs[c] = clubs.get(c, 0) + amt
-        return total, clubs
+            
+            m = r.get('Метод оплаты', 'Неизвестно')
+            methods[m] = methods.get(m, 0) + amt
+            
+            cat = r.get('Категория позиции', 'Без категории')
+            categories[cat] = categories.get(cat, 0) + amt
+        return total, clubs, methods, categories
 
-    total_last, clubs_last = get_totals(data_last)
-    total_prev, clubs_prev = get_totals(data_prev)
+    total_last, clubs_last, methods_last, categories_last = get_totals(data_last)
+    total_prev, clubs_prev, methods_prev, categories_prev = get_totals(data_prev)
 
-    # Формируем отчет
     text = f"#финансы\n\n📊 <b>Еженедельный фин. отчет ({last_week_start.strftime('%d.%m')} - {(last_week_end-timedelta(days=1)).strftime('%d.%m')})</b>\n\n"
     text += f"💰 <b>ВЫРУЧКА:</b> {format_money(total_last)} р.{calc_diff(total_last, total_prev)}\n\n"
     
-    text += "🏠 <b>ПО КЛУБАМ:</b>\n"
+    text += "💳 <b>МЕТОДЫ ОПЛАТЫ:</b>\n"
+    for m, val in sorted(methods_last.items(), key=lambda x: x[1], reverse=True):
+        val_prev = methods_prev.get(m, 0)
+        text += f" • {m}: {format_money(val)} р.{calc_diff(val, val_prev)}\n"
+        
+    text += "\n🏠 <b>ПО КЛУБАМ:</b>\n"
     for c, val in sorted(clubs_last.items(), key=lambda x: x[1], reverse=True):
         val_prev = clubs_prev.get(c, 0)
         text += f" • {c}: {format_money(val)} р.{calc_diff(val, val_prev)}\n"
         
+    text += "\n🛒 <b>ПО КАТЕГОРИЯМ:</b>\n"
+    for cat, val in sorted(categories_last.items(), key=lambda x: x[1], reverse=True):
+        val_prev = categories_prev.get(cat, 0)
+        text += f" • {cat}: {format_money(val)} р.{calc_diff(val, val_prev)}\n"
+        
     text += "\n<i>* Динамика указана в сравнении с позапрошлой неделей.</i>"
     
-    # Отправляем в канал reports
     try:
         from constants import CHATS
-        # Если chat_id передан — шлем туда (в админку), если нет — по дефолту в канал
         target = target_chat_id if target_chat_id else CHATS['reports']
         bot.send_message(target, text, parse_mode='HTML')
     except Exception as e:
