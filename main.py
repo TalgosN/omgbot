@@ -618,6 +618,8 @@ from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)
 from consumables import register_consumables_callbacks
 register_consumables_callbacks(bot)
+from admin_panel import register_admin_consumables_callbacks
+register_admin_consumables_callbacks(bot)
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,)).start()

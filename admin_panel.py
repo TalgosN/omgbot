@@ -493,27 +493,67 @@ def bc_save_new_time(message, b_id, bot):
 
 ###### Модуль расходников
 
+def get_allowed_clubs():
+    """Динамически загружает конфиг и оставляет только клубы с require_geo = True"""
+    try:
+        from sheets import get_clubs
+        current_clubs = get_clubs()
+        return [club for club in current_clubs if current_clubs[club].get('require_geo', False)]
+    except Exception as e:
+        print(f"Ошибка чтения require_geo из конфига: {e}")
+        # Если конфиг пуст или сломался — возвращаем пустой список во избежание падения
+        return []
+
 def admin_consumables_menu(message, bot):
+    """Главное меню управления расходниками для админа"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(*clublist_task, '⬅️ Назад в админку')
-    msg = bot.send_message(message.chat.id, "Выберите клуб, в который нужно добавить расходник:", reply_markup=markup)
+    markup.add('➕ Добавить расходник', '📋 Управление расходниками', '⬅️ Назад в админку')
+    
+    # Получаем объект сообщения (поддержка вызова из разных контекстов)
+    chat_id = message.chat.id if hasattr(message, 'chat') else message
+    msg = bot.send_message(chat_id, "Управление расходниками (Панель Администратора):", reply_markup=markup)
+    bot.register_next_step_handler(msg, admin_consumables_handler, bot)
+
+def admin_consumables_handler(message, bot):
+    a = message.text
+    if a == '➕ Добавить расходник':
+        ac_select_club_for_add(message, bot)
+    elif a == '📋 Управление расходниками':
+        ac_select_club_for_manage(message, bot)
+    elif a == '⬅️ Назад в админку':
+        from menu import admin_menu
+        admin_menu(message, bot)
+    else:
+        admin_consumables_menu(message, bot)
+
+# --- БЛОК ДОБАВЛЕНИЯ НОВОЙ ПОЗИЦИИ ---
+
+def ac_select_club_for_add(message, bot):
+    allowed_clubs = get_allowed_clubs()
+    if not allowed_clubs:
+        bot.send_message(message.chat.id, "В конфиге нет доступных клубов с require_geo: true!")
+        admin_consumables_menu(message, bot)
+        return
+        
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(*allowed_clubs, 'Отмена')
+    msg = bot.send_message(message.chat.id, "Выберите клуб для добавления нового расходника:", reply_markup=markup)
     bot.register_next_step_handler(msg, ac_get_name, bot)
 
 def ac_get_name(message, bot):
-    if message.text == '⬅️ Назад в админку':
-        from menu import admin_menu
-        admin_menu(message, bot)
+    if message.text == 'Отмена':
+        admin_consumables_menu(message, bot)
         return
         
     club = message.text
-    if club not in clublist_task:
-        bot.send_message(message.chat.id, "Такого клуба нет. Выберите из меню на клавиатуре.")
-        admin_consumables_menu(message, bot)
+    if club not in get_allowed_clubs():
+        bot.send_message(message.chat.id, "Неверный клуб. Используйте клавиатуру.")
+        ac_select_club_for_add(message, bot)
         return
         
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('Отмена')
-    msg = bot.send_message(message.chat.id, f"Выбран клуб: <b>{club}</b>\n\nВведите название нового расходника (например: Добрый Кола):", parse_mode='HTML', reply_markup=markup)
+    msg = bot.send_message(message.chat.id, f"Выбран клуб: <b>{club}</b>\n\nВведите название нового расходника:", parse_mode='HTML', reply_markup=markup)
     bot.register_next_step_handler(msg, ac_get_limit, club, bot)
 
 def ac_get_limit(message, club, bot):
@@ -524,7 +564,7 @@ def ac_get_limit(message, club, bot):
     item_name = message.text.strip()
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('Отмена')
-    msg = bot.send_message(message.chat.id, f"Расходник: <b>{item_name}</b>\n\nВведите минимальный лимит числом (при остатке ниже этого числа будет уведомление):", parse_mode='HTML', reply_markup=markup)
+    msg = bot.send_message(message.chat.id, f"Расходник: <b>{item_name}</b>\n\nВведите минимальный лимит (число):", parse_mode='HTML', reply_markup=markup)
     bot.register_next_step_handler(msg, ac_save_item, club, item_name, bot)
 
 def ac_save_item(message, club, item_name, bot):
@@ -533,7 +573,7 @@ def ac_save_item(message, club, item_name, bot):
         return
         
     if not message.text.isdigit():
-        msg = bot.send_message(message.chat.id, "Ошибка! Лимит должен быть целым числом. Введите еще раз:")
+        msg = bot.send_message(message.chat.id, "Лимит должен быть числом! Введите еще раз:")
         bot.register_next_step_handler(msg, ac_save_item, club, item_name, bot)
         return
         
@@ -542,22 +582,265 @@ def ac_save_item(message, club, item_name, bot):
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        # Проверяем, есть ли уже такой расходник
         cur.execute("SELECT id FROM consumables WHERE club=? AND name=?", (club, item_name))
         if cur.fetchone():
-            bot.send_message(message.chat.id, f"❌ Расходник <b>{item_name}</b> уже существует в клубе {club}.", parse_mode='HTML')
+            bot.send_message(message.chat.id, f"❌ Позиция {item_name} уже заведена в этом клубе.")
         else:
             cur.execute("INSERT INTO consumables (club, name, quantity, min_limit) VALUES (?, ?, 0, ?)", (club, item_name, min_limit))
             conn.commit()
-            bot.send_message(message.chat.id, f"✅ Расходник <b>{item_name}</b> добавлен в <b>{club}</b>! Минимальный остаток: {min_limit} шт.", parse_mode='HTML')
+            bot.send_message(message.chat.id, f"✅ Расходник {item_name} успешно добавлен в базу.")
+            try:
+                from consumables import sync_consumables_to_sheets
+                sync_consumables_to_sheets()
+            except: pass
         cur.close()
         conn.close()
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка базы данных: {e}")
+        bot.send_message(message.chat.id, f"Ошибка БД: {e}")
         
     admin_consumables_menu(message, bot)
 
+# --- БЛОК ПРОСМОТРА И КАРТОЧЕК ---
+
+def ac_select_club_for_manage(message, bot):
+    allowed_clubs = get_allowed_clubs()
+    if not allowed_clubs:
+        bot.send_message(message.chat.id, "В конфиге нет доступных клубов с require_geo: true!")
+        admin_consumables_menu(message, bot)
+        return
+        
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(*allowed_clubs, 'Отмена')
+    msg = bot.send_message(message.chat.id, "Выберите клуб для просмотра списка остатков:", reply_markup=markup)
+    bot.register_next_step_handler(msg, ac_load_club_items, bot)
+
+def ac_load_club_items(message, bot):
+    if message.text == 'Отмена':
+        admin_consumables_menu(message, bot)
+        return
+        
+    club = message.text
+    if club not in get_allowed_clubs():
+        bot.send_message(message.chat.id, "Неверный клуб. Используйте клавиатуру.")
+        ac_select_club_for_manage(message, bot)
+        return
+        
+    admin_show_club_items(message.chat.id, club, bot)
+
+def admin_show_club_items(chat_id, club, bot):
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM consumables WHERE club=?", (club,))
+    items = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not items:
+        bot.send_message(chat_id, f"В клубе {club} пока нет заведенных расходников.")
+        admin_consumables_menu(chat_id, bot)
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    text_lines = [f"📋 <b>Расходники клуба {club} (Администрирование):</b>\n"]
+
+    for item in items:
+        status = "sub" if item['quantity'] <= item['min_limit'] else "ok"
+        status_label = "🔴 МАЛО" if status == "sub" else "🟢"
+        text_lines.append(f"{status_label} <b>{item['name']}</b>: {item['quantity']} шт. (минимум: {item['min_limit']})")
+        markup.add(types.InlineKeyboardButton(text=f"⚙️ Управление {item['name']}", callback_data=f"admcons_view_{item['id']}"))
+
+    markup.add(types.InlineKeyboardButton(text="⬅️ Сменить клуб", callback_data="admcons_backclubs"))
+    bot.send_message(chat_id, "\n".join(text_lines), reply_markup=markup, parse_mode='HTML')
+    bot.send_message(chat_id, "Выберите позицию для изменения параметров 👆", reply_markup=types.ReplyKeyboardRemove())
+
+def admin_view_item_card(chat_id, item_id, bot):
+    """Генерация карточки конкретного расходника с кнопками управления"""
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM consumables WHERE id=?", (item_id,))
+    item = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not item:
+        bot.send_message(chat_id, "Позиция не найдена в базе данных.")
+        admin_consumables_menu(chat_id, bot)
+        return
+
+    status_label = "🚨 ТРЕБУЕТСЯ ПОПОЛНЕНИЕ" if item['quantity'] <= item['min_limit'] else "✅ В ПРЕДЕЛАХ НОРМЫ"
+    card_text = (
+        f"📦 <b>Карточка расходника #{item['id']}</b>\n\n"
+        f"📍 <b>Клуб:</b> {item['club']}\n"
+        f"🏷 <b>Название:</b> {item['name']}\n"
+        f"🔢 <b>Текущее количество:</b> {item['quantity']} шт.\n"
+        f"📉 <b>Минимальный порог:</b> {item['min_limit']} шт.\n"
+        f"📊 <b>Состояние:</b> {status_label}"
+    )
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(text="✏️ Изменить остаток", callback_data=f"admcons_editqty_{item_id}"),
+        types.InlineKeyboardButton(text="📉 Изменить лимит", callback_data=f"admcons_editmin_{item_id}")
+    )
+    markup.add(types.InlineKeyboardButton(text="🗑 Удалить расходник", callback_data=f"admcons_del_{item_id}"))
+    markup.add(types.InlineKeyboardButton(text="⬅️ Вернуться к списку", callback_data=f"admcons_backto_{item['club']}"))
+
+    bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode='HTML')
+
+# --- СОХРАНЕНИЕ И ОБРАБОТЧИКИ ОПЕРАЦИЙ ---
+
+def admcons_save_qty(message, item_id, bot):
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM consumables WHERE id=?", (item_id,))
+    item = cur.fetchone()
     
+    if message.text == 'Отмена' or not item:
+        cur.close()
+        conn.close()
+        if item: admin_view_item_card(message.chat.id, item_id, bot)
+        else: admin_consumables_menu(message, bot)
+        return
+
+    if not message.text.isdigit():
+        cur.close()
+        conn.close()
+        msg = bot.send_message(message.chat.id, "Ошибка! Введите целое число:")
+        bot.register_next_step_handler(msg, admcons_save_qty, item_id, bot)
+        return
+
+    new_qty = int(message.text)
+    old_qty = item['quantity']
+    user_name = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+    
+    from datetime import datetime
+    import pytz
+    now_time = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
+
+    cur.execute("UPDATE consumables SET quantity=? WHERE id=?", (new_qty, item_id))
+    cur.execute('''
+        INSERT INTO consumables_history (item_id, club, name, user_name, old_qty, new_qty, updated_at) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (item_id, item['club'], item['name'], f"{user_name} (Admin)", old_qty, new_qty, now_time))
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    bot.send_message(message.chat.id, "✅ Текущий остаток успешно изменен.")
+    try:
+        from consumables import sync_consumables_to_sheets
+        sync_consumables_to_sheets()
+    except: pass
+    admin_view_item_card(message.chat.id, item_id, bot)
+
+def admcons_save_min(message, item_id, bot):
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM consumables WHERE id=?", (item_id,))
+    item = cur.fetchone()
+    
+    if message.text == 'Отмена' or not item:
+        cur.close()
+        conn.close()
+        if item: admin_view_item_card(message.chat.id, item_id, bot)
+        else: admin_consumables_menu(message, bot)
+        return
+
+    if not message.text.isdigit():
+        cur.close()
+        conn.close()
+        msg = bot.send_message(message.chat.id, "Ошибка! Введите число:")
+        bot.register_next_step_handler(msg, admcons_save_min, item_id, bot)
+        return
+
+    new_min = int(message.text)
+    cur.execute("UPDATE consumables SET min_limit=? WHERE id=?", (new_min, item_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    bot.send_message(message.chat.id, "✅ Минимальный порог обновлен.")
+    try:
+        from consumables import sync_consumables_to_sheets
+        sync_consumables_to_sheets()
+    except: pass
+    admin_view_item_card(message.chat.id, item_id, bot)
+
+def register_admin_consumables_callbacks(bot):
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('admcons_'))
+    def admcons_callback(call):
+        try:
+            bot.answer_callback_query(call.id)
+            data = call.data[8:]
+
+            if data == "backclubs":
+                bot.delete_message(call.message.chat.id, call.message.id)
+                admin_consumables_menu(call.message, bot)
+                return
+
+            if data.startswith("view_"):
+                item_id = int(data.split('_')[2])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                admin_view_item_card(call.message.chat.id, item_id, bot)
+                return
+
+            if data.startswith("editqty_"):
+                item_id = int(data.split('_')[2])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+                markup.add('Отмена')
+                msg = bot.send_message(call.message.chat.id, "Укажите новое текущее количество расходника на складе:", reply_markup=markup)
+                bot.register_next_step_handler(msg, admcons_save_qty, item_id, bot)
+                return
+
+            if data.startswith("editmin_"):
+                item_id = int(data.split('_')[2])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+                markup.add('Отмена')
+                msg = bot.send_message(call.message.chat.id, "Укажите новый минимальный лимит для уведомлений менеджера:", reply_markup=markup)
+                bot.register_next_step_handler(msg, admcons_save_min, item_id, bot)
+                return
+
+            if data.startswith("del_"):
+                item_id = int(data.split('_')[2])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                
+                conn = sqlite3.connect('db/omgbot.sql')
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT club FROM consumables WHERE id=?", (item_id,))
+                row = cur.fetchone()
+                if row:
+                    club_name = row['club']
+                    cur.execute("DELETE FROM consumables WHERE id=?", (item_id,))
+                    conn.commit()
+                    bot.send_message(call.message.chat.id, "🗑 Позиция полностью удалена из базы данных.")
+                    try:
+                        from consumables import sync_consumables_to_sheets
+                        sync_consumables_to_sheets()
+                    except: pass
+                    admin_show_club_items(call.message.chat.id, club_name, bot)
+                else:
+                    admin_consumables_menu(call.message, bot)
+                cur.close()
+                conn.close()
+                return
+
+            if data.startswith("backto_"):
+                club = data.split('_')[2]
+                bot.delete_message(call.message.chat.id, call.message.id)
+                admin_show_club_items(call.message.chat.id, club, bot)
+                return
+
+        except Exception as e:
+            print(f"Ошибка колбэка админ-расходников: {e}")
+              
 # Для теста запуска напрямую
 if __name__ == "__main__":
     print(sync_config())

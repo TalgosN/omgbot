@@ -10,8 +10,17 @@ KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
 SHEET_NAME = 'Расходники'
 
 def consumables_menu(message, bot):
+    from admin_panel import get_allowed_clubs
+    allowed_clubs = get_allowed_clubs()
+    
+    if not allowed_clubs:
+        bot.send_message(message.chat.id, "Нет доступных клубов для просмотра расходников.")
+        from menu import hello
+        hello(message.chat.id, bot)
+        return
+
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(*clublist_task, '⬅️ Вернуться')
+    markup.add(*allowed_clubs, '⬅️ Вернуться')
     msg = bot.send_message(message.chat.id, "Выбери клуб, чтобы посмотреть или обновить остатки:", reply_markup=markup)
     bot.register_next_step_handler(msg, c_select_club, bot)
 
