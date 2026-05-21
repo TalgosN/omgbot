@@ -201,7 +201,13 @@ def broadcast_menu_handler(message, bot):
 def bc_add_text(message, bot):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('Вернуться')
-    msg = bot.send_message(message.chat.id, "Введите текст рассылки (поддерживаются HTML-теги <b> </b>, <i> </i>)", reply_markup=markup)
+    text = (
+        "Введите текст рассылки. Поддерживаются HTML-теги (нажми на код, чтобы скопировать):\n\n"
+        "Жирный:\n<code>&lt;b&gt;текст&lt;/b&gt;</code>\n\n"
+        "Курсив:\n<code>&lt;i&gt;текст&lt;/i&gt;</code>\n\n"
+        "Ссылка:\n<code>&lt;a href=\"https://твой-сайт.ру\"&gt;Текст ссылки&lt;/a&gt;</code>"
+    )
+    msg = bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
     bot.register_next_step_handler(msg, bc_save_text, bot)
 
 def bc_save_text(message, bot):
@@ -309,7 +315,14 @@ def bc_show_active(message, bot):
     for b_id, b_text, b_time, b_freq, b_status in broadcasts:
         freq_label = "🗓 Ежедневно" if b_freq == 1 else "⏱ Однократно"
         status_label = "🟢 Активна" if b_status == 1 else "⏸ На паузе"
-        preview = b_text[:25] + "..." if len(b_text) > 25 else b_text
+
+        # Вырезаем все HTML-теги из текста через регулярное выражение только для превью
+        clean_text = re.sub(r'<[^>]+>', '', b_text)
+
+        # На всякий случай экранируем спецсимволы, чтобы они не сломали разметку меню
+        clean_text = clean_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        
+        preview = clean_text[:25] + "..." if len(clean_text) > 25 else clean_text
         
         text_lines.append(f"<b># {b_id}</b> | {b_time} | {freq_label} | {status_label}\n💬 <i>{preview}</i>\n\n")
         markup.add(types.InlineKeyboardButton(text=f"Управлять #{b_id} ({b_time})", callback_data=f"bc_manage_{b_id}"))
