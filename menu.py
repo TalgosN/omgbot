@@ -84,7 +84,11 @@ def func(message, bot):
             hello(message.chat.id, bot)
         else:
             admin_menu(message, bot)
-        
+    
+    elif a == '📦 Расходники':
+        from consumables import consumables_menu
+        consumables_menu(message, bot)
+
     elif a == '🆘 Помощь':
         help(bot, message)
         hello(message.chat.id, bot)

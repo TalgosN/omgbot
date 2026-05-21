@@ -4,7 +4,7 @@ import os
 from telebot import *
 import sqlite3
 import re
-from constants import CHATS
+from constants import CHATS, clublist_task
 
 
 # Путь к ключу (как в твоем sheets.py)
@@ -37,6 +37,9 @@ def admin_func_handler(message, bot):
         from menu import admin_menu
         admin_menu(message, bot)    
     
+    elif a == '📦 Расходники (Админ)':
+        admin_consumables_menu(message, bot)
+
     else:
         from menu import admin_menu
         admin_menu(message, bot)
@@ -487,6 +490,74 @@ def bc_save_new_time(message, b_id, bot):
     bot.send_message(message.chat.id, "✅ Время отправки обновлено!")
     bc_view_card(message, b_id, bot)
 
+
+###### Модуль расходников
+
+def admin_consumables_menu(message, bot):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(*clublist_task, '⬅️ Назад в админку')
+    msg = bot.send_message(message.chat.id, "Выберите клуб, в который нужно добавить расходник:", reply_markup=markup)
+    bot.register_next_step_handler(msg, ac_get_name, bot)
+
+def ac_get_name(message, bot):
+    if message.text == '⬅️ Назад в админку':
+        from menu import admin_menu
+        admin_menu(message, bot)
+        return
+        
+    club = message.text
+    if club not in clublist_task:
+        bot.send_message(message.chat.id, "Такого клуба нет. Выберите из меню на клавиатуре.")
+        admin_consumables_menu(message, bot)
+        return
+        
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('Отмена')
+    msg = bot.send_message(message.chat.id, f"Выбран клуб: <b>{club}</b>\n\nВведите название нового расходника (например: Добрый Кола):", parse_mode='HTML', reply_markup=markup)
+    bot.register_next_step_handler(msg, ac_get_limit, club, bot)
+
+def ac_get_limit(message, club, bot):
+    if message.text == 'Отмена':
+        admin_consumables_menu(message, bot)
+        return
+        
+    item_name = message.text.strip()
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('Отмена')
+    msg = bot.send_message(message.chat.id, f"Расходник: <b>{item_name}</b>\n\nВведите минимальный лимит числом (при остатке ниже этого числа будет уведомление):", parse_mode='HTML', reply_markup=markup)
+    bot.register_next_step_handler(msg, ac_save_item, club, item_name, bot)
+
+def ac_save_item(message, club, item_name, bot):
+    if message.text == 'Отмена':
+        admin_consumables_menu(message, bot)
+        return
+        
+    if not message.text.isdigit():
+        msg = bot.send_message(message.chat.id, "Ошибка! Лимит должен быть целым числом. Введите еще раз:")
+        bot.register_next_step_handler(msg, ac_save_item, club, item_name, bot)
+        return
+        
+    min_limit = int(message.text)
+    
+    try:
+        conn = sqlite3.connect('db/omgbot.sql')
+        cur = conn.cursor()
+        # Проверяем, есть ли уже такой расходник
+        cur.execute("SELECT id FROM consumables WHERE club=? AND name=?", (club, item_name))
+        if cur.fetchone():
+            bot.send_message(message.chat.id, f"❌ Расходник <b>{item_name}</b> уже существует в клубе {club}.", parse_mode='HTML')
+        else:
+            cur.execute("INSERT INTO consumables (club, name, quantity, min_limit) VALUES (?, ?, 0, ?)", (club, item_name, min_limit))
+            conn.commit()
+            bot.send_message(message.chat.id, f"✅ Расходник <b>{item_name}</b> добавлен в <b>{club}</b>! Минимальный остаток: {min_limit} шт.", parse_mode='HTML')
+        cur.close()
+        conn.close()
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка базы данных: {e}")
+        
+    admin_consumables_menu(message, bot)
+
+    
 # Для теста запуска напрямую
 if __name__ == "__main__":
     print(sync_config())

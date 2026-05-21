@@ -178,6 +178,36 @@ def create_tables():
     cur.execute('CREATE TABLE IF NOT EXISTS broadcasts (ID INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, photo TEXT, trep TEXT, freq INTEGER, status INTEGER)')
     conn.commit()
     cur.close()
+
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS consumables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            club TEXT,
+            name TEXT NOT NULL,
+            quantity INTEGER DEFAULT 0,
+            min_limit INTEGER DEFAULT 5
+        )
+    ''')
+    conn.commit()
+    cur.close()
+
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS consumables_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER,
+            club TEXT,
+            name TEXT,
+            user_name TEXT,
+            old_qty INTEGER,
+            new_qty INTEGER,
+            updated_at TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    cur.close()
+
     conn.close()
     
     
@@ -586,6 +616,8 @@ register_callback (bot)
 register_callback2 (bot)
 from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)
+from consumables import register_consumables_callbacks
+register_consumables_callbacks(bot)
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,)).start()
