@@ -496,7 +496,7 @@ def bc_save_new_time(message, b_id, bot):
 def get_allowed_clubs():
     """Динамически загружает конфиг и оставляет только клубы с require_geo = True"""
     try:
-        from sheets import get_clubs
+        from constants import get_clubs
         current_clubs = get_clubs()
         return [club for club in current_clubs if current_clubs[club].get('require_geo', False)]
     except Exception as e:
@@ -840,7 +840,7 @@ def register_admin_consumables_callbacks(bot):
 
         except Exception as e:
             print(f"Ошибка колбэка админ-расходников: {e}")
-              
+
 # Для теста запуска напрямую
 if __name__ == "__main__":
     print(sync_config())
