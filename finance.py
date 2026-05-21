@@ -118,7 +118,7 @@ def returnback(message,bot):
 import traceback 
 
 def func_fin(message, bot):
-    if message.text in ['📑 Отчет по приходам', '💸 Внести приходы по наличке', '💰 Инкассация', '👨🏻‍💻 ЗП за период']:
+    if message.text in ['📑 Отчет по приходам', '💸 Внести приходы по наличке', '💰 Инкассация', '👨🏻‍💻 ЗП за период', '📊 Сводный отчет']:
         operation = message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         
@@ -244,6 +244,9 @@ def execute_fin_operation(operation, date_start, date_end, message, bot):
         elif operation == '👨🏻‍💻 ЗП за период':
             pay_report(date_start, date_end, message, bot)
             
+        elif operation == '📊 Сводный отчет':
+            generate_summary_report(date_start, date_end, message, bot)
+            
     except Exception as er:
         bot.send_message(message.chat.id, f"Ошибка при формировании отчета: {er}")
         finance(message, bot)
@@ -346,6 +349,7 @@ def create_data (start_dt,end_dt,message,bot):
     response_dict = response.json()
 
     pages = response_dict['pages']
+    message_bot = None
 
     for j in range (pages):
 
@@ -443,10 +447,11 @@ def create_data (start_dt,end_dt,message,bot):
     
                 # Запись ошибок
             except Exception as e:
-                errors=f'{errors}{e}{i["id"]} \n'
+                errors=f'{errors}{e}{i.get("id", "Unknown")}\n'
                 continue
                 
-    bot.delete_message(message.chat.id, message_bot.message_id)
+    if message_bot:
+        bot.delete_message(message.chat.id, message_bot.message_id)
     
     return data, raw_data, errors
 
@@ -569,13 +574,6 @@ def inkass (start_dt,end_dt,message,bot):
         er_doc = open("./Reports/Errors_Inkass.txt", 'rb')
         bot.send_document(message.chat.id, er_doc)
     
-    #print(json.dumps(data_cash, indent=4, sort_keys=True, ensure_ascii=False))
-    #print('\n\n\n')
-    #print(json.dumps(data_check, indent=4, sort_keys=True, ensure_ascii=False))
-    #print('\n\n\n')
-    #print(json.dumps(inkass, indent=4, sort_keys=True, ensure_ascii=False))
-    #print('\n\n\n')
-    #print('Готово')
     bot.register_next_step_handler(message,confirm_inkass,inkass,bot,start_dt)
     
 def confirm_inkass(message,inkass,bot,start_dt):
@@ -1098,4 +1096,177 @@ def get_data_pay_report(date_start,date_end):
     conn.close()
     return new_data
 
+################################ Сводка
+def format_money(amount):
+    """Красивое форматирование денег: 15000.5 -> 15 000.50"""
+    return f"{amount:,.2f}".replace(',', ' ')
 
+def generate_summary_report(start_dt, end_dt, message, bot):
+    # Получаем данные через твою готовую функцию
+    data, _, _ = create_data(start_dt, end_dt, message, bot)
+    
+    total_income = 0
+    by_method = {}
+    by_club = {}
+    by_category = {}
+    
+    for row in data:
+        amount = row['Сумма платежа']
+        # Учитываем только чистый приход (Приход минус Возвраты)
+        if row['Тип'] == 'Возврат прихода':
+            amount = -amount
+        elif row['Тип'] != 'Приход':
+            continue
+            
+        total_income += amount
+        
+        # Группировка по методам оплаты
+        method = row['Метод оплаты']
+        by_method[method] = by_method.get(method, 0) + amount
+        
+        # Группировка по клубам
+        club = row.get('Место', 'Неизвестно')
+        by_club[club] = by_club.get(club, 0) + amount
+        
+        # Группировка по категориям
+        cat = row.get('Категория позиции', 'Без категории')
+        by_category[cat] = by_category.get(cat, 0) + amount
+
+    # Формируем красивый текст
+    dt_s = datetime.strptime(start_dt, "%Y-%m-%dT%H:%M:%S").strftime("%d.%m.%Y")
+    dt_e = (datetime.strptime(end_dt, "%Y-%m-%dT%H:%M:%S") - timedelta(days=1)).strftime("%d.%m.%Y")
+    
+    text = f"📊 <b>Сводный отчет ({dt_s} - {dt_e})</b>\n\n"
+    text += f"💰 <b>ОБЩАЯ СУММА:</b> {format_money(total_income)} р.\n\n"
+    
+    text += "💳 <b>МЕТОДЫ ОПЛАТЫ:</b>\n"
+    for m, val in sorted(by_method.items(), key=lambda x: x[1], reverse=True):
+        text += f" • {m}: {format_money(val)} р.\n"
+        
+    text += "\n🏠 <b>ПО КЛУБАМ:</b>\n"
+    for c, val in sorted(by_club.items(), key=lambda x: x[1], reverse=True):
+        text += f" • {c}: {format_money(val)} р.\n"
+        
+    text += "\n🛒 <b>ПО КАТЕГОРИЯМ:</b>\n"
+    for cat, val in sorted(by_category.items(), key=lambda x: x[1], reverse=True):
+        text += f" • {cat}: {format_money(val)} р.\n"
+
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
+    finance(message, bot)
+
+def get_aqsi_data_silent(start_dt, end_dt):
+    """Тихая функция получения данных для фоновых задач (без bot.send_message)"""
+    response_dict_goods_groups, response_goods = define_goods()
+    
+    # Кассы и магазины
+    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers).json()
+    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers).json()
+    
+    params = {"filtered.beginDate": start_dt, "filtered.endDate": end_dt}
+    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params).json()
+    
+    if 'pages' not in response: return []
+    
+    data = []
+    for j in range(response['pages']):
+        params['page'] = j
+        page_resp = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params).json()
+        
+        for i in page_resp.get('rows', []):
+            try:
+                payments = i['content']['checkClose']['payments']
+                positions = i['content']['positions']
+                payment_index = 0
+                remaining_payment = payments[payment_index]['amount']
+                
+                for t in range(len(positions)):
+                    item_total = positions[t]['price'] * positions[t]['quantity']
+                    while item_total > 0 and payment_index < len(payments):
+                        if remaining_payment > 0:
+                            payment_amount = min(remaining_payment, item_total)
+                            
+                            row_data = {
+                                'Тип': content_type[i['content']['type']],
+                                'Сумма платежа': payment_amount
+                            }
+                            
+                            # Определяем клуб
+                            dev_id_pay = i['deviceSN']
+                            shop_id = next((v['shop']['id'] for v in response_dev.get('rows', []) if v['serialNumber'] == dev_id_pay), None)
+                            row_data['Место'] = next((b['name'] for b in response_shop if b['id'] == shop_id), 'Неизвестно')
+                            
+                            data.append(row_data)
+                            remaining_payment -= payment_amount
+                            item_total -= payment_amount
+                        if remaining_payment <= 0:
+                            payment_index += 1
+                            if payment_index < len(payments):
+                                remaining_payment = payments[payment_index]['amount']
+            except Exception:
+                continue
+    return data
+
+def calc_diff(current, previous):
+    """Вычисляет процентную разницу и возвращает красивую строку со стрелочкой"""
+    if previous == 0:
+        return " (📈 +100%)" if current > 0 else ""
+    diff = ((current - previous) / previous) * 100
+    if diff > 0:
+        return f" (📈 +{diff:.1f}%)"
+    elif diff < 0:
+        return f" (📉 {diff:.1f}%)"
+    return " (➖ 0%)"
+
+def auto_weekly_report(bot, target_chat_id=None):
+    """Отправка сводного отчета в канал по понедельникам"""
+    tz = pytz.timezone('Europe/Moscow')
+    today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # Даты прошлой недели (с ПН по ВС)
+    last_week_start = today - timedelta(days=today.weekday() + 7)
+    last_week_end = last_week_start + timedelta(days=7)
+    
+    # Даты позапрошлой недели (для сравнения)
+    prev_week_start = last_week_start - timedelta(days=7)
+    prev_week_end = last_week_start
+
+    # Загружаем данные
+    data_last = get_aqsi_data_silent(last_week_start.strftime("%Y-%m-%dT%H:%M:%S"), last_week_end.strftime("%Y-%m-%dT%H:%M:%S"))
+    data_prev = get_aqsi_data_silent(prev_week_start.strftime("%Y-%m-%dT%H:%M:%S"), prev_week_end.strftime("%Y-%m-%dT%H:%M:%S"))
+    
+    # Считаем тоталы
+    def get_totals(data_set):
+        total = 0
+        clubs = {}
+        for r in data_set:
+            amt = r['Сумма платежа']
+            if r['Тип'] == 'Возврат прихода': amt = -amt
+            elif r['Тип'] != 'Приход': continue
+            
+            total += amt
+            c = r.get('Место', 'Неизвестно')
+            clubs[c] = clubs.get(c, 0) + amt
+        return total, clubs
+
+    total_last, clubs_last = get_totals(data_last)
+    total_prev, clubs_prev = get_totals(data_prev)
+
+    # Формируем отчет
+    text = f"#финансы\n\n📊 <b>Еженедельный фин. отчет ({last_week_start.strftime('%d.%m')} - {(last_week_end-timedelta(days=1)).strftime('%d.%m')})</b>\n\n"
+    text += f"💰 <b>ВЫРУЧКА:</b> {format_money(total_last)} р.{calc_diff(total_last, total_prev)}\n\n"
+    
+    text += "🏠 <b>ПО КЛУБАМ:</b>\n"
+    for c, val in sorted(clubs_last.items(), key=lambda x: x[1], reverse=True):
+        val_prev = clubs_prev.get(c, 0)
+        text += f" • {c}: {format_money(val)} р.{calc_diff(val, val_prev)}\n"
+        
+    text += "\n<i>* Динамика указана в сравнении с позапрошлой неделей.</i>"
+    
+    # Отправляем в канал reports
+    try:
+        from constants import CHATS
+        # Если chat_id передан — шлем туда (в админку), если нет — по дефолту в канал
+        target = target_chat_id if target_chat_id else CHATS['reports']
+        bot.send_message(target, text, parse_mode='HTML')
+    except Exception as e:
+        print(f"Ошибка отправки еженедельного отчета: {e}")

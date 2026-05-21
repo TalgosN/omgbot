@@ -115,9 +115,11 @@ def schedule_func(bot): # Не забудь передать bot!
     # --- БАЗОВЫЕ ЗАДАЧИ (Статические) ---
     # Эти задачи не зависят от clubs.json, их можно оставить жесткими
     schedule.every().day.at("10:00:00", 'Europe/Moscow').do(init)
-    schedule.every().monday.at("09:00:00", 'Europe/Moscow').do(all_active_tasks_schedule)
+    schedule.every().monday.at("09:05:00", 'Europe/Moscow').do(all_active_tasks_schedule)
     schedule.every().day.at("09:00:00", 'Europe/Moscow').do(today_sched)
     
+    from finance import auto_weekly_report
+    schedule.every().monday.at("09:00:00", 'Europe/Moscow').do(auto_weekly_report, bot)
     # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
     # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
     # Можно оставить так, пробежавшись один раз при старте

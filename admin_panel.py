@@ -23,7 +23,20 @@ def admin_func_handler(message, bot):
     elif a == '⬅️ Вернуться':
         from menu import hello
         hello(message.chat.id, bot)
-        
+    
+    elif a == '📊 Тест недельного отчета':
+        msg = bot.send_message(message.chat.id, "⏳ Собираю данные из Aqsi и считаю динамику за 2 недели...")
+        try:
+            from finance import auto_weekly_report
+            # Запускаем генерацию прямо в этот чат админа
+            auto_weekly_report(bot, target_chat_id=message.chat.id)
+            bot.delete_message(message.chat.id, msg.message_id)
+        except Exception as e:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка генерации: {e}")
+            
+        from menu import admin_menu
+        admin_menu(message, bot)    
+    
     else:
         from menu import admin_menu
         admin_menu(message, bot)
