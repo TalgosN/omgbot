@@ -784,13 +784,13 @@ def register_admin_consumables_callbacks(bot):
                 return
 
             if data.startswith("view_"):
-                item_id = int(data.split('_')[2])
+                item_id = int(data.split('_')[1])
                 bot.delete_message(call.message.chat.id, call.message.id)
                 admin_view_item_card(call.message.chat.id, item_id, bot)
                 return
 
             if data.startswith("editqty_"):
-                item_id = int(data.split('_')[2])
+                item_id = int(data.split('_')[1])
                 bot.delete_message(call.message.chat.id, call.message.id)
                 markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
                 markup.add('Отмена')
@@ -799,7 +799,7 @@ def register_admin_consumables_callbacks(bot):
                 return
 
             if data.startswith("editmin_"):
-                item_id = int(data.split('_')[2])
+                item_id = int(data.split('_')[1])
                 bot.delete_message(call.message.chat.id, call.message.id)
                 markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
                 markup.add('Отмена')
@@ -808,7 +808,7 @@ def register_admin_consumables_callbacks(bot):
                 return
 
             if data.startswith("del_"):
-                item_id = int(data.split('_')[2])
+                item_id = int(data.split('_')[1])
                 bot.delete_message(call.message.chat.id, call.message.id)
                 
                 conn = sqlite3.connect('db/omgbot.sql')
@@ -833,14 +833,14 @@ def register_admin_consumables_callbacks(bot):
                 return
 
             if data.startswith("backto_"):
-                club = data.split('_')[2]
+                club = data.split('_')[1]
                 bot.delete_message(call.message.chat.id, call.message.id)
                 admin_show_club_items(call.message.chat.id, club, bot)
                 return
 
         except Exception as e:
             print(f"Ошибка колбэка админ-расходников: {e}")
-
+            
 # Для теста запуска напрямую
 if __name__ == "__main__":
     print(sync_config())
