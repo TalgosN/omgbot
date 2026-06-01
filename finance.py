@@ -1014,8 +1014,8 @@ def get_data_pay_report(date_start,date_end):
     location_titles = set(sorted([entry['location']['title'] for entry in response_dict_shifts if entry.get('location')],key=str.lower))
     
 
+# 1. Заполняем ставки из основного расписания
     for j in response_dict_rate['users']:
-        
         row_data={}
         row_data['Ставка']=float(j['rate'])
         row_data['Ставка КЦ']=0
@@ -1027,9 +1027,23 @@ def get_data_pay_report(date_start,date_end):
         
         data[j['employee_id']]=row_data
         
+    # 2. Добавляем ставки КЦ (с защитой от новых людей)
     for j in response_dict_rate_cc['users']:
+        emp_id = j['employee_id']
         
-        data[j['employee_id']]['Ставка КЦ']=float(j['rate'])
+        # Если сотрудник есть только в КЦ, но его нет в основном расписании — создаем его
+        if emp_id not in data:
+            row_data={}
+            row_data['Ставка']=0
+            row_data['Ставка КЦ']=float(j['rate'])
+            row_data['Бонус']=0
+            row_data['Штраф']=0
+            row_data['Смены']={}
+            for t in location_titles:
+                row_data['Смены'][t]=0
+            data[emp_id] = row_data
+        else:
+            data[emp_id]['Ставка КЦ'] = float(j['rate'])
          
     
     
