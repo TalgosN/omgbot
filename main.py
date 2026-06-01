@@ -220,6 +220,7 @@ def create_tables():
     conn.commit()
     cur.close()
 
+    cur = conn.cursor()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS broadcasts_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
