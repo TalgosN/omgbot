@@ -5,10 +5,36 @@ from telebot import *
 import sqlite3
 import re
 from constants import CHATS, clublist_task
-
+from sender import safe_send
 
 # Путь к ключу (как в твоем sheets.py)
 KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
+temp_broadcasts = {}
+
+def generate_days_keyboard(selected_days=""):
+    markup = types.InlineKeyboardMarkup()
+    days_map = {'0': 'Пн', '1': 'Вт', '2': 'Ср', '3': 'Чт', '4': 'Пт', '5': 'Сб', '6': 'Вс'}
+    
+    row = []
+    for d_num, name in days_map.items():
+        text = f"✅ {name}" if d_num in selected_days else name
+        new_days = selected_days.replace(d_num, "") if d_num in selected_days else selected_days + d_num
+        row.append(types.InlineKeyboardButton(text=text, callback_data=f"bcfreq_toggle_{new_days}"))
+        
+        if len(row) == 4:
+            markup.add(*row)
+            row = []
+    if row: markup.add(*row)
+
+    markup.add(
+        types.InlineKeyboardButton(text="⏱ Однократно", callback_data="bcfreq_once"),
+        types.InlineKeyboardButton(text="🗓 Каждый день", callback_data="bcfreq_daily")
+    )
+    if selected_days:
+        markup.add(types.InlineKeyboardButton(text="💾 Сохранить выбранные дни", callback_data=f"bcfreq_custom_{selected_days}"))
+    
+    markup.add(types.InlineKeyboardButton(text="❌ Отмена", callback_data="bc_back"))
+    return markup
 
 def admin_func_handler(message, bot):
     a = message.text
@@ -254,51 +280,24 @@ def bc_save_time(message, text, photo_id, bot):
         return
     
     time_str = message.text.strip()
+    import re
     if not re.match(r'^\d{2}:\d{2}$', time_str):
-        bot.send_message(message.chat.id, "❌ Неверный формат времени! Напишите строго ЧЧ:ММ (например, 09:15).")
-        bot.register_next_step_handler(message, bc_save_time, text, photo_id, bot)
+        msg = bot.send_message(message.chat.id, "❌ Неверный формат времени! Напишите строго ЧЧ:ММ (например, 09:15).")
+        bot.register_next_step_handler(msg, bc_save_time, text, photo_id, bot)
         return
         
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('Однократно', 'Каждый день', 'Вернуться')
-    msg = bot.send_message(message.chat.id, "Выберите частоту выполнения рассылки", reply_markup=markup)
-    bot.register_next_step_handler(msg, bc_save_freq, text, photo_id, time_str, bot)
-
-def bc_save_freq(message, text, photo_id, time_str, bot):
-    if message.text == 'Вернуться':
-        broadcast_menu(message, bot)
-        return
+    # Сохраняем введенные данные во временный словарь
+    temp_broadcasts[message.chat.id] = {'text': text, 'photo': photo_id, 'time': time_str}
     
-    if message.text == 'Однократно':
-        freq = 0
-    elif message.text == 'Каждый день':
-        freq = 1
-    else:
-        bot.send_message(message.chat.id, "Пожалуйста, используйте кнопки на клавиатуре.")
-        bot.register_next_step_handler(message, bc_save_freq, text, photo_id, time_str, bot)
-        return
-        
-    try:
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO broadcasts (text, photo, trep, freq, status) VALUES (?, ?, ?, ?, ?)",
-            (text, photo_id, time_str, freq, 1)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-        bot.send_message(message.chat.id, "✅ Важная рассылка успешно создана и добавлена в расписание!")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка сохранения в базу данных: {e}")
-        
-    broadcast_menu(message, bot)
+    # Отправляем новую инлайн-клавиатуру с днями
+    bot.send_message(message.chat.id, "Выберите дни недели для рассылки:", reply_markup=generate_days_keyboard(""))
+
 
 def bc_show_active(message, bot):
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT ID, text, trep, freq, status FROM broadcasts")
+        cur.execute("SELECT ID, text, time, freq_type, freq_days, status FROM broadcasts_new")
         broadcasts = cur.fetchall()
         cur.close()
         conn.close()
@@ -315,8 +314,19 @@ def bc_show_active(message, bot):
     markup = types.InlineKeyboardMarkup()
     text_lines = ["📋 <b>Список всех запланированных рассылок:</b>\n\n"]
     
-    for b_id, b_text, b_time, b_freq, b_status in broadcasts:
-        freq_label = "🗓 Ежедневно" if b_freq == 1 else "⏱ Однократно"
+    for b_id, b_text, b_time, b_freq_type, b_freq_days, b_status in broadcasts:
+        # Логика расшифровки дней для карточки и списка:
+        if b_freq_type == "once":
+            freq_label = "⏱ Однократно"
+        elif b_freq_type == "daily":
+            freq_label = "🗓 Ежедневно"
+        elif b_freq_type == "custom":
+            days_map = {'0':'Пн', '1':'Вт', '2':'Ср', '3':'Чт', '4':'Пт', '5':'Сб', '6':'Вс'}
+            selected = [days_map[d] for d in b_freq_days if d in days_map]
+            freq_label = f"📅 {', '.join(selected)}"
+        else:
+            freq_label = "Неизвестно"
+
         status_label = "🟢 Активна" if b_status == 1 else "⏸ На паузе"
 
         # Вырезаем все HTML-теги из текста через регулярное выражение только для превью
@@ -339,7 +349,7 @@ def bc_view_card(message, b_id, bot):
         conn = sqlite3.connect('db/omgbot.sql')
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT * FROM broadcasts WHERE ID=?", (b_id,))
+        cur.execute("SELECT * FROM broadcasts_new WHERE ID=?", (b_id,))
         b = cur.fetchone()
         cur.close()
         conn.close()
@@ -352,13 +362,27 @@ def bc_view_card(message, b_id, bot):
         broadcast_menu(message, bot)
         return
 
-    freq_label = "🗓 Ежедневно" if b['freq'] == 1 else "⏱ Однократно"
+    # Логика расшифровки дней для карточки и списка:
+    freq_type = b['freq_type']
+    freq_days = b['freq_days']
+
+    if freq_type == "once":
+        freq_label = "⏱ Однократно"
+    elif freq_type == "daily":
+        freq_label = "🗓 Ежедневно"
+    elif freq_type == "custom":
+        days_map = {'0':'Пн', '1':'Вт', '2':'Ср', '3':'Чт', '4':'Пт', '5':'Сб', '6':'Вс'}
+        selected = [days_map[d] for d in freq_days if d in days_map]
+        freq_label = f"📅 {', '.join(selected)}"
+    else:
+        freq_label = "Неизвестно"
+
     status_label = "🟢 Активна" if b['status'] == 1 else "⏸ На паузе"
     toggle_btn_text = "⏸ Поставить на паузу" if b['status'] == 1 else "▶️ Активировать"
 
     card_text = (
         f"📢 <b>Управление рассылкой #{b_id}</b>\n\n"
-        f"<b>Время старта:</b> {b['trep']}\n"
+        f"<b>Время старта:</b> {b['time']}\n"
         f"<b>Повторение:</b> {freq_label}\n"
         f"<b>Статус:</b> {status_label}\n\n"
         f"<b>Текст сообщения:</b>\n{b['text']}"
@@ -400,11 +424,11 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("SELECT status FROM broadcasts WHERE ID=?", (b_id,))
+                cur.execute("SELECT status FROM broadcasts_new WHERE ID=?", (b_id,))
                 res = cur.fetchone()
                 if res:
                     new_status = 0 if res[0] == 1 else 1
-                    cur.execute("UPDATE broadcasts SET status=? WHERE ID=?", (new_status, b_id))
+                    cur.execute("UPDATE broadcasts_new SET status=? WHERE ID=?", (new_status, b_id))
                     conn.commit()
                 cur.close()
                 conn.close()
@@ -416,7 +440,7 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("DELETE FROM broadcasts WHERE ID=?", (b_id,))
+                cur.execute("DELETE FROM broadcasts_new WHERE ID=?", (b_id,))
                 conn.commit()
                 cur.close()
                 conn.close()
@@ -453,6 +477,52 @@ def register_broadcast_callbacks(bot):
             
         except Exception as e:
             print(f"Ошибка колбэка рассылок: {e}")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('bcfreq_'))
+    def bcfreq_callback(call):
+        chat_id = call.message.chat.id
+        if chat_id not in temp_broadcasts:
+            bot.answer_callback_query(call.id, "Данные устарели. Начните заново.", show_alert=True)
+            return
+
+        parts = call.data.split('_')
+        action = parts[1]
+        
+        # Обработка нажатий на галочки
+        if action == 'toggle':
+            new_days = parts[2] if len(parts) > 2 else ""
+            bot.edit_message_reply_markup(chat_id, call.message.id, reply_markup=generate_days_keyboard(new_days))
+            return
+
+        # Подготовка к сохранению в новую БД
+        data = temp_broadcasts.pop(chat_id)
+        freq_type = ""
+        freq_days = ""
+
+        if action == 'once':
+            freq_type = "once"
+        elif action == 'daily':
+            freq_type = "daily"
+        elif action == 'custom':
+            freq_type = "custom"
+            freq_days = parts[2] if len(parts) > 2 else ""
+
+        try:
+            conn = sqlite3.connect('db/omgbot.sql')
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO broadcasts_new (text, photo, time, freq_type, freq_days, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (data['text'], data['photo'], data['time'], freq_type, freq_days, 1)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            bot.delete_message(chat_id, call.message.id)
+            bot.send_message(chat_id, "✅ Рассылка успешно создана и сохранена!")
+            broadcast_menu(call.message, bot)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Ошибка БД: {e}")
 
 def bc_save_new_text(message, b_id, bot):
     if message.text == 'Вернуться':
@@ -461,7 +531,7 @@ def bc_save_new_text(message, b_id, bot):
     
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts SET text=? WHERE ID=?", (message.text, b_id))
+    cur.execute("UPDATE broadcasts_new SET text=? WHERE ID=?", (message.text, b_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -482,7 +552,7 @@ def bc_save_new_time(message, b_id, bot):
         
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts SET trep=? WHERE ID=?", (time_str, b_id))
+    cur.execute("UPDATE broadcasts_new SET time=? WHERE ID=?", (time_str, b_id))
     conn.commit()
     cur.close()
     conn.close()

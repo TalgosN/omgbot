@@ -12,6 +12,7 @@ from openclose import send_status_close, send_status_open, close_club
 import kpi
 from kpi import init
 import requests
+from sender import safe_send
 
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
 
@@ -61,27 +62,38 @@ def check_dynamic_events(bot):
     current_time = now.strftime("%H:%M:00") # "10:00:00"
     weekday = now.weekday() # 0 = Понедельник, 6 = Воскресенье
     current_time_short = now.strftime("%H:%M")
+    weekday_str = str(now.weekday())
 
     # --- ЛОГИКА РАССЫЛОК ---
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT ID, text, photo, trep, freq FROM broadcasts WHERE status = 1")
+        
+        # Читаем из НОВОЙ таблицы
+        cur.execute("SELECT id, text, photo, time, freq_type, freq_days FROM broadcasts_new WHERE status = 1")
         active_broadcasts = cur.fetchall()
 
-        for b_id, b_text, b_photo, b_time, b_freq in active_broadcasts:
+        for b_id, b_text, b_photo, b_time, freq_type, freq_days in active_broadcasts:
             if b_time == current_time_short:
-                # Если есть file_id фотографии
-                if b_photo and b_photo != "None":
-                    bot.send_photo(CHATS['main_group'], photo=b_photo, caption=b_text, parse_mode='HTML')
-                else:
-                    bot.send_message(CHATS['main_group'], text=b_text, parse_mode='HTML')
+                should_send = False
                 
-                # Если рассылка одноразовая (freq == 0), отключаем её
-                if b_freq == 0:
-                    cur.execute("UPDATE broadcasts SET status = 0 WHERE ID = ?", (b_id,))
+                # Новая строгая проверка дней
+                if freq_type == "once":
+                    should_send = True
+                elif freq_type == "daily":
+                    should_send = True
+                elif freq_type == "custom" and freq_days and (weekday_str in freq_days):
+                    should_send = True
                     
-        conn.commit()
+                if should_send:
+                    from sender import safe_send
+                    safe_send(bot, CHATS['main_group'], b_text, photo=b_photo, parse_mode='HTML')
+                    
+                    # Отключаем только если тип строго "once" (однократно)
+                    if freq_type == "once":
+                        cur.execute("UPDATE broadcasts_new SET status = 0 WHERE id = ?", (b_id,))
+                        conn.commit()
+
         cur.close()
         conn.close()
     except Exception as e:
@@ -203,6 +215,20 @@ def create_tables():
             old_qty INTEGER,
             new_qty INTEGER,
             updated_at TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    cur.close()
+
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS broadcasts_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT,
+            photo TEXT,
+            time TEXT,
+            freq_type TEXT,
+            freq_days TEXT,
+            status INTEGER DEFAULT 1
         )
     ''')
     conn.commit()
@@ -614,8 +640,10 @@ def today_sched():
 from taskboard import register_callback,register_callback2
 register_callback (bot)
 register_callback2 (bot)
+
 from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)
+
 from consumables import register_consumables_callbacks
 register_consumables_callbacks(bot)
 from admin_panel import register_admin_consumables_callbacks

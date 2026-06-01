@@ -10,6 +10,7 @@ from telebot import *
 import os
 import sqlite3
 from constants import *
+from sender import safe_send
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
@@ -1308,6 +1309,6 @@ def auto_weekly_report(bot, target_chat_id=None):
     try:
         from constants import CHATS
         target = target_chat_id if target_chat_id else CHATS['reports']
-        bot.send_message(target, text, parse_mode='HTML')
+        safe_send(bot, target, text, photo=None, parse_mode='HTML')
     except Exception as e:
         print(f"Ошибка отправки еженедельного отчета: {e}")
