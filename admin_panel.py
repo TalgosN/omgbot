@@ -36,6 +36,32 @@ def generate_days_keyboard(selected_days=""):
     markup.add(types.InlineKeyboardButton(text="❌ Отмена", callback_data="bc_back"))
     return markup
 
+def generate_edit_days_keyboard(b_id, selected_days=""):
+    markup = types.InlineKeyboardMarkup()
+    days_map = {'0': 'Пн', '1': 'Вт', '2': 'Ср', '3': 'Чт', '4': 'Пт', '5': 'Сб', '6': 'Вс'}
+    
+    row = []
+    for d_num, name in days_map.items():
+        text = f"✅ {name}" if d_num in selected_days else name
+        new_days = selected_days.replace(d_num, "") if d_num in selected_days else selected_days + d_num
+        row.append(types.InlineKeyboardButton(text=text, callback_data=f"bcef_toggle_{b_id}_{new_days}"))
+        
+        if len(row) == 4:
+            markup.add(*row)
+            row = []
+    if row: markup.add(*row)
+
+    markup.add(
+        types.InlineKeyboardButton(text="⏱ Однократно", callback_data=f"bcef_once_{b_id}"),
+        types.InlineKeyboardButton(text="🗓 Каждый день", callback_data=f"bcef_daily_{b_id}")
+    )
+    if selected_days:
+        markup.add(types.InlineKeyboardButton(text="💾 Сохранить", callback_data=f"bcef_custom_{b_id}_{selected_days}"))
+    
+    # Кнопка отмены возвращает обратно в карточку этой же рассылки
+    markup.add(types.InlineKeyboardButton(text="❌ Отмена", callback_data=f"bc_manage_{b_id}"))
+    return markup
+
 def admin_func_handler(message, bot):
     a = message.text
     
@@ -393,7 +419,10 @@ def bc_view_card(message, b_id, bot):
     markup.add(types.InlineKeyboardButton(text="🗑 Полностью удалить", callback_data=f"bc_delete_{b_id}"))
     markup.add(
         types.InlineKeyboardButton(text="✏️ Изменить текст", callback_data=f"bc_edittxt_{b_id}"),
-        types.InlineKeyboardButton(text="🕒 Изменить время", callback_data=f"bc_edittime_{b_id}"))
+        types.InlineKeyboardButton(text="🕒 Изменить время", callback_data=f"bc_edittime_{b_id}")
+    )
+    # Добавили новую кнопку изменения частоты:
+    markup.add(types.InlineKeyboardButton(text="🔄 Изменить частоту", callback_data=f"bc_editfreq_{b_id}"))
     markup.add(types.InlineKeyboardButton(text="⬅️ Вернуться к списку", callback_data=f"bc_back_list"))
 
     if b['photo'] and b['photo'] != "None":
@@ -475,6 +504,16 @@ def register_broadcast_callbacks(bot):
                 bot.register_next_step_handler(msg, bc_save_new_time, b_id, bot)
                 return   
             
+            if data.startswith("editfreq_"):
+                b_id = int(data.split("_")[1])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                bot.send_message(
+                    call.message.chat.id, 
+                    "Выберите новую частоту или дни недели для этой рассылки:", 
+                    reply_markup=generate_edit_days_keyboard(b_id, "")
+                )
+                return
+            
         except Exception as e:
             print(f"Ошибка колбэка рассылок: {e}")
     
@@ -524,6 +563,51 @@ def register_broadcast_callbacks(bot):
         except Exception as e:
             bot.send_message(chat_id, f"❌ Ошибка БД: {e}")
 
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('bcef_'))
+    def bcef_callback(call):
+        chat_id = call.message.chat.id
+        parts = call.data.split('_')
+        action = parts[1]
+        b_id = int(parts[2])
+        
+        # Обработка нажатий на галочки при редактировании
+        if action == 'toggle':
+            new_days = parts[3] if len(parts) > 3 else ""
+            bot.edit_message_reply_markup(chat_id, call.message.id, reply_markup=generate_edit_days_keyboard(b_id, new_days))
+            return
+
+        # Подготовка к перезаписи базы
+        freq_type = ""
+        freq_days = ""
+
+        if action == 'once':
+            freq_type = "once"
+        elif action == 'daily':
+            freq_type = "daily"
+        elif action == 'custom':
+            freq_type = "custom"
+            freq_days = parts[3] if len(parts) > 3 else ""
+
+        try:
+            conn = sqlite3.connect('db/omgbot.sql')
+            cur = conn.cursor()
+            # Перезаписываем данные КОНКРЕТНОЙ рассылки
+            cur.execute(
+                "UPDATE broadcasts_new SET freq_type=?, freq_days=? WHERE id=?",
+                (freq_type, freq_days, b_id)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            bot.delete_message(chat_id, call.message.id)
+            bot.send_message(chat_id, "✅ Частота рассылки успешно обновлена!")
+            
+            # Возвращаем пользователя в красивую карточку этой же рассылки
+            bc_view_card(call.message, b_id, bot)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Ошибка БД: {e}")
+            
 def bc_save_new_text(message, b_id, bot):
     if message.text == 'Вернуться':
         bc_view_card(message, b_id, bot)
