@@ -247,19 +247,112 @@ def get_week_by_employee(date_user):
 
 # --- МАРШРУТИЗАЦИЯ --- (Остается практически без изменений, просто вырезал для экономии места, логика handle_data, get_week и send_long_text остается старой)
 
+# --- МАРШРУТИЗАЦИЯ ---
+
 def send_long_text(chat_id, text, bot):
-    # Твой старый код без изменений...
-    pass
+    """Умная разбивка длинного сообщения с поддержкой HTML"""
+    max_length = 4000
+    if len(text) <= max_length:
+        bot.send_message(chat_id, text, parse_mode='HTML')
+        return
+        
+    parts = text.split('\n\n')
+    msg = ""
+    for part in parts:
+        if len(msg) + len(part) + 2 > max_length:
+            bot.send_message(chat_id, msg, parse_mode='HTML')
+            msg = part + "\n\n"
+        else:
+            msg += part + "\n\n"
+            
+    if msg.strip():
+        bot.send_message(chat_id, msg, parse_mode='HTML')
 
 def handle_data(message, bot):
-    # Твой старый код без изменений...
-    pass
+    if message.text == '⬅️ Вернуться':
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(*funclist_rasp)
+        bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
+        bot.register_next_step_handler(message, func_rasp, bot)
+        
+    elif message.text in funclist_rasp_week:
+        sched_type = message.text
+        
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add('Текущая неделя', 'Следующая неделя')
+        markup.add('Прошлая неделя', '⬅️ Вернуться')
+        
+        bot.send_message(message.chat.id, 'Выбери нужную неделю кнопкой или пришли любую дату в формате 15.04.2024 📆', reply_markup=markup)
+        bot.register_next_step_handler(message, get_week, sched_type, bot)
+        
+    else:
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(*funclist_rasp)
+        bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
+        bot.register_next_step_handler(message, func_rasp, bot)
 
 def get_week(message, sched_type, bot):
-    # Твой старый код. 
-    # ВАЖНО: Вызов update_schedule(user_date) можно вставить сюда, перед отправкой расписания пользователю.
-    pass
+    if message.text == '⬅️ Вернуться':
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(*funclist_rasp)
+        bot.send_message(message.chat.id, 'Что вы хотите сделать? 👀', reply_markup=markup)
+        bot.register_next_step_handler(message, func_rasp, bot)
+        return
 
+    quick_ranges = ['Текущая неделя', 'Следующая неделя', 'Прошлая неделя']
+    
+    try:
+        # Обработка смарт-кнопок
+        if message.text in quick_ranges:
+            today = datetime.now(pytz.timezone('Europe/Moscow'))
+            
+            if message.text == 'Текущая неделя':
+                target_date = today
+            elif message.text == 'Следующая неделя':
+                target_date = today + timedelta(days=7)
+            elif message.text == 'Прошлая неделя':
+                target_date = today - timedelta(days=7)
+                
+            user_date = target_date.strftime('%d.%m.%Y')
+            
+        # Обработка ручного ввода
+        else:
+            user_date_dt = datetime.strptime(message.text, '%d.%m.%Y')
+            user_date = user_date_dt.strftime('%d.%m.%Y')
+
+        # Убираем клавиатуру на время загрузки
+        bot.send_message(message.chat.id, f"⏳ Собираю расписание... ({user_date})", reply_markup=telebot.types.ReplyKeyboardRemove())
+
+        # Получение расписания
+        if sched_type == '👨🏻‍💻 По сотрудникам':
+            mess_text = get_week_by_employee(user_date)
+        elif sched_type == '🗓 По датам':
+            mess_text = get_week_by_day(user_date)
+        elif sched_type == '🔴 По клубам':
+            mess_text = get_week_by_club(user_date)
+            
+        # Используем новую функцию отправки для защиты от лимитов Телеграма
+        send_long_text(message.chat.id, mess_text, bot)
+        
+        # Обновляем БД (опционально, если хочешь чтобы база тоже заполнялась)
+        try:
+            update_schedule(user_date)
+        except Exception as e:
+            print(f"Ошибка обновления базы расписания: {e}")
+        
+        # Возвращаем меню
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add(*funclist_rasp)
+        bot.send_message(message.chat.id, 'Что вы хотите сделать дальше? 👀', reply_markup=markup)
+        bot.register_next_step_handler(message, func_rasp, bot)
+    
+    except Exception as e:
+        bot.send_message(message.chat.id, f'❌ Ошибка: {e}\nПерешлите её техническому специалисту.')
+        
+        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup.add('Текущая неделя', 'Следующая неделя', 'Прошлая неделя', '⬅️ Вернуться')
+        bot.send_message(message.chat.id, 'Попробуйте нажать кнопку или прислать дату в формате 15.04.2024:', reply_markup=markup)
+        bot.register_next_step_handler(message, get_week, sched_type, bot)
 # --- ИНТЕГРАЦИЯ В БАЗУ ДАННЫХ (ТАБЛИЦЫ) ---
 
 def update_schedule(date_user):
