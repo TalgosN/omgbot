@@ -135,7 +135,7 @@ def schedule_func(bot): # Не забудь передать bot!
 
   
     from consumables import auto_consumables_report
-    schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot)
+    schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
     # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
     # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
     # Можно оставить так, пробежавшись один раз при старте
@@ -367,7 +367,7 @@ def start(message):
         if message.chat.id > 0: # Отсев конф
             
             # --- ПРОВЕРКА НА УЧАСТИЕ В ГРУППЕ ---
-            from constants import CHATS
+            
             try:
                 # Запрашиваем статус пользователя в нужной группе
                 user_status = bot.get_chat_member(CHATS['main_group'], message.from_user.id).status

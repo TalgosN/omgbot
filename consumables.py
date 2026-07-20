@@ -220,7 +220,7 @@ def sync_consumables_to_sheets():
 
     return "✅"
 
-def auto_consumables_report(bot):
+def auto_consumables_report(bot, target_chat_id):
     """Еженедельный отчет: только то, что заканчивается или достигло минимума"""
     conn = sqlite3.connect('db/omgbot.sql')
     conn.row_factory = sqlite3.Row
@@ -251,6 +251,6 @@ def auto_consumables_report(bot):
 
     try:
         from constants import CHATS
-        bot.send_message(CHATS['reports'], text, parse_mode='HTML')
+        bot.send_message(target_chat_id, text, parse_mode='HTML')
     except Exception as e:
         print(f"Ошибка отправки отчета по расходникам: {e}")
