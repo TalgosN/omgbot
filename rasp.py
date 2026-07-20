@@ -353,6 +353,7 @@ def get_week(message, sched_type, bot):
         markup.add('Текущая неделя', 'Следующая неделя', 'Прошлая неделя', '⬅️ Вернуться')
         bot.send_message(message.chat.id, 'Попробуйте нажать кнопку или прислать дату в формате 15.04.2024:', reply_markup=markup)
         bot.register_next_step_handler(message, get_week, sched_type, bot)
+        
 # --- ИНТЕГРАЦИЯ В БАЗУ ДАННЫХ (ТАБЛИЦЫ) ---
 
 def update_schedule(date_user):

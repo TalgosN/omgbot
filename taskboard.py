@@ -272,7 +272,6 @@ def send_task(message,task_type,title, descrip,club_task,bot):
 def show_active_tasks(message, bot):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    # Теперь берем и "В работе", и "На проверке"
     cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке')")
     tasks = cur.fetchall()
     cur.close()
@@ -291,8 +290,8 @@ def show_active_tasks(message, bot):
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
             for i, (task_id, title, status) in enumerate(club_tasks, 1):
-                # Добавляем маркер глаза, если задача ждет проверки
-                prefix = "👀 " if status == 'На проверке' else "🛠 "
+                # Убрали иконку ремонта, оставили только глаза
+                prefix = "👀 " if status == 'На проверке' else ""
                 text_lines.append(f"{i}) {prefix}{title}")
                 
                 short_title = title[:12] + "..." if len(title) > 12 else title
@@ -337,7 +336,7 @@ def show_active_type(message, bot, category):
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
             for task_id, title, status in club_tasks:
-                prefix = "👀 " if status == 'На проверке' else "🛠 "
+                prefix = "👀 " if status == 'На проверке' else ""
                 text_lines.append(f"{task_counter}) {prefix}{title}")
                 
                 short_title = title[:12] + "..." if len(title) > 12 else title
@@ -418,6 +417,10 @@ def commit_task(message, task_id, bot):
         bot.register_next_step_handler(message, change_task, task_id, answer, bot)
 
 
+# -------------------------------------------------------------
+# ОБНОВЛЕННЫЕ ФУНКЦИИ ИТЕРАЦИЙ И УВЕДОМЛЕНИЙ
+# -------------------------------------------------------------
+
 def change_task(message, task_id, answer, bot):
     if message.text == 'Нет':
         show_active_tasks(message, bot)
@@ -425,11 +428,15 @@ def change_task(message, task_id, answer, bot):
         today_short = datetime.today().strftime('%d.%m')
         
         conn = sqlite3.connect('db/omgbot.sql')
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT feedback, title FROM tasks WHERE id=?", (task_id,))
-        row = cur.fetchone()
-        old_feedback = row[0] if row and row[0] else ""
-        title = row[1]
+        cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=?", (task_id,))
+        task = cur.fetchone()
+        
+        old_feedback = task['feedback'] if task['feedback'] else ""
+        title = task['title']
+        task_type = task['type']
+        club_task = task['club']
         
         # Добавляем новый ответ админа к истории
         new_entry = f"<b>[{today_short}] Админ:</b> {answer}"
@@ -441,7 +448,34 @@ def change_task(message, task_id, answer, bot):
         conn.close()
 
         bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
-        bot.send_message(CHATS['main_group'], f'👀 К проблеме "<b>{title}</b>" добавлено решение!\n\n{new_entry}\n\n<i>Проверьте и подтвердите выполнение на доске задач.</i>', parse_mode='HTML')
+        
+        # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
+        clubs = get_clubs()
+        club_tag = clubs[club_task]['tag']
+        t_type_low = task_type.lower()
+        
+        mentions = ""
+        if task_type == 'Ремонт':
+            extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
+            mentions = f"{extra} {club_tag}"
+        elif task_type == 'Улучшение бота':
+            mentions = extra_tags[task_type] 
+        else:
+            mentions = club_tag
+
+        msg_full = (f"👀 <b>Решение по проблеме-{t_type_low}:</b>\n{title}\n\n"
+                    f"💬 <b>Ответ:</b>\n{answer}")
+                    
+        msg_short = (f"{mentions}\n\n👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n"
+                     f"💬 <i>{answer}</i>\n\n"
+                     f"👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>")
+
+        bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
+        bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
+        
+        if task_type == 'Ремонт':
+            bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n💬 <i>{answer}</i>", parse_mode='HTML')
+            
         show_active_tasks(message, bot)
 
 
@@ -454,11 +488,15 @@ def return_task_to_work(message, task_id, bot):
     today_short = datetime.today().strftime('%d.%m')
 
     conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT feedback, title FROM tasks WHERE id=?", (task_id,))
-    row = cur.fetchone()
-    old_feedback = row[0] if row and row[0] else ""
-    title = row[1]
+    cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=?", (task_id,))
+    task = cur.fetchone()
+    
+    old_feedback = task['feedback'] if task['feedback'] else ""
+    title = task['title']
+    task_type = task['type']
+    club_task = task['club']
 
     # Добавляем комментарий сотрудника к истории
     new_entry = f"<b>[{today_short}] Сотрудник:</b> {reason}"
@@ -470,8 +508,35 @@ def return_task_to_work(message, task_id, bot):
     conn.close()
 
     bot.send_message(message.chat.id, "❌ Задача возвращена в работу. Админы увидят ваш комментарий.", reply_markup=types.ReplyKeyboardRemove())
-    bot.send_message(CHATS['main_group'], f'⚠️ Проблема "<b>{title}</b>" возвращена в работу!\n\n{new_entry}', parse_mode='HTML')
+    
+    # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
+    clubs = get_clubs()
+    club_tag = clubs[club_task]['tag']
+    t_type_low = task_type.lower()
+    
+    mentions = ""
+    if task_type == 'Ремонт':
+        extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
+        mentions = f"{extra} {club_tag}"
+    elif task_type == 'Улучшение бота':
+        mentions = extra_tags[task_type] 
+    else:
+        mentions = club_tag
+
+    msg_full = (f"⚠️ <b>Проблема-{t_type_low} возвращена в работу:</b>\n{title}\n\n"
+                f"💬 <b>Причина возврата:</b>\n{reason}")
+                
+    msg_short = (f"{mentions}\n\n⚠️ <b>Проблема-{t_type_low} возвращена в работу:</b> {title}\n"
+                 f"💬 <i>{reason}</i>")
+
+    bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
+    bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
+    
+    if task_type == 'Ремонт':
+        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n⚠️ <b>Проблема возвращена в работу:</b> {title}\n💬 <i>{reason}</i>", parse_mode='HTML')
+        
     show_active_tasks(message, bot)
+    
 ##### done tasks
 
     

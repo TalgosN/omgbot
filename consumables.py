@@ -235,8 +235,8 @@ def auto_consumables_report(bot, target_chat_id):
     if not low_stock_items:
         # Можно отправлять сообщение, что всё ок, или вообще ничего не слать
         return
-
-    text = "📦 <b>Еженедельный отчет по расходникам</b>\n\n"
+    text = "#расходники\n\n"
+    text += "📦 <b>Еженедельный отчет по расходникам</b>\n\n"
     text += "⚠️ <b>Требуют пополнения:</b>\n"
     
     current_club = ""
