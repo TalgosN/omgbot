@@ -12,6 +12,8 @@ import math
 import sql_scripts
 from sheets import *
 import random
+from constants import *
+
 
 
 
@@ -22,319 +24,227 @@ def read_kpi():
     wks = sh.worksheet_by_title('Настройки')
     tasks = wks.get_values(start='A', end='A', returnas='matrix')
     price = wks.get_values(start='B', end='B', returnas='matrix')
-    plan =wks.get_values(start='C', end='C', returnas='matrix')
+    plan = wks.get_values(start='C', end='C', returnas='matrix')
 
     df_tasks = pd.DataFrame(tasks, columns=['Task'])
     df_price = pd.DataFrame(price, columns=['Club'])
     df_plan = pd.DataFrame(plan, columns=['Date'])
 
-    # Объединяем DataFrame по строкам
     df_combined = pd.concat([df_tasks, df_price, df_plan], axis=1)
-    return (df_combined)
+    return df_combined
 
-
-
-def read_ank_table(): #чтение с таблицы и запись в sql
-    conn=sqlite3.connect('db/omgbot.sql')
+def read_ank_table():
+    conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF  NOT EXISTS anketi (ID INTEGER PRIMARY KEY AUTOINCREMENT, id_ank integer, dt_ank date, club_ank varchar(50))')
-    conn.commit()
-    cur.close()
-    
-
-    c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
-    
-    cur = conn.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS anketi (ID INTEGER PRIMARY KEY AUTOINCREMENT, id_ank integer, dt_ank date, club_ank varchar(50))')
     cur.execute('DELETE FROM anketi')
     conn.commit()
-    cur.close()
 
-
+    c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open('Клиенты, серты, абики, логины, игры, скидки')
     wks = sh.worksheet_by_title('База Клиентов')
+    
     ids = wks.get_values(start='B', end='B', returnas='matrix')
     club_ank = wks.get_values(start='C', end='C', returnas='matrix')
-    dt_ank =wks.get_values(start='K', end='K', returnas='matrix')
+    dt_ank = wks.get_values(start='K', end='K', returnas='matrix')
 
-    # Преобразуем полученные данные в DataFrame
     df_ids = pd.DataFrame(ids, columns=['ID'])
     df_club_ank = pd.DataFrame(club_ank, columns=['Club'])
     df_club_ank['Club'] = df_club_ank['Club'].str.replace('Мариэль', 'Марьино', case=False, regex=False)
     df_dt_ank = pd.DataFrame(dt_ank, columns=['Date'])
 
-    # Объединяем DataFrame по строкам
     df_combined = pd.concat([df_ids, df_club_ank, df_dt_ank], axis=1)
-
-    # Преобразуем столбец с датами в формат datetime
     df_combined['Date'] = pd.to_datetime(df_combined['Date'], format='%d.%m.%Y', errors='coerce')
 
-    # Фильтруем строки не раньше 3 месяцев
     current_date = pd.Timestamp.now()
-
     three_months_ago = current_date - pd.DateOffset(months=3)
-
     df_filtered = df_combined[df_combined['Date'] >= three_months_ago]
 
-    cur = conn.cursor()
     for index, row in df_filtered.iterrows():
-        
-        cur.execute("INSERT INTO anketi (id_ank, dt_ank, club_ank) VALUES ('%s','%s','%s')"%(row['ID'], row['Date'], row['Club']))
+        cur.execute("INSERT INTO anketi (id_ank, dt_ank, club_ank) VALUES (?, ?, ?)", (row['ID'], str(row['Date']), row['Club']))
 
-    # Сохраняем изменения и закрываем соединение
     conn.commit()
+    cur.close()
     conn.close()
-    return (df_combined)
+    return df_combined
 
-
-
-def write_data (data,table,sheet):
-    
+def write_data(data, table, sheet):
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open(table)
     wks = sh.worksheet_by_title(sheet)
     rng = wks.get_values(start='A2', end=f'F{wks.rows}', returnas='range')
     rng.clear()
 
-    list1 =[]
-
-    for i in range(len(data)):
-        list2=[]
-        for k in range(len(data[i])):
-            list2.append(data[i][k])
-        list1.append(list2)
-
-    if len(list1)>0:
+    list1 = [list(row) for row in data]
+    if len(list1) > 0:
         wks.update_values('A2', list1)
 
-
-def read_bs_table():
-    pass
-
-
 def read_shifts():
-    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
-
-    url = "https://api2.shifton.com/oauth/token"
-
-    payload = json.dumps(SHIFTON_CREDITNAILS)
-    headers = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json'
-    }
-
-    response_token = requests.request("POST", url, headers=headers, data=payload) 
-    response_dict_token = response_token.json()
-
-    projectId = 17253
-
-    headers = {'Accept': 'application/json',
-    'Content-Type': 'application/json',
-            'Authorization':f"Bearer {response_dict_token['access_token']}",
-            'refresh_token': response_dict_token["refresh_token"]}
-
-
-
-    # Текущая дата
-    today = pd.Timestamp.now()
-
-    # Вычисление start_time и end_time
-    start_time = today - pd.DateOffset(months=3)
-    end_time = today + pd.DateOffset(days=1)
-
-    # Форматирование в строку
-    start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
-    end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-
-    days_between = (datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") - datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")).days
-
-
-    payload = json.dumps({
-    "start": start_time,
-    "end": end_time,
-    
-    })
-
-
-    companyId = 16303
-
-
-
-    conn=sqlite3.connect('db/omgbot.sql')
+    """Синхронизирует смены в режиме 'скользящего окна' (7 дней назад, 7 вперед)"""
+    conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF  NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL)')
+    
+    today = pd.Timestamp.now(tz='Europe/Moscow')
+    start_date = today - pd.DateOffset(days=7)
+    
+    start_str = start_date.strftime("%Y-%m-%d")
+    cur.execute("DELETE FROM shifts WHERE dt_shift >= ?", (start_str,))
+    conn.commit()
+
+    schedule_list = []
+    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
+
+    for p in range(15):
+        current_dt = start_date + pd.DateOffset(days=p)
+        date_iso = current_dt.strftime('%Y-%m-%d')
+        
+        try:
+            resp = requests.get(f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}", headers=headers, timeout=5).json()
+            if resp.get("ok"):
+                for loc in resp.get("locations", []):
+                    club = loc.get("title", "Неизвестно")
+                    for shift in loc.get("shifts", []):
+                        emp_name = shift.get("employee", "Неизвестно")
+                        start_t = shift.get("start")
+                        end_t = shift.get("end")
+
+                        try:
+                            t1 = datetime.strptime(start_t, "%H:%M")
+                            t2 = datetime.strptime(end_t, "%H:%M")
+                            if t2 < t1: t2 += timedelta(days=1)
+                            dur = round((t2 - t1).total_seconds() / 3600, 1)
+                        except:
+                            dur = 0
+
+                        parts = emp_name.split()
+                        s_name = parts[0] if len(parts) > 0 else emp_name
+                        f_name = parts[1] if len(parts) > 1 else ""
+
+                        schedule_list.append([s_name, f_name, date_iso, club, dur])
+                        cur.execute("INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur) VALUES (?, ?, ?, ?, ?)", 
+                                    (s_name, f_name, date_iso, club, dur))
+        except Exception as e:
+            print(f"Ошибка парсинга смен за {date_iso}: {e}")
+
     conn.commit()
     cur.close()
-    
-    cur = conn.cursor()
-    cur.execute('DELETE FROM shifts')
-    conn.commit()
-    cur.close()
-
-
-    def add_hours(datetime_str, hours):
-        # Parse the string into a datetime object
-        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
-        # Add the specified number of hours
-        new_dt = dt + timedelta(hours=hours)
-        # Return the new datetime as a string
-        return new_dt.strftime('%H:%M')
-
-    def add_days(datetime_str, days):
-        # Parse the string into a datetime object
-        dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
-        # Add the specified number of hours
-        new_dt = dt + timedelta(days=days)
-        # Return the new datetime as a string
-        return new_dt.strftime('%d.%m.%Y')
-
-
-    response = requests.request("GET", f'https://api.shifton.com/work/1.0.0/projects/{projectId}/shifts', headers=headers, data = payload)
-
-    response_dict = response.json()
-
-    response_employ = requests.request("GET", f'https://api2.shifton.com/work/1.0.0/companies/{companyId}/employees', headers=headers)
-
-    response_dict_employ = response_employ.json()
-
-
-    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%d.%m.%Y')
-
-
-
-    schedule_list = []  # Заголовки
-
-    for p in range(days_between):
-        str_day = add_days(start_time, p)
-
-
-        # Итерируемся по сменам
-        for j in response_dict:
-            name = ''
-            location_title = ''
-            
-            for k in response_dict_employ:
-                if k['id'] == j["employee_id"]:
-                    name = k['full_name']
-            
-            # Получаем название локации
-            if "location" in j:
-                if j["location"] is not None:
-                    location_title = j["location"]["title"]
-                else:
-                    continue
-
-            # Формируем информацию о смене
-            if name != "":
-                shift_start = f'{add_hours(j["planned_from"], 3)}'
-                
-                shift_end = f'{add_hours(j["planned_to"], 3)}'
-
-                start_time_dt = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
-                end_time_dt = datetime.strptime(j["planned_to"], '%Y-%m-%d %H:%M:%S')
-
-                # Вычисляем разницу
-                duration = end_time_dt - start_time_dt
-
-                # Получаем длительность в часах
-                duration_in_hours = round(math.fabs(duration.total_seconds() / 3600),1)
-                
-            
-                
-
-            day_shift = datetime.strptime(j["planned_from"], '%Y-%m-%d %H:%M:%S')
-            str_day1 = day_shift.strftime('%d.%m.%Y')
-
-            # Если дата совпадает с текущим днем, добавляем информацию о смене
-            if str_day == str_day1 and name != "":
-                schedule_list.append([name, str_day, shift_start,shift_end, location_title, duration_in_hours])
-
-    
-    for i in schedule_list:
-        cur = conn.cursor()
-        dt_str = i[1]
-        dt_str = datetime.strptime(dt_str, '%d.%m.%Y')
-        dt_str.strftime('%Y-%m-%d')
-        cur.execute("INSERT INTO shifts (shift_second_name, shift_first_name,dt_shift, club, dur) VALUES ('%s','%s','%s','%s','%s')" % (i[0].split()[0],i[0].split()[1],dt_str,i[4],i[5]))
-        conn.commit()
-        cur.close()
     conn.close()
-    return pd.DataFrame(schedule_list, columns=['name', 'str_day', 'shift_start','shift_end', 'location_title', 'duration_in_hours'])
-
-
+    
+    return pd.DataFrame(schedule_list, columns=['shift_second_name', 'shift_first_name', 'dt_shift', 'club', 'dur'])
 
 def sql_select(command):
-    conn=sqlite3.connect('db/omgbot.sql')
+    conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     cur.execute(command)
-    a=cur.fetchall()
+    a = cur.fetchall()
     cur.close()
     conn.close()
     return a
 
-
 def hash_handle(message):
     try:
         message1 = ' '.join(message.text.split())
-        
-        parts = message1.split(' ', 2)  # Ограничиваем разбивку до 3 частей
+        parts = message1.split(' ', 2)
         if len(parts) == 2:
             parts.append("")
-        elif len(parts) == 3:
+        elif len(parts) > 3:
             pass
-        else:
-            return False, "Не понимаю о чем ты 🙈","```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
 
         if parts[0] in kpi_dict:
-            flag,answer,desc = kpi_dict[parts[0]](message,parts)
+            flag, answer, desc = kpi_dict[parts[0]](message, parts)
         else:
-            return False, "Не понимаю о чем ты 🙈","```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
+            return False, "Не понимаю о чем ты 🙈", "```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
 
         return flag, answer, desc
     except Exception as e:
-        print (e)
-        return True, "Что-то пошло не так!",""
+        print(e)
+        return True, "Что-то пошло не так!", ""
 
-
-def do_action(message,parts):
+def do_action(message, parts):
     if "факт" in message.text.lower():
         return False, 'Даже у меня есть имя, значит и у него есть!',  "```Правильно!\nНикаких 'фактов'!```"
-    else:
-        action_do = parts[0].lower()
-        club = parts[1].lower()
-        if club in clubs:
-            club = clubs[club]
-            table = action[action_do]
-            user_name = "@"+message.from_user.username
-            today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
-            desc = parts[2].strip()
-            if len(desc)>1024:
-                return False, "Слишком длинно!", "```Правильно!\nПожалуйста, меньше 1024 символов```"
-            else:                                     
-                update_status()
-                Insert(table, today, user_name,club,desc)
-                update_table(table)
-                return True, random.choice(TEXTS['aff']),""
-        else:
-            return False, "Неверно написан хештег!", "```Правильно!\nКоды клубов: лен, мар, каш, про, дми```"
-
-def do_double(message,parts):
     
-    if parts[1].strip().isnumeric() and len (parts)==3:
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    action_do = parts[0].lower()
+    club = parts[1].lower()
+    
+    if club in clubs:
+        club = clubs[club]
+        table = action[action_do]
+        user_name = "@" + message.from_user.username
+        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
+        desc = parts[2].strip() if len(parts) > 2 else ""
+        
+        if len(desc) > 1024:
+            return False, "Слишком длинно!", "```Правильно!\nПожалуйста, меньше 1024 символов```"
+        
+        # Интеграция с новым API для #ДР
+        if action_do == "#др":
+            try:
+                headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
+                payload = {"telegram": user_name, "comment": desc}
+                requests.post(f"{SHIFTON_API_URL}/api/bot/birthday", json=payload, headers=headers, timeout=5)
+            except Exception as e:
+                print(f"Ошибка API при отправке ДР: {e}")
 
-        conn=sqlite3.connect('db/omgbot.sql')
+        update_status()
+        Insert(table, today, user_name, club, desc)
+        update_table(table)
+        return True, random.choice(TEXTS['aff']), ""
+    else:
+        return False, "Неверно написан хештег!", "```Правильно!\nКоды клубов: лен, мар, каш, про, дми```"
+
+def do_double(message, parts):
+    # Разрешаем запятую для дробных часов (например, 1,5)
+    hours_str = parts[1].strip().replace(',', '.')
+    
+    if hours_str.replace('.', '', 1).isnumeric() and len(parts) == 3:
+        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+        user_name = "@" + message.from_user.username
+        
+        # --- ИНТЕГРАЦИЯ С НОВЫМ API ДЛЯ #ДВОЙНАЯ ---
+        try:
+            headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
+            payload = {"telegram": user_name, "hours": float(hours_str)}
+            requests.post(f"{SHIFTON_API_URL}/api/bot/double", json=payload, headers=headers, timeout=5)
+        except Exception as e:
+            print(f"Ошибка API при отправке двойной: {e}")
+        # ------------------------------------------
+
+        conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("INSERT INTO '%s' (who,d_rep, amount, desc) VALUES ('%s','%s','%s','%s')" % ('double',"@"+message.from_user.username,today,int(parts[1]),parts[2].strip()))
+        cur.execute("INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)", 
+                    (user_name, today, float(hours_str), parts[2].strip()))
         conn.commit()
         cur.close()
         conn.close()
 
-        return True, random.choice(TEXTS['aff']),""
+        return True, random.choice(TEXTS['aff']), ""
     else:
         return False, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
 
+
+def do_simple_amount(message, parts):
+    """Универсальный обработчик для хештегов #автосим и #активация"""
+    if len(parts) >= 2 and parts[1].strip().isnumeric():
+        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+        amount = int(parts[1].strip())
+        who = "@" + message.from_user.username
+        
+        # Определяем таблицу
+        table_name = 'autosim' if parts[0].lower() == '#автосим' else 'activation'
+
+        conn = sqlite3.connect('db/omgbot.sql')
+        cur = conn.cursor()
+        # Используем безопасную вставку
+        cur.execute(f"INSERT INTO {table_name} (who, d_rep, amount) VALUES (?, ?, ?)", (who, today, amount))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return True, random.choice(TEXTS['aff']), ""
+    else:
+        return False, "Неверный формат хештега!", f"```Правильно!\n#автосим *сумма оплаты*```"
 
 def do_bonus(message,parts):
     
@@ -405,37 +315,34 @@ def do_penalty(message,parts):
 
 
 clubs = {'мар':'Марьино','лен':'Ленинский','про':'Прокшино','каш':'Каширка','дми':'Дмитровка'}
-
 action = {'#продление':'afterparty','#др':'birthday','#инициатива':'initiative'}
-
 symb = {'#продление':10,'#др':3,'#инициатива':11}
-
 bonus = {'#серт':'sert','#абик':'abik'}
-         
 
+# 1. ИСПРАВЛЕНО: Добавлены #автосим и #активация
+kpi_dict = {
+    '#серт': do_bonus, 
+    '#абик': do_bonus, 
+    '#штраф': do_penalty,
+    '#двойная': do_double, 
+    '#продление': do_action,
+    '#др': do_action,
+    '#инициатива': do_action,
+    '#отзывы': do_review,
+    '#автосим': do_simple_amount,
+    '#активация': do_simple_amount
+}
 
-
-kpi_dict={'#серт':do_bonus, '#абик':do_bonus, '#штраф':do_penalty,'#двойная':do_double, '#продление':do_action,'#др':do_action,'#инициатива':do_action,'#отзывы':do_review}
+# 2. ИСПРАВЛЕНО: Чистый вызов функций без списков
 def init():
-                
-    tables = [read_ank_table(),
-              read_bs_table(),
-              read_shifts(),
-              write_data(sql_select(sql_scripts.shifts_ext),'KPI helper','shifts'),
-              write_data(sql_select(sql_scripts.union),'KPI OMG VR','data'),
-              write_data(sql_select(sql_scripts.shifts),'KPI OMG VR','shifts'),
-              write_data(sql_select(sql_scripts.records),'KPI OMG VR','raw')]
-
-    for i in tables:
-        i
+    read_ank_table()
+    read_shifts()
+    write_data(sql_select(sql_scripts.shifts_ext), 'KPI helper', 'shifts')
+    write_data(sql_select(sql_scripts.union), 'KPI OMG VR', 'data')
+    write_data(sql_select(sql_scripts.shifts), 'KPI OMG VR', 'shifts')
+    write_data(sql_select(sql_scripts.records), 'KPI OMG VR', 'raw')
 
 def update_kpi():
-    tables = [read_ank_table(),
-              read_bs_table(),
-              
-              write_data(sql_select(sql_scripts.union),'KPI OMG VR','data'),
-              write_data(sql_select(sql_scripts.records),'KPI OMG VR','raw')
-              ]
-
-    for i in tables:
-        i
+    read_ank_table()
+    write_data(sql_select(sql_scripts.union), 'KPI OMG VR', 'data')
+    write_data(sql_select(sql_scripts.records), 'KPI OMG VR', 'raw')

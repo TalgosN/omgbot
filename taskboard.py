@@ -176,39 +176,38 @@ def add_photo(message, task_type,title,club_task,bot):
         bot.send_message(message.chat.id,f'Прикрепи фото, или, если его нет, нажми "Без фото". Если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, send_task,task_type,title,descrip,club_task,bot)
 
+
 def send_task(message,task_type,title, descrip,club_task,bot):
 
     today=datetime.today().strftime('%Y-%m-%d')
+    photo_id_to_send = None # Инициализируем переменную для фото
 
     if message.text=="Вернуться":
-
         returnback(message,bot)
+        return # <-- ИСПРАВЛЕНИЕ: прерываем выполнение, чтобы не отправлялась пустая задача
 
     elif message.text=="Без фото":
-
         conn=sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor() #INSERT INTO users (login, name) VALUES ('%s','%s')"
+        cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type, club, title, desc,status) VALUES (?,?,?,?,?,?)""", data_tuple)
         conn.commit()
         cur.close()
         conn.close()
 
-
-
-
     elif message.photo:
-
         photo = message.photo[-1]
+        photo_id_to_send = photo.file_id # Сохраняем ID фото для моментальной пересылки в чат
+        
         file_info = bot.get_file(photo.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         save_path = f'data/photo/photo_{message.chat.id}.jpg'
         with open(save_path, 'wb') as new_file:
             new_file.write(downloaded_file)
         photo_add=convertToBinaryData(save_path)
+        
         conn=sqlite3.connect('db/omgbot.sql')
-
-        cur = conn.cursor() #cur.execute("INSERT INTO users (login, name) VALUES ('%s','%s')" % ("@"+message.from_user.username,user_name))
+        cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title, photo_add,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type,club, title, photo, desc,status) VALUES (?,?,?,?,?,?,?)""", data_tuple)
         conn.commit()
@@ -216,26 +215,37 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         conn.close()
 
     else:
-
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add("Без фото","Вернуться")
         bot.send_message(message.chat.id,f'Прикрепи фото, или, если его нет, нажми "Без фото". Если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, send_task,task_type,title,descrip,club_task,bot)
+        return # <-- ИСПРАВЛЕНИЕ: прерываем выполнение, ждем фото
 
     # 2. Подготовка данных
     t_type_low = task_type.lower()
     clean_title = title.strip()
+    short_desc = (descrip[:800] + '...') if len(descrip) > 800 else descrip 
 
     clubs = get_clubs()
     club_tag = clubs[club_task]['tag']
     
-    # 3. Логика определения тегов (убираем кучу if/else)
+    # ПОЛНЫЙ ТЕКСТ (для канала отчетов)
+    notification_full = (
+        f"⚙️ Добавлена новая проблема-{t_type_low}:\n"
+        f"<b>{clean_title}</b>\n\n"
+        f"📝 <b>Описание:</b>\n{short_desc}"
+    )
+    
+    # КОРОТКИЙ ТЕКСТ (для рабочих чатов, как было раньше)
+    notification_short = f"⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>"
+    
+    # 3. Логика определения тегов
     mentions = ""
     if task_type == 'Ремонт':
         extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
         mentions = f"{extra} {club_tag}"
-        # Отправка в доп. чат для ремонта
-        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>", parse_mode='html')
+        # Отправка в доп. чат для ремонта (КОРОТКО)
+        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n{notification_short}", parse_mode='html')
     
     elif task_type == 'Улучшение бота':
         mentions = extra_tags[task_type] 
@@ -244,14 +254,16 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         mentions = club_tag
 
     # 4. Универсальные уведомления
-    # Пользователю
     bot.send_message(message.chat.id, f'Отлично, твоя проблема-{t_type_low} добавлена!')
     
-    # В канал отчетов
-    bot.send_message(CHATS['reports'], f'#задачи\n\n⚙️ Добавлена новая проблема-{t_type_low}: {clean_title} @OMGVR_Admin_Bot')
-    
-    # В основной рабочий чат (одна команда вместо трех разных веток)
-    bot.send_message(CHATS['main_group'], f'{mentions}\n\n⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>', parse_mode='html')
+    # В КАНАЛ ОТЧЕТОВ — Полная версия (с фото, если оно есть)
+    if photo_id_to_send:
+        bot.send_photo(CHATS['reports'], photo=photo_id_to_send, caption=f"#задачи\n\n{notification_full} @OMGVR_Admin_Bot", parse_mode='html')
+    else:
+        bot.send_message(CHATS['reports'], f"#задачи\n\n{notification_full} @OMGVR_Admin_Bot", parse_mode='html')
+
+    # В РАБОЧИЙ ЧАТ — Короткая версия (всегда текстом, без фото)
+    bot.send_message(CHATS['main_group'], f"{mentions}\n\n{notification_short}", parse_mode='html')
 
     returnback(message, bot)
 
@@ -260,261 +272,206 @@ def send_task(message,task_type,title, descrip,club_task,bot):
 def show_active_tasks(message, bot):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    # Получаем задачи с указанием клуба
-    cur.execute("SELECT id, title, club FROM tasks WHERE status='В работе'")
+    # Теперь берем и "В работе", и "На проверке"
+    cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке')")
     tasks = cur.fetchall()
     cur.close()
     conn.close()
 
-    # Создаем словарь для группировки задач по клубам
     tasks_by_club = {club: [] for club in clublist_task}
-    for task_id, title, club in tasks:
+    for task_id, title, club, status in tasks:
         if club in tasks_by_club:
-            tasks_by_club[club].append((task_id, title))
+            tasks_by_club[club].append((task_id, title, status))
 
     list_buttons = []
     text_lines = []
 
-    # Формируем текст с группировкой по клубам
     for club in clublist_task:
         club_tasks = tasks_by_club[club]
-        if club_tasks:  # Если есть задачи для этого клуба
+        if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
-            for i, (task_id, title) in enumerate(club_tasks, 1):
-                text_lines.append(f"{i}) {title}")
+            for i, (task_id, title, status) in enumerate(club_tasks, 1):
+                # Добавляем маркер глаза, если задача ждет проверки
+                prefix = "👀 " if status == 'На проверке' else "🛠 "
+                text_lines.append(f"{i}) {prefix}{title}")
+                
+                short_title = title[:12] + "..." if len(title) > 12 else title
                 list_buttons.append(types.InlineKeyboardButton(
-                    f"{club[:3]}: {title[:15]}..." if len(title) > 15 else f"{club[:3]}: {title}",
+                    f"{prefix}{club[:3]}: {short_title}",
                     callback_data=f'all_{task_id}'
                 ))
 
     markup = telebot.types.InlineKeyboardMarkup()
-
-    # Разбиваем кнопки на строки по col штук
     for i in range(len(list_buttons) // col):
         markup.row(*list_buttons[i * col:(i + 1) * col])
-
     if len(list_buttons) % col != 0:
         markup.row(*list_buttons[len(list_buttons) - len(list_buttons) % col:])
 
     markup.row(types.InlineKeyboardButton("Вернуться", callback_data="all_back"))
-
     text = "\n".join(text_lines) if text_lines else "Нет активных задач"
 
-    bot.send_message(message.chat.id, f'Вот список текущих проблем:\n{text}',
-                     reply_markup=markup, parse_mode='HTML')
-    bot.send_message(message.chat.id,
-                     'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"',
-                     reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, f'Вот список текущих проблем:\n{text}', reply_markup=markup, parse_mode='HTML')
+    bot.send_message(message.chat.id, 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"', reply_markup=types.ReplyKeyboardRemove())
 
 ###### show repairs
 
 def show_active_type(message, bot, category):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    # Получаем задачи с указанием клуба
-    cur.execute("SELECT id, title, club FROM tasks WHERE status='В работе' AND type=?", (category,))
+    cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке') AND type=?", (category,))
     tasks = cur.fetchall()
     cur.close()
     conn.close()
 
-    # Создаем словарь для группировки задач по клубам
     tasks_by_club = {club: [] for club in clublist_task}
-    for task_id, title, club in tasks:
+    for task_id, title, club, status in tasks:
         if club in tasks_by_club:
-            tasks_by_club[club].append((task_id, title))
+            tasks_by_club[club].append((task_id, title, status))
 
     list_buttons = []
     text_lines = []
-    task_counter = 1  # Общий счетчик задач
+    task_counter = 1 
 
-    # Формируем текст с группировкой по клубам
     for club in clublist_task:
         club_tasks = tasks_by_club[club]
-        if club_tasks:  # Если есть задачи для этого клуба
+        if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
-            for task_id, title in club_tasks:
-                text_lines.append(f"{task_counter}) {title}")
+            for task_id, title, status in club_tasks:
+                prefix = "👀 " if status == 'На проверке' else "🛠 "
+                text_lines.append(f"{task_counter}) {prefix}{title}")
+                
+                short_title = title[:12] + "..." if len(title) > 12 else title
                 list_buttons.append(types.InlineKeyboardButton(
-                    f"{club[:3]}: {title[:15]}..." if len(title) > 15 else f"{club[:3]}: {title}",
+                    f"{prefix}{club[:3]}: {short_title}",
                     callback_data=f'all_{task_id}'
                 ))
                 task_counter += 1
 
     markup = telebot.types.InlineKeyboardMarkup()
-
-    # Разбиваем кнопки на строки по col штук
     for i in range(len(list_buttons) // col):
         markup.row(*list_buttons[i * col:(i + 1) * col])
-
     if len(list_buttons) % col != 0:
         markup.row(*list_buttons[len(list_buttons) - len(list_buttons) % col:])
 
     markup.row(types.InlineKeyboardButton("Вернуться", callback_data="all_back"))
+    text = "\n".join(text_lines) if text_lines else f"Нет активных задач по типу: {category}"
 
-    text = "\n".join(text_lines) if text_lines else "Нет активных задач по ремонту"
+    bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', reply_markup=markup, parse_mode='HTML')
+    bot.send_message(message.chat.id, 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"', reply_markup=types.ReplyKeyboardRemove())
 
-    bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}',
-                     reply_markup=markup, parse_mode='HTML')
-    bot.send_message(message.chat.id,
-                     'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"',
-                     reply_markup=types.ReplyKeyboardRemove())
 
-def register_callback(bot):
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('all_'))
-    def callback(call):
-        try:
-            # Убираем часики загрузки у кнопки
-            bot.answer_callback_query(call.id) 
-            
-            data = call.data[4:]
-
-            if data == "back":
-                bot.clear_step_handler_by_chat_id(call.message.chat.id)
-                bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
-                returnback(call.message, bot)
-                return
-
-            task_id = int(data)
-            
-            conn = sqlite3.connect('db/omgbot.sql')
-            # МАГИЯ ЗДЕСЬ: Позволяет обращаться по именам колонок
-            conn.row_factory = sqlite3.Row 
-            cur = conn.cursor()
-            
-            # Используем безопасный запрос (?)
-            cur.execute("SELECT * FROM tasks WHERE id=? AND status='В работе'", (task_id,))
-            task = cur.fetchone()
-            cur.close()
-            conn.close()
-
-            if not task:
-                bot.send_message(call.message.chat.id, "⚠️ Эта задача уже не актуальна (удалена или закрыта).")
-                return
-
-            # Теперь берем данные БЕЗОПАСНО по именам колонок
-            # (Имена должны совпадать с названиями в твоей базе данных!)
-            dtrep = task['dtrep']      # Было task[1]
-            tasktype = task['type']    # Было task[2]
-            club_task = task['club']   # Было task[3]
-            title = task['title']      # Было task[4]
-            photo = task['photo']      # Было task[5]
-            desc = task['desc']        # Было task[6]
-            status = task['status']    # Было task[7]
-
-            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}"
-
-            # Убираем кнопки у старого сообщения
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
-
-            if photo is not None:
-                namephoto = f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
-                writeTofile(photo, namephoto)
-                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'), caption=text, parse_mode='html')
-            else:
-                bot.send_message(call.message.chat.id, text, parse_mode='html')
-
-            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-            markup.add(*taskto)
-            bot.send_message(call.message.chat.id, "Что вы хотите сделать с этим обращением?", reply_markup=markup)
-            bot.register_next_step_handler(call.message, dotask, task_id, bot)
-
-        except Exception as e:
-            # Если что-то сломается, ты увидишь это прямо в боте
-            bot.send_message(call.message.chat.id, f"🔥 Ошибка при открытии задачи: {e}")
-            print(f"ERROR in taskboard: {e}") # И в консоли
-
-def dotask(message,task,bot):
-
+def dotask(message, task_id, current_status, bot):
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT status from users_new WHERE login='%s'"% ("@"+message.from_user.username))
+    cur.execute("SELECT status from users_new WHERE login=?", ("@"+message.from_user.username,))
     users = cur.fetchall()
     cur.close()
     conn.close()
 
-    if message.text=='Выбрать другое':
-        show_active_tasks(message,bot)
-    
-    elif message.text=='Обработать':
+    if message.text == 'Выбрать другое':
+        show_active_tasks(message, bot)
 
-        if len(users)==0 or users[0][0]<1:
-
-            bot.send_message(message.chat.id,"У вас недостаточно прав!")
-            show_active_tasks(message,bot)
-
-        else: #нужно сделать проверку на юезра
-
+    elif current_status == 'В работе' and message.text == 'Обработать':
+        if len(users) == 0 or users[0][0] < 1:
+            bot.send_message(message.chat.id, "У вас недостаточно прав!")
+            show_active_tasks(message, bot)
+        else:
             markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
             markup.add("Вернуться")
-            bot.send_message(message.chat.id,'Напишите ответ на запрос или нажмите "Вернуться"',reply_markup=markup)
-            bot.register_next_step_handler(message,commit_task, task,bot)
+            bot.send_message(message.chat.id, 'Напишите решение по проблеме (оно уйдет сотрудникам на проверку):', reply_markup=markup)
+            bot.register_next_step_handler(message, commit_task, task_id, bot)
 
+    elif current_status == 'На проверке':
+        if message.text == '✅ Подтвердить решение':
+            today = datetime.today().strftime('%Y-%m-%d')
+            conn = sqlite3.connect('db/omgbot.sql')
+            cur = conn.cursor()
+            cur.execute("UPDATE tasks SET status = 'Выполнено', dtfb = ? WHERE id = ?", (today, task_id))
+            conn.commit()
+            cur.close()
+            conn.close()
+            bot.send_message(message.chat.id, "✅ Спасибо! Проблема окончательно закрыта и перенесена в архив.", reply_markup=types.ReplyKeyboardRemove())
+            show_active_tasks(message, bot)
+
+        elif message.text == '❌ Вернуть в работу':
+            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            markup.add("Вернуться")
+            bot.send_message(message.chat.id, "Опишите, почему решение не помогло или что осталось неисправным:", reply_markup=markup)
+            bot.register_next_step_handler(message, return_task_to_work, task_id, bot)
+        else:
+            show_active_tasks(message, bot)
     else:
-
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add(*taskto)
-        bot.send_message(message.chat.id,"Что вы хотите сделать с этим обращением?",reply_markup=markup)
-        bot.register_next_step_handler(message, dotask,task,bot)
+        show_active_tasks(message, bot)
 
 
-
-def commit_task(message,task,bot):
-
-    answer=message.text
-
-    if answer=="Вернуться":
-
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add(*taskto)
-        bot.send_message(message.chat.id,"Что вы хотите сделать с этим обращением?",reply_markup=markup)
-        bot.register_next_step_handler(message, dotask,task,bot)
-
-    elif len(answer)>1020:
-
-        bot.send_message(message.chat.id,"Слишком длинное!")
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add("Вернуться")
-        bot.send_message(message.chat.id,"Напишите ответ на запрос или нажмите 'Вернуться'",reply_markup=markup)
-        bot.register_next_step_handler(message,commit_task, task,bot)
-
+def commit_task(message, task_id, bot):
+    answer = message.text
+    if answer == "Вернуться":
+        show_active_tasks(message, bot)
+    elif len(answer) > 1020:
+        bot.send_message(message.chat.id, "Слишком длинное! Напиши короче.")
+        bot.register_next_step_handler(message, commit_task, task_id, bot)
     else:
-
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add("Да","Нет")
-        bot.send_message(message.chat.id,"Изменить статус проблемы?",reply_markup=markup)
-        bot.register_next_step_handler(message,change_task, task,answer,bot)
+        markup.add("Да", "Нет")
+        bot.send_message(message.chat.id, "Отправить решение и перевести задачу в статус «На проверке»?", reply_markup=markup)
+        bot.register_next_step_handler(message, change_task, task_id, answer, bot)
 
-def change_task(message,task,answer,bot):
 
-    if message.text=='Нет':
-
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add("Вернуться")
-        bot.send_message(message.chat.id,"Напишите ответ на запрос или нажмите 'Вернуться'",reply_markup=markup)
-        bot.register_next_step_handler(message,commit_task, task,bot)
-
-    elif message.text=='Да':
-
-        today=datetime.today().strftime('%Y-%m-%d')
-        conn=sqlite3.connect('db/omgbot.sql')
+def change_task(message, task_id, answer, bot):
+    if message.text == 'Нет':
+        show_active_tasks(message, bot)
+    elif message.text == 'Да':
+        today_short = datetime.today().strftime('%d.%m')
+        
+        conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("UPDATE tasks SET status = 'Выполнено', dtfb = '%s', feedback='%s'  WHERE id = '%s'" % (today,answer,task))
+        cur.execute("SELECT feedback, title FROM tasks WHERE id=?", (task_id,))
+        row = cur.fetchone()
+        old_feedback = row[0] if row and row[0] else ""
+        title = row[1]
+        
+        # Добавляем новый ответ админа к истории
+        new_entry = f"<b>[{today_short}] Админ:</b> {answer}"
+        new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
+
+        cur.execute("UPDATE tasks SET status = 'На проверке', feedback = ? WHERE id = ?", (new_feedback, task_id))
         conn.commit()
         cur.close()
         conn.close()
-        bot.send_message(message.chat.id,"Проблема решена!",reply_markup=types.ReplyKeyboardRemove())
 
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("SELECT title FROM tasks WHERE id=?", (task,))
-        task = cur.fetchone()
-        task = task[0]
-        cur.close()
-        conn.close()
-        
-        bot.send_message(CHATS['main_group'],f'К задаче "{task}" было добавлено решение!\n\n{answer}')
-        show_active_tasks(message,bot)
+        bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
+        bot.send_message(CHATS['main_group'], f'👀 К проблеме "<b>{title}</b>" добавлено решение!\n\n{new_entry}\n\n<i>Проверьте и подтвердите выполнение на доске задач.</i>', parse_mode='HTML')
+        show_active_tasks(message, bot)
 
+
+def return_task_to_work(message, task_id, bot):
+    if message.text == "Вернуться":
+        show_active_tasks(message, bot)
+        return
+
+    reason = message.text
+    today_short = datetime.today().strftime('%d.%m')
+
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    cur.execute("SELECT feedback, title FROM tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    old_feedback = row[0] if row and row[0] else ""
+    title = row[1]
+
+    # Добавляем комментарий сотрудника к истории
+    new_entry = f"<b>[{today_short}] Сотрудник:</b> {reason}"
+    new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
+
+    cur.execute("UPDATE tasks SET status = 'В работе', feedback = ? WHERE id = ?", (new_feedback, task_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    bot.send_message(message.chat.id, "❌ Задача возвращена в работу. Админы увидят ваш комментарий.", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(CHATS['main_group'], f'⚠️ Проблема "<b>{title}</b>" возвращена в работу!\n\n{new_entry}', parse_mode='HTML')
+    show_active_tasks(message, bot)
 ##### done tasks
 
     
@@ -589,6 +546,71 @@ def show_done_tasks(message, page, bot):
     bot.send_message(message.chat.id, f'Вот список выполненных проблем:\n\n{text}', reply_markup=markup)
     bot.send_message(message.chat.id, 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"', reply_markup=types.ReplyKeyboardRemove())
 
+def register_callback(bot):
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('all_'))
+    def callback(call):
+        try:
+            bot.answer_callback_query(call.id) 
+            data = call.data[4:]
+
+            if data == "back":
+                bot.clear_step_handler_by_chat_id(call.message.chat.id)
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
+                returnback(call.message, bot)
+                return
+
+            task_id = int(data)
+            conn = sqlite3.connect('db/omgbot.sql')
+            conn.row_factory = sqlite3.Row 
+            cur = conn.cursor()
+            
+            cur.execute("SELECT * FROM tasks WHERE id=? AND status IN ('В работе', 'На проверке')", (task_id,))
+            task = cur.fetchone()
+            cur.close()
+            conn.close()
+
+            if not task:
+                bot.send_message(call.message.chat.id, "⚠️ Эта задача уже не актуальна (перенесена в архив).")
+                return
+
+            dtrep = task['dtrep']      
+            tasktype = task['type']    
+            club_task = task['club']   
+            title = task['title']      
+            photo = task['photo']      
+            desc = task['desc']        
+            status = task['status']    
+            feedback = task['feedback'] if task['feedback'] else 'Ожидает решения...'
+
+            # Форматируем красивую историю переписки
+            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n<b>Дата:</b> {dtrep}\n\n💬 <b>История решения:</b>\n{feedback}"
+
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.id, reply_markup=None)
+
+            if photo is not None:
+                namephoto = f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
+                writeTofile(photo, namephoto)
+                bot.send_photo(call.message.chat.id, photo=open(namephoto, 'rb'), caption=text, parse_mode='html')
+            else:
+                bot.send_message(call.message.chat.id, text, parse_mode='html')
+
+            markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            
+            # Развилка логики кнопок в зависимости от статуса
+            if status == 'На проверке':
+                markup.add('✅ Подтвердить решение', '❌ Вернуть в работу')
+            else:
+                markup.add('Обработать') # Кнопка для админов
+                
+            markup.add('Выбрать другое')
+            bot.send_message(call.message.chat.id, "Что вы хотите сделать с этим обращением?", reply_markup=markup)
+            
+            # Пробрасываем текущий статус на следующий шаг
+            bot.register_next_step_handler(call.message, dotask, task_id, status, bot)
+
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"🔥 Ошибка при открытии задачи: {e}")
+
 def register_callback2(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('don_'))
     def callback2(call):
@@ -632,11 +654,10 @@ def register_callback2(bot):
             desc = task['desc']
             status = task['status']
             # Проверь, есть ли эти колонки в выполненных задачах, иногда они NULL
-            dtfb = task['dtfb'] if 'dtfb' in task.keys() else 'Не указано'
-            feedback = task['feedback'] if 'feedback' in task.keys() else 'Нет ответа'
+            dtfb = task['dtfb'] if task['dtfb'] else 'Не указано'
+            feedback = task['feedback'] if task['feedback'] else 'История пуста'
 
-            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n\n<b>Дата добавления:</b> {dtrep}\n\n<b>Ответ:</b> {feedback}\n\n<b>Дата ответа:</b> {dtfb}"
-
+            text = f"<b>{title}</b>\n\n<b>Тип:</b> {tasktype}\n<b>Клуб:</b> {club_task}\n\n<b>Описание:</b> {desc}\n\n<b>Статус:</b> {status}\n<b>Дата закрытия:</b> {dtfb}\n\n💬 <b>История решения:</b>\n{feedback}"
             if photo is not None:
                 namephoto = f'data/photo/photo_downladed_{call.message.chat.id}.jpg'
                 writeTofile(photo, namephoto)

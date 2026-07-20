@@ -88,7 +88,20 @@ def admin_func_handler(message, bot):
             
         from menu import admin_menu
         admin_menu(message, bot)    
-    
+  
+    elif a == '📦 Тест отчета по расходникам':
+            msg = bot.send_message(message.chat.id, "⏳ Анализирую остатки по клубам...")
+            try:
+                from consumables import auto_consumables_report
+                # Вызываем функцию с передачей текущего чата в качестве цели
+                auto_consumables_report(bot, target_chat_id=message.chat.id)
+                bot.delete_message(message.chat.id, msg.message_id)
+            except Exception as e:
+                bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка отчета расходников: {e}")
+            
+            from menu import admin_menu
+            admin_menu(message, bot)
+
     elif a == '📦 Расходники (Админ)':
         admin_consumables_menu(message, bot)
 

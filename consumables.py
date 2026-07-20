@@ -2,7 +2,7 @@ import sqlite3
 import pygsheets
 from telebot import types
 from constants import CHATS, clublist_task
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 # Гугл док
@@ -219,3 +219,38 @@ def sync_consumables_to_sheets():
     wks_hist.update_values(crange='A1', values=hist_matrix)
 
     return "✅"
+
+def auto_consumables_report(bot):
+    """Еженедельный отчет: только то, что заканчивается или достигло минимума"""
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    
+    # Выбираем все позиции, где остаток <= минимума
+    cur.execute("SELECT * FROM consumables WHERE quantity <= min_limit")
+    low_stock_items = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not low_stock_items:
+        # Можно отправлять сообщение, что всё ок, или вообще ничего не слать
+        return
+
+    text = "📦 <b>Еженедельный отчет по расходникам</b>\n\n"
+    text += "⚠️ <b>Требуют пополнения:</b>\n"
+    
+    current_club = ""
+    for item in low_stock_items:
+        if item['club'] != current_club:
+            current_club = item['club']
+            text += f"\n<u>{current_club}:</u>\n"
+        
+        text += f"• <b>{item['name']}</b>: {item['quantity']} шт. (мин: {item['min_limit']})\n"
+
+    text += "\n<i>* Список сформирован на основе текущих остатков.</i>"
+
+    try:
+        from constants import CHATS
+        bot.send_message(CHATS['reports'], text, parse_mode='HTML')
+    except Exception as e:
+        print(f"Ошибка отправки отчета по расходникам: {e}")

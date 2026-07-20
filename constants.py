@@ -10,14 +10,12 @@ FT_API_KEY = os.getenv("FT_API_KEY")
 AQSI_API_KEY = os.getenv("AQSI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_KEY")
 
-SHIFTON_CREDITNAILS = {
-    "username": os.getenv("SHIFTON_USER"),
-    "password": os.getenv("SHIFTON_PASS"),
-    "client_id": os.getenv("SHIFTON_CLIENT_ID"),
-    "client_secret": os.getenv("SHIFTON_CLIENT_SECRET"),
-    "grant_type": "password",
-    "scope": ""
-}
+# --- НОВЫЕ НАСТРОЙКИ SHIFTON API ---
+# URL сервера (по умолчанию локальный, если бот и API на одном сервере)
+SHIFTON_API_URL = os.environ.get("SHIFTON_API_URL", "http://127.0.0.1").rstrip("/")
+
+# Единый токен для доступа к новому API
+SHIFTON_API_TOKEN = os.environ.get("SHIFTON_API_TOKEN")
 
 ### Лимит на сообщения
 MESSAGE_LIMIT_TIME = int(os.getenv("MESSAGE_LIMIT_TIME", 20))
@@ -62,7 +60,7 @@ funclist_task=("➕ Добавить", "⭕ Текущие", "🛠 Ремонт"
 messtype=("Вопрос/жалоба/предложение","Ремонт", "Улучшение бота")
 taskto=("Обработать","Выбрать другое") 
 statuses=("В работе", "Выполнено", "Отклонено")
-admin_funclist = ['📢 Рассылки', '📊 Тест недельного отчета', '📦 Расходники (Админ)', '⚙️ Обновить настройки', '⬅️ Вернуться']
+admin_funclist = ['📢 Рассылки', '📦 Расходники (Админ)', '⚙️ Обновить настройки', '📊 Тест недельного отчета', '📦 Тест отчета по расходникам', '⬅️ Вернуться']
 
 ## Главное меню
 funclist={0:("👨🏻‍💻 Смена", "🚩 Доска проблем","🗓 Расписание", "👤 Аккаунт", '📦 Расходники', "🆘 Помощь"),

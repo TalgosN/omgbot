@@ -132,6 +132,10 @@ def schedule_func(bot): # Не забудь передать bot!
     
     from finance import auto_weekly_report
     schedule.every().monday.at("09:00:00", 'Europe/Moscow').do(auto_weekly_report, bot)
+
+  
+    from consumables import auto_consumables_report
+    schedule.every().monday.at("9:10:00", 'Europe/Moscow').do(auto_consumables_report, bot)
     # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
     # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
     # Можно оставить так, пробежавшись один раз при старте
@@ -272,6 +276,16 @@ def create_tables_KPI():
     cur.close()
 
     cur = conn.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS autosim (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount integer)')
+    conn.commit()
+    cur.close()
+
+    cur = conn.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS activation (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount integer)')
+    conn.commit()
+    cur.close()
+
+    cur = conn.cursor()
     cur.execute('CREATE TABLE IF  NOT EXISTS double (ID INTEGER PRIMARY KEY AUTOINCREMENT,  who varchar(50), d_rep date, amount integer, desc varchar(50))')
     conn.commit()
     cur.close()
@@ -408,6 +422,24 @@ def weather(message):
             bot.send_message(message.chat.id,text)
         except Exception:
             bot.send_message(message.chat.id,"Прости, не знаю!")
+
+@bot.message_handler(commands=['today'])
+def cmd_today_schedule(message):
+    """Ручной вызов расписания на сегодня"""
+    if is_spam(message):
+        try: 
+            # Получаем текущую дату по Москве в нужном формате
+            today_date = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%Y-%m-%d")
+            from rasp import get_today_schedule
+            
+            line = '#сегодня\n'
+            # Вызываем обновленную функцию из rasp.py
+            text = line + get_today_schedule(today_date)
+            
+            # Отправляем в тот чат, откуда вызвали команду
+            bot.send_message(message.chat.id, text)
+        except Exception as e:
+            bot.send_message(message.chat.id, f"Произошла ошибка при получении расписания: {e}")
 
 @bot.message_handler(commands=['repair'])
 def repair_list(message):
@@ -614,23 +646,14 @@ def roll(message):
 
 
 
-
-
-
-
 def today_sched():
-
-    date_start_dt = datetime.now(pytz.timezone('Europe/Moscow')).replace(hour=0, minute=0, second=0)
-    date_start = date_start_dt.strftime('%Y-%m-%d %H:%M:%S')
-    date_end = (date_start_dt+timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+    """Автоматическая рассылка расписания в 09:00"""
+    today_date = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
     from rasp import get_today_schedule
     
-    line='#сегодня\n'
-    text = get_today_schedule (date_start, date_end)
-    text=line+text
+    line = '#сегодня\n'
+    text = line + get_today_schedule(today_date)
     bot.send_message(CHATS['main_group'], text)
-
-
 
     
 ########################################################################
