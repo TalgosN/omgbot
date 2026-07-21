@@ -6,7 +6,7 @@ from constants import CHATS
 
 def start_auth(message,bot):
    
-    bot.send_message(message.chat.id, 'Привет! Давай познакомимся.\n\nДля начала напиши свое имя. Твоё имя здесь должно совпадать с тем, что у тебя написано на сервисе ShiftOn. Если ты его не знаешь, уточни, пожалуйста, у управляющего')
+    bot.send_message(message.chat.id, 'Привет! Давай познакомимся.\n\nДля начала напиши своё имя. При сохранении бот сверит имя и фамилию с OMG Shift по твоему Telegram username.')
     bot.register_next_step_handler(message, ask_full_name,bot)
 
     
@@ -157,13 +157,24 @@ def confirm (message,bot, first_name,second_name,nick_name,bday,number,email,sta
 
 
 def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,status):
+        login = "@" + message.from_user.username
+        try:
+            from account import parse_omg_employee_name
+            from rasp import register_shifton_chat
+
+            omg_result = register_shifton_chat(login, message.chat.id)
+            if omg_result.get("ok"):
+                first_name, second_name = parse_omg_employee_name(omg_result.get("employee"))
+        except Exception as e:
+            print(f"Не удалось принять ФИО нового пользователя из OMG Shift: {e}")
+
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
         cur.execute("""
             UPDATE users_new
             SET first_name=?, second_name=?, nick_name=?, bday=?, phone=?, email=?, status=?, chatid=?
             WHERE login=?
-        """, (first_name, second_name, nick_name, bday, number, email, status, message.chat.id, "@"+message.from_user.username))
+        """, (first_name, second_name, nick_name, bday, number, email, status, message.chat.id, login))
         conn.commit()
         conn.close()
         bot.send_message(message.chat.id, f'Все в порядке! Будем знакомы!\n\nНе забудь подписаться на наш инфоканал! https://t.me/+Q2YQbLpwLIswYWY6',reply_markup=types.ReplyKeyboardRemove())

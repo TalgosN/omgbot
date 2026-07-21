@@ -162,7 +162,7 @@ class KpiTest(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            fresh_rows = [["Новая", "Смена", "2026-07-20", "Клуб", 7.0]]
+            fresh_rows = [["Новая", "Смена", "2026-07-20", "Клуб", 7.0, "@new"]]
             with patch.object(self.kpi.pd, "Timestamp", timestamp, create=True), \
                     patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
                     patch.object(self.kpi.pd, "DataFrame", side_effect=lambda rows, columns: rows, create=True), \

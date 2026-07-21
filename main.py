@@ -255,6 +255,11 @@ def create_tables():
 def create_tables_KPI():
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS bs (ID INTEGER PRIMARY KEY AUTOINCREMENT, id_bs integer, dt_bs date, name_bs varchar(50))')
+    conn.commit()
+    cur.close()
+
+    cur = conn.cursor()
     cur.execute('CREATE TABLE IF  NOT EXISTS afterparty (ID INTEGER PRIMARY KEY AUTOINCREMENT, dt_rep datetime, who varchar(50), club varchar(50), desc varchar(1024), status varchar(50))')
     conn.commit()
     cur.close()
@@ -405,6 +410,19 @@ def start(message):
                 registration = register_shifton_chat(f"@{message.from_user.username}", message.chat.id)
                 if not registration.get("ok"):
                     print(f"Ошибка регистрации чата OMG Shift для @{message.from_user.username}: {registration.get('error', 'unknown_error')}")
+                else:
+                    try:
+                        from account import apply_omg_identity, sync_google_dependencies
+                        identity = apply_omg_identity(
+                            message.chat.id,
+                            f"@{message.from_user.username}",
+                            registration.get("employee"),
+                        )
+                        if identity["changed"]:
+                            sync_google_dependencies(full=True)
+                    except ValueError as e:
+                        if str(e) != 'Пользователь не найден в БД':
+                            print(f"Ошибка синхронизации профиля OMG Shift: {e}")
 
             users = define_name(message)
 

@@ -143,11 +143,13 @@ def ensure_source_column(conn):
     conn.execute(
         "CREATE TABLE IF NOT EXISTS shifts ("
         "shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, "
-        "club varchar(50), dur REAL, source varchar(30))"
+        "club varchar(50), dur REAL, source varchar(30), shift_login varchar(50))"
     )
     columns = {row[1] for row in conn.execute("PRAGMA table_info(shifts)")}
     if "source" not in columns:
         conn.execute("ALTER TABLE shifts ADD COLUMN source varchar(30)")
+    if "shift_login" not in columns:
+        conn.execute("ALTER TABLE shifts ADD COLUMN shift_login varchar(50)")
 
 
 def apply_rows(db_path, rows, start, end):
@@ -173,6 +175,20 @@ def apply_rows(db_path, rows, start, end):
                     row,
                 )
                 inserted += 1
+        users_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users_new'"
+        ).fetchone()
+        if users_table:
+            conn.execute(
+                """UPDATE shifts
+                   SET shift_login = (
+                       SELECT login FROM users_new
+                       WHERE second_name = shifts.shift_second_name
+                         AND first_name = shifts.shift_first_name
+                       LIMIT 1
+                   )
+                   WHERE shift_login IS NULL"""
+            )
         conn.commit()
         return inserted
     finally:

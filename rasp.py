@@ -84,6 +84,7 @@ def sync_shifton_notification_chats():
 
     synced = 0
     errors = 0
+    identity_changed = False
     for login, chat_id in users:
         telegram_tag = login if str(login).startswith('@') else f"@{login}"
         try:
@@ -96,9 +97,23 @@ def sync_shifton_notification_chats():
         result = register_shifton_chat(telegram_tag, chat_id)
         if result.get("ok"):
             synced += 1
+            try:
+                from account import apply_omg_identity
+                identity = apply_omg_identity(chat_id, telegram_tag, result.get("employee"))
+                identity_changed = identity_changed or identity["changed"]
+            except Exception as e:
+                errors += 1
+                print(f"Ошибка синхронизации ФИО OMG Shift для {telegram_tag}: {e}")
         else:
             errors += 1
             print(f"Ошибка регистрации чата OMG Shift для {telegram_tag}: {result.get('error', 'unknown_error')}")
+
+    if identity_changed:
+        from account import sync_google_dependencies
+        google_errors = sync_google_dependencies(full=True)
+        errors += len(google_errors)
+        for error in google_errors:
+            print(f"Ошибка синхронизации профиля с Google Sheets: {error}")
 
     print(f"Синхронизация чатов OMG Shift завершена: {synced} успешно, {errors} ошибок")
     shifton_runtime_status["last_chat_sync"] = moscow_timestamp()

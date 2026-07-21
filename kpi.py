@@ -123,11 +123,14 @@ def fetch_omg_shift_rows(start_date):
                 parts = emp_name.split()
                 s_name = parts[0] if len(parts) > 0 else emp_name
                 f_name = parts[1] if len(parts) > 1 else ""
-                shift_key = (s_name, f_name, date_iso, club, start_t, end_t)
+                telegram = str(shift.get("telegram") or "").strip()
+                if telegram and not telegram.startswith("@"):
+                    telegram = f"@{telegram}"
+                shift_key = (s_name, f_name, date_iso, club, start_t, end_t, telegram.lower())
                 if shift_key in seen_shifts:
                     continue
                 seen_shifts.add(shift_key)
-                schedule_list.append([s_name, f_name, date_iso, club, dur])
+                schedule_list.append([s_name, f_name, date_iso, club, dur, telegram or None])
 
     return schedule_list
 
@@ -144,23 +147,42 @@ def read_shifts():
     try:
         with conn:
             cur = conn.cursor()
-            cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL, source varchar(30))')
+            cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL, source varchar(30), shift_login varchar(50))')
             columns = {row[1] for row in cur.execute('PRAGMA table_info(shifts)')}
             if 'source' not in columns:
                 cur.execute('ALTER TABLE shifts ADD COLUMN source varchar(30)')
+            if 'shift_login' not in columns:
+                cur.execute('ALTER TABLE shifts ADD COLUMN shift_login varchar(50)')
+            users_table = cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users_new'"
+            ).fetchone()
+            if users_table:
+                cur.execute(
+                    """UPDATE shifts
+                       SET shift_login = (
+                           SELECT login FROM users_new
+                           WHERE second_name = shifts.shift_second_name
+                             AND first_name = shifts.shift_first_name
+                           LIMIT 1
+                       )
+                       WHERE shift_login IS NULL"""
+                )
             cur.execute(
                 "DELETE FROM shifts WHERE dt_shift >= ? AND COALESCE(source, 'omg_shift') = 'omg_shift'",
                 (start_str,),
             )
             cur.executemany(
-                "INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur, source) VALUES (?, ?, ?, ?, ?, 'omg_shift')",
+                "INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source) VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')",
                 schedule_list,
             )
             cur.close()
     finally:
         conn.close()
 
-    return pd.DataFrame(schedule_list, columns=['shift_second_name', 'shift_first_name', 'dt_shift', 'club', 'dur'])
+    return pd.DataFrame(
+        [row[:5] for row in schedule_list],
+        columns=['shift_second_name', 'shift_first_name', 'dt_shift', 'club', 'dur'],
+    )
 
 def sql_select(command):
     conn = sqlite3.connect('db/omgbot.sql')

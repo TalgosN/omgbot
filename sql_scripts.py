@@ -20,9 +20,14 @@ WITH anki as ( -------времянка по анкетам
 
 		FROM shifts sh
         
-        JOIN 
-            users_new ns ON sh.shift_second_name = ns.second_name
+        JOIN users_new ns ON (
+            sh.shift_login IS NOT NULL
+            AND lower(sh.shift_login) = lower(ns.login)
+        ) OR (
+            sh.shift_login IS NULL
+            AND sh.shift_second_name = ns.second_name
             AND sh.shift_first_name = ns.first_name
+        )
 
 
 		
@@ -172,9 +177,14 @@ SELECT
     SUM(ROUND(dur / 6, 3)) AS total_cnt_smen --к-во смен
 FROM 
     shifts sh
-JOIN 
-    users_new ns ON sh.shift_second_name = ns.second_name
-                  AND sh.shift_first_name = ns.first_name
+JOIN users_new ns ON (
+    sh.shift_login IS NOT NULL
+    AND lower(sh.shift_login) = lower(ns.login)
+) OR (
+    sh.shift_login IS NULL
+    AND sh.shift_second_name = ns.second_name
+    AND sh.shift_first_name = ns.first_name
+)
 GROUP BY 
     last_day_of_month, ns.login;
 
@@ -214,9 +224,14 @@ WITH all_records AS (
 	
 			FROM shifts sh
 	        
-	        JOIN 
-	            users_new ns ON sh.shift_second_name = ns.second_name
+	        JOIN users_new ns ON (
+	            sh.shift_login IS NOT NULL
+	            AND lower(sh.shift_login) = lower(ns.login)
+	        ) OR (
+	            sh.shift_login IS NULL
+	            AND sh.shift_second_name = ns.second_name
 	            AND sh.shift_first_name = ns.first_name
+	        )
 	
 	
 			
