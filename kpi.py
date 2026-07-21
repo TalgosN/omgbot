@@ -8,6 +8,7 @@ import pandas as pd
 import requests
 import json
 import math
+from permissions import ROLE_OWNER, role_of
 import sql_scripts
 from sheets import *
 import random
@@ -197,9 +198,9 @@ def sql_select(command):
 # 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ХЕШТЕГОВ
 # ==========================================
 
-def get_user_club_today(username):
-    """Определяет текущий клуб сотрудника по API расписания на сегодня"""
-    today_iso = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+def get_user_club_today(username, date_iso=None):
+    """Определяет клуб сотрудника по API расписания на указанную дату или сегодня."""
+    today_iso = date_iso or datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
     headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
     try:
         resp = requests.get(f"{SHIFTON_API_URL}/api/bot/schedule?date={today_iso}", headers=headers, timeout=5).json()
@@ -418,10 +419,7 @@ def do_penalty(message, text_args, bypass_admin=False):
         conn.close()
         return KPI_INVALID, 'Нет такого логина в базе!', "```Правильно!\n#штраф @логин причина```"
     
-    cur.execute("SELECT status FROM users_new WHERE login=?", (f"@{message.from_user.username}",))
-    fet2 = cur.fetchone()
-    
-    if fet2 and (int(fet2[0]) == 2 or bypass_admin):
+    if role_of(message) == ROLE_OWNER or bypass_admin:
         today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
         cur.execute("INSERT INTO penalty (dt, name, desc) VALUES (?, ?, ?)", (today, target_login, desc))
         conn.commit()

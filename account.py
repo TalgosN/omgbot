@@ -9,6 +9,7 @@ import telebot
 import sql_scripts
 from constants import funclist_acc
 from sheets import tables, update_status, update_table, update_table_open, update_users
+from permissions import ROLE_EMPLOYEE, require_role
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -190,6 +191,8 @@ def sync_google_dependencies(full=False):
 
 
 def account_settings(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*funclist_acc)
     sent = bot.send_message(
@@ -201,6 +204,8 @@ def account_settings(message, bot):
 
 
 def func_acc(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == '👤 Мои данные':
         show_profile(message, bot)
     elif message.text == '🔄 Синхронизация с OMG Shift':
@@ -232,7 +237,9 @@ def format_birthday(value):
 
 
 def show_profile(message, bot):
-    user = get_user_by_chat_id(message.chat.id)
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    user = get_user_by_chat_id(message.from_user.id)
     if not user:
         bot.send_message(message.chat.id, 'Профиль не найден.')
         returnback(message, bot)
@@ -253,6 +260,8 @@ def show_profile(message, bot):
 
 
 def edit_profile_menu(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*PROFILE_FIELDS.keys(), EDIT_BACK_BUTTON)
     sent = bot.send_message(message.chat.id, 'Что изменить?', reply_markup=markup)
@@ -260,6 +269,8 @@ def edit_profile_menu(message, bot):
 
 
 def select_profile_field(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == EDIT_BACK_BUTTON:
         account_settings(message, bot)
         return
@@ -306,6 +317,8 @@ def validate_profile_value(field, value):
 
 
 def save_profile_field(message, bot, field):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == EDIT_BACK_BUTTON:
         edit_profile_menu(message, bot)
         return
@@ -318,14 +331,14 @@ def save_profile_field(message, bot, field):
                     """SELECT 1 FROM users_new
                        WHERE lower(nick_name)=lower(?)
                          AND CAST(chatid AS TEXT)<>CAST(? AS TEXT)""",
-                    (value, message.chat.id),
+                    (value, message.from_user.id),
                 ).fetchone()
                 if duplicate:
                     raise ValueError('Такой ник уже занят')
             with conn:
                 cur = conn.execute(
                     f'UPDATE users_new SET "{field}"=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
-                    (value, message.chat.id),
+                    (value, message.from_user.id),
                 )
                 if cur.rowcount == 0:
                     raise ValueError('Профиль не найден')
@@ -345,6 +358,8 @@ def save_profile_field(message, bot, field):
 
 
 def sync_omg_identity_handler(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     login = normalize_login(getattr(message.from_user, 'username', None))
     if not login:
         bot.send_message(message.chat.id, 'Сначала установи публичный username в Telegram.')
@@ -352,7 +367,7 @@ def sync_omg_identity_handler(message, bot):
         return
 
     from rasp import register_shifton_chat
-    result = register_shifton_chat(login, message.chat.id)
+    result = register_shifton_chat(login, message.from_user.id)
     if not result.get('ok'):
         bot.send_message(
             message.chat.id,
@@ -362,7 +377,7 @@ def sync_omg_identity_handler(message, bot):
         return
 
     try:
-        identity = apply_omg_identity(message.chat.id, login, result.get('employee'))
+        identity = apply_omg_identity(message.from_user.id, login, result.get('employee'))
     except ValueError as exc:
         bot.send_message(message.chat.id, str(exc))
         account_settings(message, bot)
@@ -380,6 +395,8 @@ def sync_omg_identity_handler(message, bot):
 
 
 def stats_handler(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add('📊 За месяц', '⭐ За всё время', EDIT_BACK_BUTTON)
     sent = bot.send_message(message.chat.id, 'Какую статистику показать?', reply_markup=markup)
@@ -387,6 +404,8 @@ def stats_handler(message, bot):
 
 
 def stats_show(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == EDIT_BACK_BUTTON:
         account_settings(message, bot)
     elif message.text == '📊 За месяц':
@@ -566,7 +585,9 @@ def format_database_stats(stats, title):
 
 
 def stats_acc(message, bot):
-    user = get_user_by_chat_id(message.chat.id)
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    user = get_user_by_chat_id(message.from_user.id)
     if not user or not user['login']:
         bot.send_message(message.chat.id, 'Сначала синхронизируй профиль с OMG Shift.')
         return
@@ -594,7 +615,9 @@ def stats_acc(message, bot):
 
 
 def statsall_acc(message, bot):
-    user = get_user_by_chat_id(message.chat.id)
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    user = get_user_by_chat_id(message.from_user.id)
     if not user or not user['login']:
         bot.send_message(message.chat.id, 'Сначала синхронизируй профиль с OMG Shift.')
         return

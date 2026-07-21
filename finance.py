@@ -11,6 +11,7 @@ import os
 import sqlite3
 from constants import *
 from sender import safe_send
+from permissions import ROLE_OWNER, require_role
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
@@ -105,7 +106,8 @@ def define_goods():
     
 ################################ Bot Enterpoint  
 def finance(message,bot):
-    
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     bot.send_message(message.chat.id, f'Этот раздел посвящен финансам')
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*funclist_fin)
@@ -119,6 +121,8 @@ def returnback(message,bot):
 import traceback 
 
 def func_fin(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     if message.text in ['📑 Отчет по приходам', '💸 Внести приходы по наличке', '💰 Инкассация', '👨🏻‍💻 ЗП за период', '📊 Сводный отчет']:
         operation = message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -158,6 +162,8 @@ def func_fin(message, bot):
 
 
 def handle_start(message, bot, operation):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     if message.text == '⬅️ Вернуться':
         finance(message, bot)
         return
@@ -207,6 +213,8 @@ def handle_start(message, bot, operation):
             bot.register_next_step_handler(message, handle_start, bot, operation)
 
 def handle_end(message, date_start, bot, operation):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     if message.text == '⬅️ Вернуться':
         finance(message, bot)
     else:
@@ -226,6 +234,8 @@ def handle_end(message, date_start, bot, operation):
 
 def execute_fin_operation(operation, date_start, date_end, message, bot):
     """Вынесенный роутер операций для того, чтобы не дублировать код в handle_start и handle_end"""
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     try:
         if operation == '📑 Отчет по приходам':
             create_otchet(date_start, date_end, message, bot)
@@ -578,6 +588,8 @@ def inkass (start_dt,end_dt,message,bot):
     bot.register_next_step_handler(message,confirm_inkass,inkass,bot,start_dt)
     
 def confirm_inkass(message,inkass,bot,start_dt):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     if message.text=='Нет':
         finance(message,bot)
     elif message.text=='Да':
@@ -590,6 +602,8 @@ def confirm_inkass(message,inkass,bot,start_dt):
 
 
 def insert_inkass(message,inkass,bot,start_dt):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
     
     date_ins = datetime.strptime(start_dt,"%Y-%m-%dT%H:%M:%S")
     
@@ -1308,7 +1322,7 @@ def auto_weekly_report(bot, target_chat_id=None):
     
     try:
         from constants import CHATS
-        target = target_chat_id if target_chat_id else CHATS['reports']
+        target = target_chat_id if target_chat_id is not None else CHATS['reports']
         safe_send(bot, target, text, photo=None, parse_mode='HTML')
     except Exception as e:
         print(f"Ошибка отправки еженедельного отчета: {e}")

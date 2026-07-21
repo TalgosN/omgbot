@@ -36,6 +36,8 @@ class KpiResponsePolicyTest(unittest.TestCase):
         namespace = {
             "bot": bot,
             "is_spam": lambda _message: True,
+            "require_role": lambda _message, _bot, _role: True,
+            "ROLE_EMPLOYEE": 0,
             "kpi": kpi,
             "send_react": send_react,
             "random": SimpleNamespace(choice=lambda _items: "✅"),

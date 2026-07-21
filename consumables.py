@@ -4,12 +4,15 @@ from telebot import types
 from constants import CHATS, clublist_task
 from datetime import datetime, timedelta
 import pytz
+from permissions import ROLE_EMPLOYEE, require_role
 
 # Гугл док
 KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
 SHEET_NAME = 'Расходники'
 
 def consumables_menu(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     from admin_panel import get_allowed_clubs
     allowed_clubs = get_allowed_clubs()
     
@@ -25,6 +28,8 @@ def consumables_menu(message, bot):
     bot.register_next_step_handler(msg, c_select_club, bot)
 
 def c_select_club(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == '⬅️ Вернуться':
         from menu import hello
         hello(message.chat.id, bot)
@@ -67,6 +72,8 @@ def show_club_items(chat_id, club, bot):
 def register_consumables_callbacks(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('cons'))
     def cons_callback(call):
+        if not require_role(call, bot, ROLE_EMPLOYEE):
+            return
         try:
             bot.answer_callback_query(call.id)
             data = call.data
@@ -102,6 +109,8 @@ def register_consumables_callbacks(bot):
             print(f"Ошибка колбэка расходников: {e}")
 
 def c_save_qty(message, item_id, item_name, club, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == 'Отмена':
         show_club_items(message.chat.id, club, bot)
         return

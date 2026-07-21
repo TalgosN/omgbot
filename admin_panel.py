@@ -10,6 +10,16 @@ import requests
 import pytz
 from constants import CHATS, clublist_task, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
 from sender import safe_send
+from permissions import (
+    ROLE_BLOCKED,
+    ROLE_EMPLOYEE,
+    ROLE_MANAGER,
+    ROLE_NAMES,
+    ROLE_OWNER,
+    ROLE_TECHNICIAN,
+    change_role,
+    require_role,
+)
 
 # Путь к ключу (как в твоем sheets.py)
 KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
@@ -68,6 +78,8 @@ def generate_edit_days_keyboard(b_id, selected_days=""):
     return markup
 
 def admin_func_handler(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     a = message.text
     
     if a == '📢 Рассылки':
@@ -85,6 +97,10 @@ def admin_func_handler(message, bot):
         hello(message.chat.id, bot)
     
     elif a == '📊 Тест недельного отчета':
+        if not require_role(message, bot, ROLE_OWNER):
+            from menu import admin_menu
+            admin_menu(message, bot)
+            return
         msg = bot.send_message(message.chat.id, "⏳ Собираю данные из Aqsi и считаю динамику за 2 недели...")
         try:
             from finance import auto_weekly_report
@@ -113,9 +129,126 @@ def admin_func_handler(message, bot):
     elif a == '📦 Расходники (Админ)':
         admin_consumables_menu(message, bot)
 
+    elif a == '👥 Управление ролями':
+        role_management_menu(message, bot)
+
     else:
         from menu import admin_menu
         admin_menu(message, bot)
+
+
+ROLE_BUTTONS = {
+    '🚫 -1 · Заблокирован': ROLE_BLOCKED,
+    '👤 0 · Сотрудник': ROLE_EMPLOYEE,
+    '🛠 1 · Ремонтник': ROLE_TECHNICIAN,
+    '🧑🏻‍💻 2 · Менеджер': ROLE_MANAGER,
+    '👑 3 · Руководство': ROLE_OWNER,
+}
+
+
+def role_management_menu(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('📜 Последние изменения', '⬅️ Назад в админку')
+    msg = bot.send_message(message.chat.id, 'Введите Telegram username сотрудника, например @username:', reply_markup=markup)
+    bot.register_next_step_handler(msg, role_select_user, bot)
+
+
+def role_select_user(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    if message.text == '⬅️ Назад в админку':
+        from menu import admin_menu
+        admin_menu(message, bot)
+        return
+    if message.text == '📜 Последние изменения':
+        show_role_audit(message, bot)
+        return
+
+    login = str(message.text or '').strip()
+    if not login.startswith('@'):
+        login = f'@{login}'
+    conn = sqlite3.connect('db/omgbot.sql')
+    conn.row_factory = sqlite3.Row
+    try:
+        target = conn.execute(
+            'SELECT * FROM users_new WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+            (login,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not target:
+        bot.send_message(message.chat.id, 'Пользователь не найден.')
+        role_management_menu(message, bot)
+        return
+
+    current_name = ROLE_NAMES.get(target['status'], 'Не назначена')
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(*ROLE_BUTTONS.keys(), '⬅️ Назад в админку')
+    msg = bot.send_message(
+        message.chat.id,
+        f'{target["second_name"] or ""} {target["first_name"] or ""} ({target["login"]})\n'
+        f'Текущая роль: {target["status"]} · {current_name}\n\nВыберите новую роль:',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(msg, role_apply, target['ID'], bot)
+
+
+def role_apply(message, target_id, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    if message.text == '⬅️ Назад в админку':
+        from menu import admin_menu
+        admin_menu(message, bot)
+        return
+    if message.text not in ROLE_BUTTONS:
+        bot.send_message(message.chat.id, 'Выберите роль с клавиатуры.')
+        role_management_menu(message, bot)
+        return
+
+    new_status = ROLE_BUTTONS[message.text]
+    try:
+        target, old_status = change_role(message, target_id, new_status)
+    except (PermissionError, ValueError) as e:
+        bot.send_message(message.chat.id, str(e))
+        role_management_menu(message, bot)
+        return
+
+    bot.send_message(
+        message.chat.id,
+        f'Роль {target.get("login")}: {old_status} → {new_status} ({ROLE_NAMES[new_status]}).',
+    )
+    if target.get('chatid') and str(target.get('chatid')) != str(message.from_user.id):
+        try:
+            bot.send_message(target['chatid'], f'Ваша роль изменена: {ROLE_NAMES[new_status]} ({new_status}).')
+        except Exception:
+            pass
+    role_management_menu(message, bot)
+
+
+def show_role_audit(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        rows = conn.execute(
+            '''SELECT changed_at, actor_login, actor_chatid, target_login,
+                      old_status, new_status
+               FROM role_audit ORDER BY id DESC LIMIT 15'''
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        text = 'Журнал изменений ролей пока пуст.'
+    else:
+        lines = ['📜 Последние изменения ролей:', '']
+        for changed_at, actor_login, actor_chatid, target_login, old_status, new_status in rows:
+            actor = actor_login or actor_chatid
+            lines.append(f'{changed_at}: {actor} → {target_login}: {old_status} → {new_status}')
+        text = '\n'.join(lines)
+    bot.send_message(message.chat.id, text)
+    role_management_menu(message, bot)
 
 def collect_system_health(bot):
     moscow_now = datetime.now(pytz.timezone('Europe/Moscow'))
@@ -185,6 +318,8 @@ def collect_system_health(bot):
     return "\n".join(lines)
 
 def handle_system_health(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if not health_check_lock.acquire(blocking=False):
         bot.send_message(message.chat.id, "⏳ Проверка систем уже выполняется.")
         return
@@ -205,6 +340,8 @@ def handle_system_health(message, bot):
     threading.Thread(target=worker, daemon=True).start()
 
 def handle_update_config(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     # 1. Сообщение "Ждите"
     msg = bot.send_message(message.chat.id, "⏳ Подключаюсь к таблице 'Виарыч'...")
     
@@ -344,12 +481,16 @@ def sync_config():
 
 
 def broadcast_menu(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add('➕ Создать рассылку', '📋 Текущие рассылки', '⬅️ Назад в админку')
     msg = bot.send_message(message.chat.id, "Раздел управления важными рассылками в канал 💌", reply_markup=markup)
     bot.register_next_step_handler(msg, broadcast_menu_handler, bot)
 
 def broadcast_menu_handler(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     a = message.text
     if a == '➕ Создать рассылку':
         bc_add_text(message, bot)
@@ -362,6 +503,8 @@ def broadcast_menu_handler(message, bot):
         broadcast_menu(message, bot)
 
 def bc_add_text(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('Вернуться')
     text = (
@@ -374,6 +517,8 @@ def bc_add_text(message, bot):
     bot.register_next_step_handler(msg, bc_save_text, bot)
 
 def bc_save_text(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Вернуться':
         broadcast_menu(message, bot)
         return
@@ -389,6 +534,8 @@ def bc_save_text(message, bot):
     bot.register_next_step_handler(msg, bc_save_photo, text, bot)
 
 def bc_save_photo(message, text, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Вернуться':
         broadcast_menu(message, bot)
         return
@@ -409,6 +556,8 @@ def bc_save_photo(message, text, bot):
     bot.register_next_step_handler(msg, bc_save_time, text, photo_id, bot)
 
 def bc_save_time(message, text, photo_id, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Вернуться':
         broadcast_menu(message, bot)
         return
@@ -428,6 +577,8 @@ def bc_save_time(message, text, photo_id, bot):
 
 
 def bc_show_active(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
@@ -543,6 +694,8 @@ def bc_view_card(message, b_id, bot):
 def register_broadcast_callbacks(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('bc_'))
     def bc_callback(call):
+        if not require_role(call, bot, ROLE_MANAGER):
+            return
         try:
             bot.answer_callback_query(call.id)
             data = call.data[3:]
@@ -627,6 +780,8 @@ def register_broadcast_callbacks(bot):
     
     @bot.callback_query_handler(func=lambda call: call.data.startswith('bcfreq_'))
     def bcfreq_callback(call):
+        if not require_role(call, bot, ROLE_MANAGER):
+            return
         chat_id = call.message.chat.id
         if chat_id not in temp_broadcasts:
             bot.answer_callback_query(call.id, "Данные устарели. Начните заново.", show_alert=True)
@@ -673,6 +828,8 @@ def register_broadcast_callbacks(bot):
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith('bcef_'))
     def bcef_callback(call):
+        if not require_role(call, bot, ROLE_MANAGER):
+            return
         chat_id = call.message.chat.id
         parts = call.data.split('_')
         action = parts[1]
@@ -717,6 +874,8 @@ def register_broadcast_callbacks(bot):
             bot.send_message(chat_id, f"❌ Ошибка БД: {e}")
             
 def bc_save_new_text(message, b_id, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Вернуться':
         bc_view_card(message, b_id, bot)
         return
@@ -732,6 +891,8 @@ def bc_save_new_text(message, b_id, bot):
     bc_view_card(message, b_id, bot)
 
 def bc_save_new_time(message, b_id, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Вернуться':
         bc_view_card(message, b_id, bot)
         return
@@ -768,6 +929,8 @@ def get_allowed_clubs():
 
 def admin_consumables_menu(message, bot):
     """Главное меню управления расходниками для админа"""
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add('➕ Добавить расходник', '📋 Управление расходниками', '⬅️ Назад в админку')
     
@@ -777,6 +940,8 @@ def admin_consumables_menu(message, bot):
     bot.register_next_step_handler(msg, admin_consumables_handler, bot)
 
 def admin_consumables_handler(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     a = message.text
     if a == '➕ Добавить расходник':
         ac_select_club_for_add(message, bot)
@@ -830,6 +995,8 @@ def ac_get_limit(message, club, bot):
     bot.register_next_step_handler(msg, ac_save_item, club, item_name, bot)
 
 def ac_save_item(message, club, item_name, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     if message.text == 'Отмена':
         admin_consumables_menu(message, bot)
         return
@@ -954,6 +1121,8 @@ def admin_view_item_card(chat_id, item_id, bot):
 # --- СОХРАНЕНИЕ И ОБРАБОТЧИКИ ОПЕРАЦИЙ ---
 
 def admcons_save_qty(message, item_id, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     conn = sqlite3.connect('db/omgbot.sql')
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -1000,6 +1169,8 @@ def admcons_save_qty(message, item_id, bot):
     admin_view_item_card(message.chat.id, item_id, bot)
 
 def admcons_save_min(message, item_id, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     conn = sqlite3.connect('db/omgbot.sql')
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -1036,6 +1207,8 @@ def admcons_save_min(message, item_id, bot):
 def register_admin_consumables_callbacks(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('admcons_'))
     def admcons_callback(call):
+        if not require_role(call, bot, ROLE_MANAGER):
+            return
         try:
             bot.answer_callback_query(call.id)
             data = call.data[8:]

@@ -1,6 +1,7 @@
 from telebot import *
 from constants import *
 import sqlite3
+from permissions import ROLE_EMPLOYEE, ROLE_TECHNICIAN, require_role, role_of
 
 ##### taskdesk
 
@@ -18,7 +19,8 @@ def writeTofile(data, filename):
    
    
 def task_board(message,bot):
-    
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     bot.send_message(message.chat.id, f'Это полностью анонимная доска, где ты можешь сообщить менеджеру о проблеме в клубе, предложить улучшение или просто узнать мнение руководства о чем либо, а также посмотреть запросы от других!')
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*funclist_task)
@@ -26,6 +28,8 @@ def task_board(message,bot):
     bot.register_next_step_handler(message, func_task,bot)
 
 def func_task(message,bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text=='➕ Добавить':
         bot.send_message(message.chat.id, f'Здесь ты можешь добавить свой стикер на доску')
         add_task(message,bot)
@@ -178,7 +182,8 @@ def add_photo(message, task_type,title,club_task,bot):
 
 
 def send_task(message,task_type,title, descrip,club_task,bot):
-
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     today=datetime.today().strftime('%Y-%m-%d')
     photo_id_to_send = None # Инициализируем переменную для фото
 
@@ -270,6 +275,8 @@ def send_task(message,task_type,title, descrip,club_task,bot):
 ###### show active
 
 def show_active_tasks(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке')")
@@ -315,6 +322,8 @@ def show_active_tasks(message, bot):
 ###### show repairs
 
 def show_active_type(message, bot, category):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке') AND type=?", (category,))
@@ -360,19 +369,14 @@ def show_active_type(message, bot, category):
 
 
 def dotask(message, task_id, current_status, bot):
-    conn=sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute("SELECT status from users_new WHERE login=?", ("@"+message.from_user.username,))
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
 
     if message.text == 'Выбрать другое':
         show_active_tasks(message, bot)
 
     elif current_status == 'В работе' and message.text == 'Обработать':
-        if len(users) == 0 or users[0][0] < 1:
-            bot.send_message(message.chat.id, "У вас недостаточно прав!")
+        if not require_role(message, bot, ROLE_TECHNICIAN):
             show_active_tasks(message, bot)
         else:
             markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -404,6 +408,8 @@ def dotask(message, task_id, current_status, bot):
 
 
 def commit_task(message, task_id, bot):
+    if not require_role(message, bot, ROLE_TECHNICIAN):
+        return
     answer = message.text
     if answer == "Вернуться":
         show_active_tasks(message, bot)
@@ -422,6 +428,8 @@ def commit_task(message, task_id, bot):
 # -------------------------------------------------------------
 
 def change_task(message, task_id, answer, bot):
+    if not require_role(message, bot, ROLE_TECHNICIAN):
+        return
     if message.text == 'Нет':
         show_active_tasks(message, bot)
     elif message.text == 'Да':
@@ -480,6 +488,8 @@ def change_task(message, task_id, answer, bot):
 
 
 def return_task_to_work(message, task_id, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == "Вернуться":
         show_active_tasks(message, bot)
         return
@@ -541,6 +551,8 @@ def return_task_to_work(message, task_id, bot):
 
     
 def show_done_tasks(message, page, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     # Выбираем и id, и title задач
@@ -614,6 +626,8 @@ def show_done_tasks(message, page, bot):
 def register_callback(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('all_'))
     def callback(call):
+        if not require_role(call, bot, ROLE_EMPLOYEE):
+            return
         try:
             bot.answer_callback_query(call.id) 
             data = call.data[4:]
@@ -664,7 +678,7 @@ def register_callback(bot):
             # Развилка логики кнопок в зависимости от статуса
             if status == 'На проверке':
                 markup.add('✅ Подтвердить решение', '❌ Вернуть в работу')
-            else:
+            elif (role_of(call) or ROLE_EMPLOYEE) >= ROLE_TECHNICIAN:
                 markup.add('Обработать') # Кнопка для админов
                 
             markup.add('Выбрать другое')
@@ -679,6 +693,8 @@ def register_callback(bot):
 def register_callback2(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('don_'))
     def callback2(call):
+        if not require_role(call, bot, ROLE_EMPLOYEE):
+            return
         try:
             bot.answer_callback_query(call.id)
             data = call.data[4:]

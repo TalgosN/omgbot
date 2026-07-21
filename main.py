@@ -13,6 +13,7 @@ import kpi
 from kpi import init
 import requests
 from sender import safe_send
+from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
 
 validate_config()
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
@@ -182,7 +183,7 @@ def create_tables():
     conn.commit()
     cur.close()
     # Новая таблица юзеров
-    # Статусы: 1 - Админ, 0 - Действующий сотрудник, -1 - Бывший сотрудник
+    # Статусы: -1 - заблокирован, 0 - сотрудник, 1 - ремонтник, 2 - менеджер, 3 - руководство
     cur = conn.cursor()
     cur.execute('CREATE TABLE IF  NOT EXISTS users_new (ID INTEGER PRIMARY KEY AUTOINCREMENT,  login varchar(50), first_name varchar(50), second_name varchar(50), nick_name varchar(50), bday date, phone varchar(50), email varchar(50),status INTEGER, chatid varchar(50))')
     conn.commit()
@@ -375,6 +376,7 @@ Indexes of users
 
 ############################# start
 create_tables()
+initialize_permissions_schema()
 create_tables_KPI()
 
 
@@ -405,58 +407,65 @@ def start(message):
                 return
             # ------------------------------------
 
-            if message.from_user.username:
-                from rasp import register_shifton_chat
-                registration = register_shifton_chat(f"@{message.from_user.username}", message.chat.id)
-                if not registration.get("ok"):
-                    print(f"Ошибка регистрации чата OMG Shift для @{message.from_user.username}: {registration.get('error', 'unknown_error')}")
-                else:
-                    try:
-                        from account import apply_omg_identity, sync_google_dependencies
-                        identity = apply_omg_identity(
-                            message.chat.id,
-                            f"@{message.from_user.username}",
-                            registration.get("employee"),
-                        )
-                        if identity["changed"]:
-                            sync_google_dependencies(full=True)
-                    except ValueError as e:
-                        if str(e) != 'Пользователь не найден в БД':
-                            print(f"Ошибка синхронизации профиля OMG Shift: {e}")
+            if not message.from_user.username:
+                bot.send_message(message.chat.id, 'Для регистрации установите публичный username в Telegram.')
+                return
 
-            users = define_name(message)
-
-            if len(users) == 0:
-                # Человек есть в конфе, но нет в БД (бот спал при входе). Добавляем сами.
-                import sqlite3
+            login = f"@{message.from_user.username}"
+            user = get_user(message)
+            if not user:
                 conn = sqlite3.connect('db/omgbot.sql')
-                cur = conn.cursor()
-                cur.execute("INSERT INTO users_new (login) VALUES (?)", ("@" + message.from_user.username,))
-                conn.commit()
-                cur.close()
-                conn.close()
-                
-                # И сразу отправляем заполнять данные
+                conn.row_factory = sqlite3.Row
+                try:
+                    same_login = conn.execute(
+                        'SELECT * FROM users_new WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+                        (login,),
+                    ).fetchone()
+                    if same_login and same_login['chatid'] not in (None, ''):
+                        bot.send_message(message.chat.id, 'Этот Telegram username уже привязан к другой учётной записи. Обратитесь к руководству.')
+                        return
+                    with conn:
+                        if same_login:
+                            conn.execute(
+                                'UPDATE users_new SET chatid=? WHERE ID=?',
+                                (str(message.from_user.id), same_login['ID']),
+                            )
+                        else:
+                            conn.execute(
+                                'INSERT INTO users_new (login, chatid) VALUES (?, ?)',
+                                (login, str(message.from_user.id)),
+                            )
+                finally:
+                    conn.close()
+                user = get_user(message)
+
+            if user['status'] == -1:
+                bot.send_message(message.chat.id, 'Доступ запрещен!')
+                return
+
+            if user['status'] is None:
                 from auth import start_auth
                 start_auth(message, bot)
+                return
 
-            elif users[0][8] == -1: 
-                # Бывший сотрудник
-                bot.send_message(message.chat.id, 'Доступ запрещен!')
-                
+            from rasp import register_shifton_chat
+            registration = register_shifton_chat(login, message.from_user.id)
+            if not registration.get("ok"):
+                print(f"Ошибка регистрации чата OMG Shift для {login}: {registration.get('error', 'unknown_error')}")
             else:
-                # Обычный сценарий: юзер уже есть в БД
-                if users[0][9] == None or users[0][9] == "": 
-                    from auth import start_auth
-                    start_auth(message, bot)
-                else:
-                    hello(message.chat.id, bot)
+                try:
+                    from account import apply_omg_identity, sync_google_dependencies
+                    identity = apply_omg_identity(message.from_user.id, login, registration.get("employee"))
+                    if identity["changed"]:
+                        sync_google_dependencies(full=True)
+                except ValueError as e:
+                    print(f"Ошибка синхронизации профиля OMG Shift: {e}")
+            hello(message.from_user.id, bot)
 
 
 @bot.message_handler(commands=['weather'])
 def weather(message):
-    
-    if is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         try: 
             from weather import get_weather
             text = get_weather()
@@ -467,7 +476,7 @@ def weather(message):
 @bot.message_handler(commands=['today'])
 def cmd_today_schedule(message):
     """Ручной вызов расписания на сегодня"""
-    if is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         try: 
             # Получаем текущую дату по Москве в нужном формате
             today_date = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%Y-%m-%d")
@@ -484,8 +493,7 @@ def cmd_today_schedule(message):
 
 @bot.message_handler(commands=['repair'])
 def repair_list(message):
-    
-    if is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
         # Получаем задачи с указанием клуба
@@ -515,9 +523,9 @@ def repair_list(message):
 
         bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', parse_mode='HTML')
        
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🆘 Помощь', '⚙️ Обновить настройки'])
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки'])
 def handle_main_menu(message):
-    if is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         bot.clear_step_handler_by_chat_id(message.chat.id)
         from menu import func
         func(message, bot)
@@ -546,7 +554,7 @@ def SaySmth(message): #fun talk
         
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and message.text.startswith('#'))
 def HashTags(message): #KPI handler
-    if is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         try:
             from kpi import hash_handle
             status, text, desc = hash_handle(message)
@@ -577,32 +585,62 @@ def HashTags(message): #KPI handler
 
 @bot.message_handler(content_types=["new_chat_members"])
 def handler_new_member(message): # Приветсвие нового сотрудника и запись его логина в БД
-    
-    user_name = message.new_chat_members[0].first_name
+    if str(message.chat.id) != str(CHATS['main_group']):
+        return
+    member = message.new_chat_members[0]
+    if member.is_bot:
+        return
+    user_name = member.first_name
     
     bot.send_message(message.chat.id, "Добро пожаловать в нашу команду, {0}! В свободное время пройди регистрацию у меня (нужно написать мне /start в личные сообщения - НЕ СЮДА!)\n\nС помощью меня в будущем тебе нужно будет:\n- Открывать и закрывать смену\n- Писать обратную связь по клубам (через доску предложений)\n- Получать бонусы KPI (за продления, ДР, инициативы, продажу абонементов и сертификатов)\n\nВ обязательном порядке подпишись на наш инфоканал - https://t.me/+Q2YQbLpwLIswYWY6\n\nПо всем вопросам по моей работе обращайся к @talgos_n".format(user_name))
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE login=?", ("@"+message.new_chat_members[0].username,))
+    cur.execute("SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (member.id,))
     users = cur.fetchall()
     cur.close()
     
     if len(users)==0:
+        if not member.username:
+            conn.close()
+            bot.send_message(message.chat.id, f'{user_name}, установи публичный username в Telegram перед регистрацией у бота.')
+            return
         cur = conn.cursor()
-        cur.execute("INSERT INTO users_new (login) VALUES (?)", ("@"+message.new_chat_members[0].username,))
+        same_login = cur.execute(
+            'SELECT 1 FROM users_new WHERE lower(login)=lower(?) LIMIT 1',
+            (f'@{member.username}',),
+        ).fetchone()
+        if same_login:
+            cur.close()
+            conn.close()
+            bot.send_message(message.chat.id, f'{user_name}, этот username уже связан с другой учётной записью. Обратись к руководству.')
+            return
+        cur.execute("INSERT INTO users_new (login, chatid) VALUES (?, ?)", ("@"+member.username, str(member.id)))
         conn.commit()
         cur.close()
     conn.close()
 
 @bot.message_handler(content_types=['left_chat_member'])
 def handler_left_member(message): # Прощание с сотрудником и изменение его статуса
-    
+    if str(message.chat.id) != str(CHATS['main_group']):
+        return
     user_name = message.left_chat_member.first_name
     bot.send_message(message.chat.id, "Туда тебе и дорога, {0}!".format(user_name))
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE users_new SET status=? WHERE login=?", (-1, "@"+message.left_chat_member.username))
+    previous = cur.execute(
+        "SELECT login, status, chatid FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)",
+        (message.left_chat_member.id,),
+    ).fetchone()
+    cur.execute("UPDATE users_new SET status=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (-1, message.left_chat_member.id))
+    if previous and previous[1] != -1:
+        cur.execute(
+            '''INSERT INTO role_audit
+               (changed_at, actor_chatid, actor_login, target_chatid,
+                target_login, old_status, new_status)
+               VALUES (datetime('now', '+3 hours'), ?, ?, ?, ?, ?, ?)''',
+            ('system:main_group_leave', None, previous[2], previous[0], previous[1], -1),
+        )
     conn.commit()
     cur.close()
     conn.close()
@@ -690,6 +728,8 @@ def statsall(message, bot=bot):
 
 @bot.message_handler(commands=['roll'])
 def roll(message):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     emoji = random.choice(emojis['roll'])
             
     send_react(message,emoji)

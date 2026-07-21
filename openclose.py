@@ -6,18 +6,23 @@ from constants import get_clubs, funclist_today, CHATS, TEXTS, tags_main, clubli
 from sheets import *
 from datetime import datetime,timedelta
 import math
+from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 
 
 CLUBS=get_clubs()
 ############################# core openclose
 
 def func_today (message,bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*funclist_today)
     bot.send_message(message.chat.id, 'О, так ты на смене? Что хочешь сделать?', reply_markup=markup)
     bot.register_next_step_handler(message, func_today_2,bot)
 
 def func_today_2 (message,bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     a = message.text
     if a== '✅ Открыть смену' or a == '🚫 Закрыть смену':
         check_club(message,a,bot)
@@ -40,17 +45,17 @@ def func_today_2 (message,bot):
         bot.register_next_step_handler(message, func_today_2,bot)
         
 def do_report(message,bot):
-    
-    
-    from main import define_name
-    users=define_name(message)
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
+        return
+    name = user['nick_name'] or user['first_name'] or 'Сотрудник'
 
     if message.photo:
         if message.text==None:
             text = ""
         else:
             text = f'\n\n{message.text}'
-        photo1 = [types.InputMediaPhoto(message.photo[0].file_id, caption=f"🔺 {users[0][4]} (@{message.from_user.username}) репортит!{text}" )]
+        photo1 = [types.InputMediaPhoto(message.photo[0].file_id, caption=f"🔺 {name} (@{message.from_user.username}) репортит!{text}" )]
         
         bot.send_media_group(CHATS['reports'], media=(photo1))
 
@@ -62,12 +67,14 @@ def do_report(message,bot):
     else:
 
         text= message.text
-        text_to_send = f'🔺 {users[0][4]} (@{message.from_user.username}) репортит!\n\n{text}'
+        text_to_send = f'🔺 {name} (@{message.from_user.username}) репортит!\n\n{text}'
         bot.send_message (CHATS['reports'], text_to_send)
         func_today(message,bot)
     
     
 def check_club(message, a, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
     
     # Кнопка 1: Красивая авто-проверка
@@ -168,6 +175,9 @@ def manual_selection_handler(message, a, tooearly, bot):
 
 # --- 5. ФИНАЛЬНАЯ ЛОГИКА (С ПРОВЕРКОЙ ФЛАГА) ---
 def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
+    if not _can_manage_club(message, club, bot):
+        func_today(message, bot)
+        return
     # 1. Проверяем конфиг для предупреждения ПОЛЬЗОВАТЕЛЮ
     current_clubs = get_clubs()
     req_geo = current_clubs[club].get('require_geo', False)
@@ -245,6 +255,8 @@ def enter_club(message, a, club, tooearly, is_geo_verified, bot):
 
 
 def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
+    if not _can_manage_club(message, club, bot):
+        return
     # Условие: Либо юзер нажал "Да" (если мы вернем кнопку), либо просто прошел enter_club
     # Так как мы убрали кнопку, условие if message.text == ... можно упростить, 
     # но оставим универсальным на случай возврата кнопки
@@ -286,9 +298,8 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     bot.send_message(message.chat.id, response, reply_markup=types.ReplyKeyboardRemove())
     
     # 4. Лог в репорты (СЮДА ДОБАВИЛИ ЛОГИКУ ГЕО)
-    from main import define_name
-    users = define_name(message)
-    name = users[0][4] if users else "Сотрудник"
+    user = get_user(message)
+    name = (user['nick_name'] or user['first_name']) if user else "Сотрудник"
     
     # Формируем приписку, если пропустили гео
     current_clubs = get_clubs()
@@ -306,6 +317,8 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None, current_q_text=None)
 
 def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None, current_q_text=None):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     # 0. ГЛАВНАЯ ПРОВЕРКА: Хочет ли юзер вернуться?
     if message.text == "Вернуться" or message.text == "⬅️ Вернуться":
         from main import hello
@@ -361,11 +374,13 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
                                    next_expected_type, next_q_text)
 
 def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
-    from main import define_name, hello
+    if not _can_manage_club(message, club, bot):
+        return
+    from main import hello
     
     # 1. Инициализация данных
-    users = define_name(message)
-    name = users[0][4]
+    user = get_user(message)
+    name = user['nick_name'] or user['first_name'] or 'Сотрудник'
     
     # Текущее время (когда закончил заполнять)
     tz = pytz.timezone('Europe/Moscow')
@@ -508,6 +523,37 @@ def get_distance(lat1, lon1, lat2, lon2):
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
+
+def _can_manage_club(message, club, bot):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
+        return False
+    if int(user['status']) >= ROLE_MANAGER:
+        return True
+    username = getattr(message.from_user, 'username', None)
+    if not username:
+        bot.send_message(message.chat.id, 'Для работы со сменой нужен Telegram username.')
+        return False
+    from kpi import get_user_club_today
+    scheduled_clubs = []
+    scheduled_club = get_user_club_today(username)
+    if scheduled_club:
+        scheduled_clubs.append(scheduled_club)
+    now = datetime.now(pytz.timezone('Europe/Moscow'))
+    if now.hour < 6:
+        previous_date = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        previous_club = get_user_club_today(username, previous_date)
+        if previous_club and previous_club not in scheduled_clubs:
+            scheduled_clubs.append(previous_club)
+    if not scheduled_clubs:
+        bot.send_message(message.chat.id, 'В OMG Shift не найдена ваша смена на сегодня.')
+        return False
+    if club not in scheduled_clubs:
+        allowed = '», «'.join(scheduled_clubs)
+        bot.send_message(message.chat.id, f'По OMG Shift вам доступен клуб «{allowed}». Выбрать «{club}» нельзя.')
+        return False
+    return True
 
 ############################# common functions
 

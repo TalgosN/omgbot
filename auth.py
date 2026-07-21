@@ -3,6 +3,7 @@ import sqlite3
 import datetime
 import threading
 from constants import CHATS
+from permissions import ROLE_EMPLOYEE
 
 def start_auth(message,bot):
    
@@ -72,46 +73,13 @@ def ask_status (message,bot,first_name,second_name,nick_name,bday):
 def ask_mail (message,bot,first_name,second_name,nick_name,bday,number):
     if len(message.text.strip())<50 and message.text.strip().endswith("@gmail.com"):
         email = message.text.strip()
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Я - админ OMG VR!', 'Я - менеджер OMG VR!')
-        bot.send_message(message.chat.id, f'Записал, спасибо!\n\nА чем ты вообще занимаешься?',reply_markup=markup)
-       
-        bot.register_next_step_handler(message, check_status,bot,first_name,second_name,nick_name,bday,number,email)
+        bot.send_message(message.chat.id, 'Записал, спасибо! Дай мне секунду, я всё проверю...')
+        check_user(message, bot, first_name, second_name, nick_name, bday, number, email, ROLE_EMPLOYEE)
     else:
         bot.send_message(message.chat.id, f'У меня только Гугл работает!\n\nАдрес должен кончаться на @gmail.com')
         bot.register_next_step_handler(message, ask_mail,bot,first_name,second_name,nick_name,bday,number)
 
 
-
-
-
-def check_status (message,bot,first_name,second_name,nick_name,bday,number,email):
-    chatid=message.chat.id
-    if message.text== 'Я - менеджер OMG VR!':
-        status = 1
-        bot.send_message(message.chat.id, f'Что-то я тебе не верю! Скажи пароль')
-        bot.register_next_step_handler(message, check_pass,bot,first_name,second_name,nick_name,bday,number,email,status)
-    elif message.text== 'Я - админ OMG VR!':
-        status = 0
-        bot.send_message(message.chat.id, f'Вау, как круто! Хорошо, дай мне секунду, я все проверю...')
-        check_user (message,bot, first_name,second_name,nick_name,bday,number,email,status)
-    else:
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Я - админ OMG VR!', 'Я - менеджер OMG VR!') 
-        bot.send_message(message.chat.id, f'Не понял тебя. Чем именно?',reply_markup=markup)
-        bot.register_next_step_handler(message, check_status,bot,first_name,second_name,nick_name,bday,number,email)
-
-
-
-def check_pass (message,bot, first_name,second_name,nick_name,bday,number,email,status):
-    if message.text == "ClintEastwood":
-         bot.send_message(message.chat.id, f'Хорошо, я тебе верю! Но дай проверю еще кое-что...')
-         check_user (message,bot, first_name,second_name,nick_name,bday,number,email,status)
-    else:
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Я - админ OMG VR!', 'Я - менеджер OMG VR!')
-        bot.send_message(message.chat.id, f'Ты уверен что ты тот за кого себя выдаешь?',reply_markup=markup)
-        bot.register_next_step_handler(message, check_status,bot,first_name,second_name,nick_name,bday,number,email)
 
 
 
@@ -157,12 +125,20 @@ def confirm (message,bot, first_name,second_name,nick_name,bday,number,email,sta
 
 
 def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,status):
+        try:
+            member_status = bot.get_chat_member(CHATS['main_group'], message.from_user.id).status
+            if member_status in ('left', 'kicked'):
+                bot.send_message(message.chat.id, 'Регистрация отменена: вы не состоите в основной рабочей группе.')
+                return
+        except Exception:
+            bot.send_message(message.chat.id, 'Не удалось проверить доступ к рабочей группе. Попробуйте регистрацию позже.')
+            return
         login = "@" + message.from_user.username
         try:
             from account import parse_omg_employee_name
             from rasp import register_shifton_chat
 
-            omg_result = register_shifton_chat(login, message.chat.id)
+            omg_result = register_shifton_chat(login, message.from_user.id)
             if omg_result.get("ok"):
                 first_name, second_name = parse_omg_employee_name(omg_result.get("employee"))
         except Exception as e:
@@ -170,12 +146,26 @@ def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,st
 
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
+        previous = cur.execute(
+            'SELECT status FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
+            (message.from_user.id,),
+        ).fetchone()
         cur.execute("""
             UPDATE users_new
-            SET first_name=?, second_name=?, nick_name=?, bday=?, phone=?, email=?, status=?, chatid=?
-            WHERE login=?
-        """, (first_name, second_name, nick_name, bday, number, email, status, message.chat.id, login))
+            SET login=?, first_name=?, second_name=?, nick_name=?, bday=?, phone=?, email=?, status=?, chatid=?
+            WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)
+        """, (login, first_name, second_name, nick_name, bday, number, email, status, message.from_user.id, message.from_user.id))
+        old_status = previous[0] if previous else None
+        if old_status != status:
+            cur.execute(
+                '''INSERT INTO role_audit
+                   (changed_at, actor_chatid, actor_login, target_chatid,
+                    target_login, old_status, new_status)
+                   VALUES (datetime('now', '+3 hours'), ?, ?, ?, ?, ?, ?)''',
+                ('system:registration', None, str(message.from_user.id), login, old_status, status),
+            )
         conn.commit()
+        cur.close()
         conn.close()
         bot.send_message(message.chat.id, f'Все в порядке! Будем знакомы!\n\nНе забудь подписаться на наш инфоканал! https://t.me/+Q2YQbLpwLIswYWY6',reply_markup=types.ReplyKeyboardRemove())
         bot.send_message (CHATS['me'],f'Имя: {first_name}\nФамилия: {second_name}\nНик: {nick_name}\nДень рождения: {bday}\nНомер телефона: {number}\nЭл. адрес: {email}')

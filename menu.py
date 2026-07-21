@@ -2,12 +2,13 @@ from telebot import *
 import sqlite3
 from constants import *
 from admin_panel import sync_config
+from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, ROLE_OWNER, require_role
 
 def chatid_to_users(chatid):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     # ИСПРАВЛЕНО: Безопасный запрос через ?
-    cur.execute("SELECT * FROM users_new WHERE chatid=?", (chatid,))
+    cur.execute("SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (chatid,))
     users = cur.fetchall()
     cur.close()
     conn.close()
@@ -17,24 +18,22 @@ def hello(chatid, bot):
     bot.clear_step_handler_by_chat_id(chatid) 
     users = chatid_to_users(chatid)
 
-    if len(users) == 0:
+    if len(users) == 0 or users[0][8] not in funclist:
         bot.send_message(chatid, 'Доступ запрещен!')
     else:
         # users[0][4] - это имя, users[0][8] - это роль (индекс списка кнопок)
         bot.send_message(chatid, f'Привет, {users[0][4]}!')
         
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        try:
-            buttons = funclist[users[0][8]]
-            markup.add(*buttons)
-        except IndexError:
-            # Защита, если роль в базе больше, чем есть вариантов меню
-            markup.add("🆘 Помощь")
+        buttons = funclist[users[0][8]]
+        markup.add(*buttons)
 
         msg = bot.send_message(chatid, 'Что вы хотите сделать? 👀', reply_markup=markup)
         bot.register_next_step_handler(msg, func, bot)
 
 def func(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     a = message.text
 
     if a == '👨🏻‍💻 Смена':
@@ -54,35 +53,12 @@ def func(message, bot):
         rasp(message, bot)
         
     elif a == '💲 Финансы':
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        # ИСПРАВЛЕНО: Безопасный запрос через ?
-        cur.execute("SELECT status from users_new WHERE login=?", ("@" + message.from_user.username,))
-        users = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        # Проверка прав (status >= 2)
-        if len(users) == 0 or users[0][0] < 2:
-            bot.send_message(message.chat.id, "У вас недостаточно прав!")
-            hello(message.chat.id, bot)
-        else:
+        if require_role(message, bot, ROLE_OWNER):
             from finance import finance
             finance(message, bot)
     
     elif a == "🧑🏻‍💻 Админ панель": # Кнопка для админов
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("SELECT status from users_new WHERE login=?", ("@" + message.from_user.username,))
-        users = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        # Проверка прав (status >= 1, т.е. админы и выше)
-        if len(users) == 0 or users[0][0] < 1:
-            bot.send_message(message.chat.id, "У вас недостаточно прав!")
-            hello(message.chat.id, bot)
-        else:
+        if require_role(message, bot, ROLE_MANAGER):
             admin_menu(message, bot)
     
     elif a == '📦 Расходники':
@@ -97,11 +73,15 @@ def func(message, bot):
         hello(message.chat.id, bot)
 
 def admin_menu(message, bot):
-    from constants import admin_funclist
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    from constants import admin_funclist, owner_admin_funclist
     from admin_panel import admin_func_handler # Импортируем обработчик из нового файла
     
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(*admin_funclist)
+    buttons = owner_admin_funclist if user['status'] >= ROLE_OWNER else admin_funclist
+    markup.add(*buttons)
     msg = bot.send_message(message.chat.id, 'Панель администратора 🧑🏻‍💻', reply_markup=markup)
     bot.register_next_step_handler(msg, admin_func_handler, bot)
 

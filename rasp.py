@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import pytz
 from weather import get_weather
+from permissions import ROLE_EMPLOYEE, require_role
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
@@ -225,6 +226,8 @@ def last_monday(datetime_str):
 # --- ОСНОВНАЯ ЛОГИКА БОТА ---
 
 def rasp(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     bot.send_message(message.chat.id, f'Этот раздел посвящен расписанию и всё что с ним связано!')
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*funclist_rasp)
@@ -232,6 +235,8 @@ def rasp(message, bot):
     bot.register_next_step_handler(message, func_rasp, bot)
 
 def func_rasp(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == '📄 Расписание на сегодня':
         try:
             today_date = datetime.now(pytz.timezone('Europe/Moscow'))
@@ -443,6 +448,8 @@ def send_long_text(chat_id, text, bot):
         bot.send_message(chat_id, msg, parse_mode='HTML')
 
 def handle_data(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == '⬅️ Вернуться':
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
@@ -466,6 +473,8 @@ def handle_data(message, bot):
         bot.register_next_step_handler(message, func_rasp, bot)
 
 def get_week(message, sched_type, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
     if message.text == '⬅️ Вернуться':
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
