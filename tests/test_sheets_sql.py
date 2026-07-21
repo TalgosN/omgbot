@@ -61,6 +61,48 @@ class SheetsSqlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.sheets.validate_table("afterparty; DROP TABLE users_new")
 
+    def test_update_table_exports_only_last_three_months(self):
+        real_connect = sqlite3.connect
+        conn = real_connect(self.db_path)
+        old_date, recent_date = conn.execute(
+            "SELECT date('now', '+3 hours', '-4 months'), "
+            "date('now', '+3 hours', '-1 month')"
+        ).fetchone()
+        conn.executemany(
+            "INSERT INTO afterparty (dt_rep, who, club, desc, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (old_date, "@old", "Марьино", "old", "Одобрено"),
+                (recent_date, "@recent", "Марьино", "recent", "Одобрено"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        worksheet = unittest.mock.Mock(rows=100)
+        worksheet.get_values.return_value = unittest.mock.Mock()
+        spreadsheet = unittest.mock.Mock()
+        spreadsheet.worksheet_by_title.return_value = worksheet
+        client = unittest.mock.Mock()
+        client.open.return_value = spreadsheet
+
+        with patch.object(
+            self.sheets.sqlite3,
+            "connect",
+            side_effect=lambda _path: real_connect(self.db_path),
+        ), patch.object(
+            self.sheets.pygsheets,
+            "authorize",
+            return_value=client,
+            create=True,
+        ):
+            self.sheets.update_table("afterparty")
+
+        exported = worksheet.update_values.call_args.args[1]
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(exported[0][1], recent_date)
+        self.assertEqual(exported[0][2], "@recent")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,51 @@ class SqlScriptsTest(unittest.TestCase):
         self.assertEqual(raw_rows, [("@maxon", "Анкеты", 1.0)])
         self.assertEqual(shift_rows, [("2026-07-31", "@maxon", 12.0, 2.0)])
 
+    def test_google_sheet_queries_keep_only_last_three_months(self):
+        old_date, recent_date = self.conn.execute(
+            "SELECT date('now', '+3 hours', '-4 months'), "
+            "date('now', '+3 hours', '-1 month')"
+        ).fetchone()
+        self.conn.execute(
+            "INSERT INTO users_new VALUES (?, ?, ?)",
+            ("@employee", "Иван", "Иванов"),
+        )
+        self.conn.executemany(
+            "INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("Иванов", "Иван", old_date, "Марьино", 6.0, "@employee"),
+                ("Иванов", "Иван", recent_date, "Марьино", 6.0, "@employee"),
+            ],
+        )
+        self.conn.executemany(
+            "INSERT INTO afterparty VALUES (?, ?, ?)",
+            [
+                (1, old_date, "@employee"),
+                (2, recent_date, "@employee"),
+            ],
+        )
+
+        sheet_shift_rows = self.conn.execute(sql_scripts.sheets_shifts_ext).fetchall()
+        sheet_data_rows = self.conn.execute(sql_scripts.sheets_union).fetchall()
+        sheet_month_rows = self.conn.execute(sql_scripts.sheets_shifts).fetchall()
+        sheet_raw_rows = self.conn.execute(sql_scripts.sheets_records).fetchall()
+
+        self.assertEqual(len(sheet_shift_rows), 1)
+        self.assertEqual(sheet_shift_rows[0][2], recent_date)
+        self.assertEqual({row[0] for row in sheet_data_rows}, {recent_date})
+        self.assertEqual(len(sheet_month_rows), 1)
+        self.assertEqual(sheet_month_rows[0][2:], (6.0, 1.0))
+        self.assertEqual(len(sheet_raw_rows), 2)
+
+        all_shift_dates = {
+            row[2] for row in self.conn.execute(sql_scripts.shifts_ext).fetchall()
+        }
+        all_kpi_dates = {
+            row[0] for row in self.conn.execute(sql_scripts.union).fetchall()
+        }
+        self.assertEqual(all_shift_dates, {old_date, recent_date})
+        self.assertEqual(all_kpi_dates, {old_date, recent_date})
+
 
 if __name__ == "__main__":
     unittest.main()

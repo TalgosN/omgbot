@@ -7,6 +7,7 @@ import sqlite3
 import re
 import threading
 from datetime import datetime
+from statistics import median
 import requests
 import pytz
 from constants import CHATS, clublist_task, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
@@ -155,44 +156,68 @@ def build_monthly_kpi_report(values):
     for row in values[7:]:
         name = str(row[1]).strip() if len(row) > 1 else ''
         shifts = row[2] if len(row) > 2 and row[2] not in ('', None) else '0'
-        if not name or parse_report_number(shifts) <= 0:
+        weighted_shifts = row[3] if len(row) > 3 and row[3] not in ('', None) else '0'
+        if (
+            not name
+            or parse_report_number(shifts) <= 0
+            or parse_report_number(weighted_shifts) <= 0
+        ):
             continue
         total_pct = row[20] if len(row) > 20 and row[20] not in ('', None) else '0%'
         weighted_pct = row[21] if len(row) > 21 and row[21] not in ('', None) else '0%'
-        rank = row[24] if len(row) > 24 and row[24] not in ('', None) else 'нет'
         employees.append({
             'name': name,
             'shifts': shifts,
             'total_pct': total_pct,
             'weighted_pct': weighted_pct,
-            'rank': rank,
             'sort_pct': parse_report_number(total_pct),
         })
 
     employees.sort(key=lambda employee: (employee['sort_pct'], employee['name'].lower()))
+    non_zero_results = [employee['sort_pct'] for employee in employees if employee['sort_pct'] > 0]
+    average_pct = sum(non_zero_results) / len(non_zero_results) if non_zero_results else 0
+    median_pct = median(non_zero_results) if non_zero_results else 0
+
+    def format_percent(value):
+        return f'{value:.1f}'.rstrip('0').rstrip('.') + '%'
+
     header = (
         '📊 <b>KPI сотрудников за месяц</b>\n'
         f'📅 <i>Расчётная дата: {html.escape(str(selected_date))}</i>\n'
-        f'👥 Сотрудников со сменами: <b>{len(employees)}</b>'
+        f'👥 Сотрудников в отчёте: <b>{len(employees)}</b>\n\n'
+        f'📈 Средний KPI: <b>{format_percent(average_pct)}</b>\n'
+        f'📐 Медианный KPI: <b>{format_percent(median_pct)}</b>\n'
+        f'ℹ️ <i>Среднее и медиана рассчитаны без нулевых KPI.</i>'
     )
     if not employees:
         return [f'{header}\n\nℹ️ За выбранный месяц нет сотрудников со сменами.']
 
     weakest = employees[:3]
 
-    def employee_line(employee):
+    def employee_line(employee, icon):
         return (
-            f'🔴 <b>{html.escape(str(employee["name"]))}</b>: '
+            f'{icon} <b>{html.escape(str(employee["name"]))}</b>: '
             f'KPI <b>{html.escape(str(employee["total_pct"]))}</b> '
             f'<i>({html.escape(str(employee["weighted_pct"]))} взв.)</i> | '
-            f'🕒 {html.escape(str(employee["shifts"]))} | '
-            f'🥇 {html.escape(str(employee["rank"]))}'
+            f'📆 Смен: <b>{html.escape(str(employee["shifts"]))}</b>'
         )
 
-    return [
-        f'{header}\n\n🔻 <b>Три самых слабых результата</b>\n\n'
-        + '\n'.join(employee_line(employee) for employee in weakest)
+    messages = [
+        f'{header}\n\n🔻 <b>Красная зона: 3 самых слабых результата</b>\n\n'
+        + '\n'.join(employee_line(employee, '🔴') for employee in weakest)
     ]
+    remaining = employees[3:]
+    if remaining:
+        lines = ['📋 <b>Остальные сотрудники</b>', '']
+        for employee in remaining:
+            line = employee_line(employee, '🔹')
+            if len('\n'.join(lines + [line])) > 3500:
+                messages.append('\n'.join(lines))
+                lines = ['📋 <b>Продолжение отчёта</b>', '', line]
+            else:
+                lines.append(line)
+        messages.append('\n'.join(lines))
+    return messages
 
 
 def handle_monthly_kpi_report(message, bot):

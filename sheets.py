@@ -16,6 +16,14 @@ bonus = {'#серт':'sert','#абик':'abik'}
          
 tables = ['afterparty','birthday','initiative','abik','sert']
 allowed_tables = set(tables + ['reviews'])
+table_date_columns = {
+    'afterparty': 'dt_rep',
+    'birthday': 'dt_rep',
+    'initiative': 'dt_rep',
+    'abik': 'd_rep',
+    'sert': 'd_rep',
+    'reviews': 'd_rep',
+}
 
 def validate_table(table):
     if table not in allowed_tables:
@@ -50,7 +58,12 @@ def update_table(table):
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute(f'SELECT * FROM "{table}"')
+    date_column = table_date_columns[table]
+    cur.execute(
+        f'''SELECT * FROM "{table}"
+            WHERE date(substr("{date_column}", 1, 10)) >=
+                  date('now', '+3 hours', '-3 months')'''
+    )
     data = cur.fetchall()
     cur.close()
     conn.close()

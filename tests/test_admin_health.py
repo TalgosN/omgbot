@@ -80,31 +80,40 @@ class AdminHealthTest(unittest.TestCase):
         google.open.assert_called_once_with("KPI OMG VR")
 
     def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
-        def employee(name, shifts, total, weighted, rank):
+        def employee(name, shifts, weighted_shifts, total, weighted):
             row = [''] * 27
             row[1] = name
             row[2] = shifts
+            row[3] = weighted_shifts
             row[20] = total
             row[21] = weighted
-            row[24] = rank
             return row
 
         values = [['', '', '21.7.2026']] + [[] for _ in range(6)] + [
-            employee('Без смен', '0', '1%', '1%', '5'),
-            employee('Четвёртый', '10', '50%', '40%', '1'),
-            employee('Первый', '8', '10%', '8%', '4'),
-            employee('Третий', '9', '30%', '25%', '2'),
-            employee('Второй', '7', '20%', '15%', '3'),
+            employee('Без смен', '0', '5', '1%', '1%'),
+            employee('Без взвешенных смен', '10', '0', '1%', '1%'),
+            employee('Нулевой KPI', '6', '7', '0%', '0%'),
+            employee('Четвёртый', '10', '12', '50%', '40%'),
+            employee('Первый', '8', '9', '10%', '8%'),
+            employee('Третий', '9', '11', '30%', '25%'),
+            employee('Второй', '7', '8', '20%', '15%'),
         ]
 
         reports = self.admin.build_monthly_kpi_report(values)
         report = '\n'.join(reports)
 
         self.assertNotIn('Без смен', report)
+        self.assertNotIn('Без взвешенных смен', report)
         self.assertEqual(report.count('🔴'), 3)
-        self.assertNotIn('Четвёртый', report)
+        self.assertIn('Четвёртый', report)
+        self.assertIn('Третий', report)
+        self.assertIn('📈 Средний KPI: <b>27.5%</b>', report)
+        self.assertIn('📐 Медианный KPI: <b>25%</b>', report)
+        self.assertIn('📆 Смен: <b>6</b>', report)
+        self.assertNotIn('🥇', report)
+        self.assertNotIn('🕒', report)
+        self.assertLess(report.index('Нулевой KPI'), report.index('Первый'))
         self.assertLess(report.index('Первый'), report.index('Второй'))
-        self.assertLess(report.index('Второй'), report.index('Третий'))
         self.assertNotIn('—', report)
 
 

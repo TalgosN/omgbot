@@ -495,12 +495,12 @@ def hash_handle(message):
 def init():
     read_ank_table()
     read_shifts()
-    write_data(sql_select(sql_scripts.shifts_ext), 'KPI helper', 'shifts')
-    write_data(sql_select(sql_scripts.union), 'KPI OMG VR', 'data')
-    write_data(sql_select(sql_scripts.shifts), 'KPI OMG VR', 'shifts')
-    write_data(sql_select(sql_scripts.records), 'KPI OMG VR', 'raw')
+    write_data(sql_select(sql_scripts.sheets_shifts_ext), 'KPI helper', 'shifts')
+    write_data(sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
+    write_data(sql_select(sql_scripts.sheets_shifts), 'KPI OMG VR', 'shifts')
+    write_data(sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')
 
 def update_kpi():
     read_ank_table()
-    write_data(sql_select(sql_scripts.union), 'KPI OMG VR', 'data')
-    write_data(sql_select(sql_scripts.records), 'KPI OMG VR', 'raw')
+    write_data(sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
+    write_data(sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')

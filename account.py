@@ -183,10 +183,10 @@ def sync_google_dependencies(full=False):
         def update_kpi_sheets():
             import kpi
 
-            kpi.write_data(kpi.sql_select(sql_scripts.shifts_ext), 'KPI helper', 'shifts')
-            kpi.write_data(kpi.sql_select(sql_scripts.union), 'KPI OMG VR', 'data')
-            kpi.write_data(kpi.sql_select(sql_scripts.shifts), 'KPI OMG VR', 'shifts')
-            kpi.write_data(kpi.sql_select(sql_scripts.records), 'KPI OMG VR', 'raw')
+            kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts_ext), 'KPI helper', 'shifts')
+            kpi.write_data(kpi.sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
+            kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts), 'KPI OMG VR', 'shifts')
+            kpi.write_data(kpi.sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')
 
         operations.append(('KPI OMG VR', update_kpi_sheets))
 

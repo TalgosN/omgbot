@@ -403,3 +403,55 @@ GROUP BY 1,2
 ORDER BY 2,3 DESC, 1;
 
     '''
+
+
+# Google Sheets хранит только оперативную витрину. Полная история остаётся в SQLite
+# и продолжает использоваться запросами union/shifts/shifts_ext/records.
+_sheets_cutoff = "date('now', '+3 hours', '-3 months')"
+_union_without_semicolon = union.strip().rstrip(';')
+_shifts_ext_without_semicolon = shifts_ext.strip().rstrip(';')
+
+sheets_union = f'''
+SELECT dt_rep, s_name, kpi, fact
+FROM ({_union_without_semicolon}) AS all_kpi
+WHERE date(dt_rep) >= {_sheets_cutoff}
+ORDER BY date(dt_rep), s_name, kpi;
+'''
+
+sheets_shifts_ext = f'''
+SELECT shift_second_name, shift_first_name, dt_shift, club, dur
+FROM ({_shifts_ext_without_semicolon}) AS all_shifts
+WHERE date(substr(dt_shift, 1, 10)) >= {_sheets_cutoff}
+ORDER BY date(substr(dt_shift, 1, 10)), shift_second_name, shift_first_name;
+'''
+
+sheets_shifts = f'''
+SELECT
+    DATE(substr(sh.dt_shift, 1, 10), 'start of month', '+1 month', '-1 day') AS last_day_of_month,
+    ns.login AS s_name,
+    SUM(sh.dur) AS cnt_h,
+    SUM(ROUND(sh.dur / 6, 3)) AS total_cnt_smen
+FROM shifts sh
+JOIN users_new ns ON (
+    sh.shift_login IS NOT NULL
+    AND lower(sh.shift_login) = lower(ns.login)
+) OR (
+    sh.shift_login IS NULL
+    AND sh.shift_second_name = ns.second_name
+    AND sh.shift_first_name = ns.first_name
+)
+WHERE date(substr(sh.dt_shift, 1, 10)) >= {_sheets_cutoff}
+GROUP BY last_day_of_month, ns.login
+ORDER BY last_day_of_month, ns.login;
+'''
+
+_sheets_union_without_semicolon = sheets_union.strip().rstrip(';')
+sheets_records = f'''
+WITH recent_records AS (
+    {_sheets_union_without_semicolon}
+)
+SELECT s_name, kpi, SUM(fact) AS total
+FROM recent_records
+GROUP BY s_name, kpi
+ORDER BY kpi, total DESC, s_name;
+'''

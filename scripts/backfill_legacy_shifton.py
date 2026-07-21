@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -102,28 +102,87 @@ def fetch_legacy_shifts(start, end, credentials):
         "Authorization": f"Bearer {token['access_token']}",
         "refresh_token": token["refresh_token"],
     }
-    period = json.dumps({"start": f"{start} 00:00:00", "end": f"{end} 23:59:59"})
-    shifts = request_json(
-        "GET",
-        f"https://api.shifton.com/work/1.0.0/projects/{PROJECT_ID}/shifts",
-        headers=headers,
-        data=period,
-    )
     employees = request_json(
         "GET",
         f"https://api2.shifton.com/work/1.0.0/companies/{COMPANY_ID}/employees",
         headers=headers,
     )
-    if not isinstance(shifts, list) or not isinstance(employees, list):
+    if not isinstance(employees, list):
         raise RuntimeError("Unexpected response format from legacy Shifton API")
+
+    start_dt, end_dt = validate_period(start, end)
+    shifts = []
+    chunk_start = start_dt
+    while chunk_start <= end_dt:
+        chunk_end = min(chunk_start + timedelta(days=30), end_dt)
+        range_params = {
+            "start": f"{chunk_start:%Y-%m-%d} 00:00:00",
+            "end": f"{chunk_end:%Y-%m-%d} 23:59:59",
+        }
+        period = json.dumps(range_params)
+        chunk = request_json(
+            "GET",
+            f"https://api.shifton.com/work/1.0.0/projects/{PROJECT_ID}/shifts",
+            headers=headers,
+            data=period,
+        )
+        if not isinstance(chunk, list):
+            raise RuntimeError("Unexpected response format from legacy Shifton API")
+        shifts.extend(chunk)
+        try:
+            deleted_employees = request_json(
+                "GET",
+                f"https://api.shifton.com/work/1.0.0/companies/{COMPANY_ID}/"
+                f"projects/{PROJECT_ID}/employees/deleted",
+                headers=headers,
+                params=range_params,
+            )
+        except (requests.RequestException, RuntimeError):
+            deleted_employees = []
+        known_ids = {employee.get("id") for employee in employees}
+        for employee in deleted_employees if isinstance(deleted_employees, list) else []:
+            if employee.get("id") not in known_ids:
+                employees.append(employee)
+                known_ids.add(employee.get("id"))
+        chunk_start = chunk_end + timedelta(days=1)
+
+    known_employee_ids = {employee.get("id") for employee in employees}
+    missing_employee_ids = sorted({
+        shift.get("employee_id")
+        for shift in shifts
+        if shift.get("employee_id")
+        and shift.get("employee_id") not in known_employee_ids
+    })
+    for employee_id in missing_employee_ids:
+        try:
+            employee = request_json(
+                "GET",
+                f"https://api.shifton.com/work/1.0.0/companies/"
+                f"{COMPANY_ID}/employees/{employee_id}",
+                headers=headers,
+            )
+        except (requests.RequestException, RuntimeError):
+            continue
+        if isinstance(employee, dict) and employee.get("full_name"):
+            employees.append(employee)
     return shifts, employees
 
 
 def prepare_rows(shifts, employees, start, end):
     employee_names = {employee["id"]: employee.get("full_name", "") for employee in employees}
     rows = []
+    seen_shifts = set()
     skipped = 0
     for shift in shifts:
+        shift_key = shift.get("id") or (
+            shift.get("employee_id"),
+            shift.get("planned_from"),
+            shift.get("planned_to"),
+            (shift.get("location") or {}).get("title"),
+        )
+        if shift_key in seen_shifts:
+            continue
+        seen_shifts.add(shift_key)
         name = employee_names.get(shift.get("employee_id"), "").split()
         location = shift.get("location")
         if len(name) < 2 or not location or not location.get("title"):
@@ -136,7 +195,7 @@ def prepare_rows(shifts, employees, start, end):
             continue
         duration = round(abs((planned_to - planned_from).total_seconds()) / 3600, 1)
         rows.append((name[0], name[1], date_iso, location["title"], duration, SOURCE))
-    return list(dict.fromkeys(rows)), skipped
+    return rows, skipped
 
 
 def ensure_source_column(conn):
@@ -164,8 +223,9 @@ def apply_rows(db_path, rows, start, end):
         for row in rows:
             duplicate = conn.execute(
                 "SELECT 1 FROM shifts WHERE shift_second_name = ? AND shift_first_name = ? "
-                "AND date(dt_shift) = ? AND club = ? AND dur = ? LIMIT 1",
-                row[:5],
+                "AND date(dt_shift) = ? AND club = ? AND dur = ? "
+                "AND COALESCE(source, '') <> ? LIMIT 1",
+                (*row[:5], SOURCE),
             ).fetchone()
             if not duplicate:
                 conn.execute(
@@ -178,6 +238,18 @@ def apply_rows(db_path, rows, start, end):
         users_table = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users_new'"
         ).fetchone()
+        conn.execute(
+            """UPDATE shifts AS target
+               SET shift_login = (
+                   SELECT linked.shift_login FROM shifts AS linked
+                   WHERE linked.shift_second_name = target.shift_second_name
+                     AND linked.shift_first_name = target.shift_first_name
+                     AND linked.shift_login IS NOT NULL
+                   LIMIT 1
+               )
+               WHERE target.source = ? AND target.shift_login IS NULL""",
+            (SOURCE,),
+        )
         if users_table:
             conn.execute(
                 """UPDATE shifts
@@ -201,10 +273,26 @@ def sync_sheets():
     import kpi
     import sql_scripts
 
-    kpi.write_data(kpi.sql_select(sql_scripts.shifts_ext), "KPI helper", "shifts")
-    kpi.write_data(kpi.sql_select(sql_scripts.union), "KPI OMG VR", "data")
-    kpi.write_data(kpi.sql_select(sql_scripts.shifts), "KPI OMG VR", "shifts")
-    kpi.write_data(kpi.sql_select(sql_scripts.records), "KPI OMG VR", "raw")
+    kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts_ext), "KPI helper", "shifts")
+    kpi.write_data(kpi.sql_select(sql_scripts.sheets_union), "KPI OMG VR", "data")
+    kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts), "KPI OMG VR", "shifts")
+    kpi.write_data(kpi.sql_select(sql_scripts.sheets_records), "KPI OMG VR", "raw")
+
+
+def get_unlinked_legacy_shifts(db_path, start, end):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(
+            """SELECT shift_second_name, shift_first_name, COUNT(*)
+               FROM shifts
+               WHERE source = ? AND shift_login IS NULL
+                 AND date(substr(dt_shift, 1, 10)) BETWEEN date(?) AND date(?)
+               GROUP BY shift_second_name, shift_first_name
+               ORDER BY COUNT(*) DESC, shift_second_name, shift_first_name""",
+            (SOURCE, start, end),
+        ).fetchall()
+    finally:
+        conn.close()
 
 
 def main():
@@ -221,8 +309,12 @@ def main():
     for row in rows:
         counts[row[2]] = counts.get(row[2], 0) + 1
     print(f"Legacy Shifton returned {len(rows)} usable shifts; skipped {skipped} incomplete rows.")
-    for day, count in sorted(counts.items()):
-        print(f"  {day}: {count}")
+    if counts:
+        days = sorted(counts)
+        print(f"Dates with shifts: {len(days)}; first={days[0]}; last={days[-1]}.")
+        if len(days) <= 31:
+            for day, count in sorted(counts.items()):
+                print(f"  {day}: {count}")
 
     if not args.apply:
         print("Dry-run only: database and Google Sheets were not changed.")
@@ -230,6 +322,13 @@ def main():
 
     inserted = apply_rows(args.db, rows, args.start, args.end)
     print(f"Inserted {inserted} shifts into {args.db} with source={SOURCE}.")
+    unlinked = get_unlinked_legacy_shifts(args.db, args.start, args.end)
+    if unlinked:
+        print(f"Warning: {sum(row[2] for row in unlinked)} shifts are not linked to users_new:")
+        for second_name, first_name, count in unlinked:
+            print(f"  {second_name} {first_name}: {count}")
+    else:
+        print("All imported shifts are linked to users_new.")
     if args.sync_sheets:
         sync_sheets()
         print("KPI Google Sheets refreshed.")
