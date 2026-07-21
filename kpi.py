@@ -86,57 +86,80 @@ def write_data(data, table, sheet):
     if len(list1) > 0:
         wks.update_values('A2', list1)
 
-def read_shifts():
-    """Синхронизирует смены в режиме 'скользящего окна' (7 дней назад, 7 вперед)"""
-    conn = sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL)')
-    
-    today = pd.Timestamp.now(tz='Europe/Moscow')
-    start_date = today - pd.DateOffset(days=7)
-    
-    start_str = start_date.strftime("%Y-%m-%d")
-    cur.execute("DELETE FROM shifts WHERE dt_shift >= ?", (start_str,))
-    conn.commit()
-
+def fetch_omg_shift_rows(start_date):
+    """Сначала целиком получает окно расписания, не изменяя локальную БД."""
     schedule_list = []
+    seen_shifts = set()
     headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
 
     for p in range(15):
         current_dt = start_date + pd.DateOffset(days=p)
         date_iso = current_dt.strftime('%Y-%m-%d')
         
-        try:
-            resp = requests.get(f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}", headers=headers, timeout=5).json()
-            if resp.get("ok"):
-                for loc in resp.get("locations", []):
-                    club = loc.get("title", "Неизвестно")
-                    for shift in loc.get("shifts", []):
-                        emp_name = shift.get("employee", "Неизвестно")
-                        start_t = shift.get("start")
-                        end_t = shift.get("end")
+        response = requests.get(
+            f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}",
+            headers=headers,
+            timeout=5,
+        )
+        response.raise_for_status()
+        resp = response.json()
+        if not isinstance(resp, dict) or not resp.get("ok"):
+            error = resp.get("error", "invalid_response") if isinstance(resp, dict) else "invalid_response"
+            raise RuntimeError(f"OMG Shift не вернул расписание за {date_iso}: {error}")
 
-                        try:
-                            t1 = datetime.strptime(start_t, "%H:%M")
-                            t2 = datetime.strptime(end_t, "%H:%M")
-                            if t2 < t1: t2 += timedelta(days=1)
-                            dur = round((t2 - t1).total_seconds() / 3600, 1)
-                        except:
-                            dur = 0
+        for loc in resp.get("locations", []):
+            club = loc.get("title", "Неизвестно")
+            for shift in loc.get("shifts", []):
+                emp_name = shift.get("employee", "Неизвестно")
+                start_t = shift.get("start")
+                end_t = shift.get("end")
 
-                        parts = emp_name.split()
-                        s_name = parts[0] if len(parts) > 0 else emp_name
-                        f_name = parts[1] if len(parts) > 1 else ""
+                t1 = datetime.strptime(start_t, "%H:%M")
+                t2 = datetime.strptime(end_t, "%H:%M")
+                if t2 < t1:
+                    t2 += timedelta(days=1)
+                dur = round((t2 - t1).total_seconds() / 3600, 1)
 
-                        schedule_list.append([s_name, f_name, date_iso, club, dur])
-                        cur.execute("INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur) VALUES (?, ?, ?, ?, ?)", 
-                                    (s_name, f_name, date_iso, club, dur))
-        except Exception as e:
-            print(f"Ошибка парсинга смен за {date_iso}: {e}")
+                parts = emp_name.split()
+                s_name = parts[0] if len(parts) > 0 else emp_name
+                f_name = parts[1] if len(parts) > 1 else ""
+                shift_key = (s_name, f_name, date_iso, club, start_t, end_t)
+                if shift_key in seen_shifts:
+                    continue
+                seen_shifts.add(shift_key)
+                schedule_list.append([s_name, f_name, date_iso, club, dur])
 
-    conn.commit()
-    cur.close()
-    conn.close()
+    return schedule_list
+
+
+def read_shifts():
+    """Синхронизирует смены в режиме 'скользящего окна' (7 дней назад, 7 вперед)."""
+    today = pd.Timestamp.now(tz='Europe/Moscow')
+    start_date = today - pd.DateOffset(days=7)
+    start_str = start_date.strftime("%Y-%m-%d")
+
+    schedule_list = fetch_omg_shift_rows(start_date)
+
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            cur = conn.cursor()
+            cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL, source varchar(30))')
+            columns = {row[1] for row in cur.execute('PRAGMA table_info(shifts)')}
+            if 'source' not in columns:
+                cur.execute('ALTER TABLE shifts ADD COLUMN source varchar(30)')
+            cur.execute(
+                "DELETE FROM shifts WHERE dt_shift >= ? AND COALESCE(source, 'omg_shift') = 'omg_shift'",
+                (start_str,),
+            )
+            cur.executemany(
+                "INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur, source) VALUES (?, ?, ?, ?, ?, 'omg_shift')",
+                schedule_list,
+            )
+            cur.close()
+    finally:
+        conn.close()
+
     return pd.DataFrame(schedule_list, columns=['shift_second_name', 'shift_first_name', 'dt_shift', 'club', 'dur'])
 
 def sql_select(command):

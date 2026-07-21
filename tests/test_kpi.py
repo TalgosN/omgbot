@@ -1,8 +1,11 @@
 import importlib.util
+import sqlite3
 import sys
+import tempfile
 import types
 import unittest
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -126,6 +129,71 @@ class KpiTest(unittest.TestCase):
 
         self.assertEqual(result[0], self.kpi.KPI_SAVED_ERROR)
         self.assertIn("employee_not_found", result[1])
+
+    def test_shift_sync_does_not_open_database_when_api_fetch_fails(self):
+        timestamp = SimpleNamespace(now=lambda tz=None: datetime(2026, 7, 21))
+        with patch.object(self.kpi.pd, "Timestamp", timestamp, create=True), \
+                patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
+                patch.object(self.kpi, "fetch_omg_shift_rows", side_effect=RuntimeError("API unavailable")), \
+                patch.object(self.kpi.sqlite3, "connect") as connect:
+            with self.assertRaises(RuntimeError):
+                self.kpi.read_shifts()
+
+        connect.assert_not_called()
+
+    def test_shift_sync_preserves_history_and_legacy_backfill(self):
+        timestamp = SimpleNamespace(now=lambda tz=None: datetime(2026, 7, 21))
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.sql"
+            conn = real_connect(db_path)
+            conn.execute(
+                "CREATE TABLE shifts (shift_second_name TEXT, shift_first_name TEXT, "
+                "dt_shift TEXT, club TEXT, dur REAL, source TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("Старый", "Сотрудник", "2026-07-01", "Клуб", 6.0, "omg_shift"),
+                    ("Архив", "Shifton", "2026-07-18", "Клуб", 6.0, "legacy_shifton"),
+                    ("Устаревшая", "Смена", "2026-07-20", "Клуб", 6.0, "omg_shift"),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            fresh_rows = [["Новая", "Смена", "2026-07-20", "Клуб", 7.0]]
+            with patch.object(self.kpi.pd, "Timestamp", timestamp, create=True), \
+                    patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
+                    patch.object(self.kpi.pd, "DataFrame", side_effect=lambda rows, columns: rows, create=True), \
+                    patch.object(self.kpi, "fetch_omg_shift_rows", return_value=fresh_rows), \
+                    patch.object(self.kpi.sqlite3, "connect", side_effect=lambda _path: real_connect(db_path)):
+                self.kpi.read_shifts()
+
+            conn = real_connect(db_path)
+            rows = conn.execute(
+                "SELECT shift_second_name, date(dt_shift), source FROM shifts ORDER BY dt_shift, source"
+            ).fetchall()
+            conn.close()
+            self.assertEqual(rows, [
+                ("Старый", "2026-07-01", "omg_shift"),
+                ("Архив", "2026-07-18", "legacy_shifton"),
+                ("Новая", "2026-07-20", "omg_shift"),
+            ])
+
+    def test_omg_shift_duplicate_payload_rows_are_ignored(self):
+        shift = {"employee": "Иванов Иван", "start": "09:00", "end": "15:00"}
+        response = unittest.mock.Mock()
+        response.json.return_value = {
+            "ok": True,
+            "locations": [{"title": "Марьино", "shifts": [shift, shift.copy()]}],
+        }
+        with patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
+                patch.object(self.kpi.requests, "get", return_value=response):
+            rows = self.kpi.fetch_omg_shift_rows(datetime(2026, 7, 14))
+
+        self.assertEqual(len(rows), 15)
+        self.assertTrue(all(row[4] == 6.0 for row in rows))
 
 
 if __name__ == "__main__":

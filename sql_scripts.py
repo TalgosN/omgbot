@@ -182,7 +182,11 @@ GROUP BY
 
 shifts_ext='''
 SELECT 
-    *
+    shift_second_name,
+    shift_first_name,
+    dt_shift,
+    club,
+    dur
 FROM 
     shifts;
     '''
