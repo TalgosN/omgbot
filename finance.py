@@ -93,11 +93,11 @@ def is_difference_one_day(date_str1, date_str2):
 bdays_rate =500  
 ################################
 def define_goods():
-    response_goods_groups = requests.request("GET", f'https://api.aqsi.ru/pub/v2/GoodsCategory/list', headers=headers)
+    response_goods_groups = requests.request("GET", f'https://api.aqsi.ru/pub/v2/GoodsCategory/list', headers=headers, timeout=15)
 
     response_dict_goods_groups = response_goods_groups.json()
 
-    response_goods = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Goods/list', headers=headers)
+    response_goods = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Goods/list', headers=headers, timeout=15)
 
     response_goods = response_goods.json()
     
@@ -707,7 +707,7 @@ def check_cash (date_check):
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT club, amount FROM nal WHERE drep='%s'" % (db_date))
+    cur.execute("SELECT club, amount FROM nal WHERE drep=?", (db_date,))
     cash_by_admin = cur.fetchall()
     cur.close()
     conn.close()
@@ -1074,14 +1074,14 @@ def get_data_pay_report(date_start,date_end):
                 name = employ['full_name']
                 
                 cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, sum(amount) AS amount, club FROM double d LEFT JOIN users_new n on n.login = d.who LEFT JOIN shifts s on n.second_name = s.shift_second_name AND n.first_name = s.shift_first_name AND date(d.d_rep)=date(s.dt_shift) WHERE nameuser='%s' AND d_rep BETWEEN '%s' and '%s' GROUP BY club" % (employ['full_name'],datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'),datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
+                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, sum(amount) AS amount, club FROM double d LEFT JOIN users_new n on n.login = d.who LEFT JOIN shifts s on n.second_name = s.shift_second_name AND n.first_name = s.shift_first_name AND date(d.d_rep)=date(s.dt_shift) WHERE nameuser=? AND d_rep BETWEEN ? and ? GROUP BY club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
                 doubles = cur.fetchall()
                 cur.close()
                 
                 doubles_dict={}
                                 
                 cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, COUNT (DISTINCT b.id) as cnt, b.club FROM birthday b JOIN users_new n on n.login = b.who WHERE nameuser='%s' AND b.dt_rep BETWEEN '%s' and '%s' AND b.status = 'Одобрено' GROUP BY b.club" % (employ['full_name'],datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'),datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
+                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, COUNT (DISTINCT b.id) as cnt, b.club FROM birthday b JOIN users_new n on n.login = b.who WHERE nameuser=? AND b.dt_rep BETWEEN ? and ? AND b.status = 'Одобрено' GROUP BY b.club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
                 bdays = cur.fetchall()
                 cur.close()
 
@@ -1177,18 +1177,18 @@ def get_aqsi_data_silent(start_dt, end_dt):
     goods_to_group = {n['id']: n.get('group_id') for n in response_goods.get('rows', []) if 'id' in n}
     group_to_name = {b['id']: b['name'].strip() for b in response_dict_goods_groups if 'id' in b}
     
-    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers).json()
-    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers).json()
+    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers, timeout=15).json()
+    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers, timeout=15).json()
     
     params = {"filtered.beginDate": start_dt, "filtered.endDate": end_dt}
-    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params).json()
+    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
     
     if 'pages' not in response: return []
     
     data = []
     for j in range(response['pages']):
         params['page'] = j
-        page_resp = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params).json()
+        page_resp = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
         
         for i in page_resp.get('rows', []):
             try:

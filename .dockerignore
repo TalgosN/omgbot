@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+db/
+key/
+Reports/
+dump/
+data/photo/

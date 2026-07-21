@@ -28,6 +28,20 @@ CHATS = {
     "me": os.getenv("CHAT_ME")
 }
 
+def validate_config():
+    required = {
+        "TELEGRAM_API_KEY": TELEGRAM_API_KEY,
+        "SHIFTON_API_URL": SHIFTON_API_URL,
+        "SHIFTON_API_TOKEN": SHIFTON_API_TOKEN,
+        "CHAT_REPORTS": CHATS["reports"],
+        "CHAT_MAIN_GROUP": CHATS["main_group"],
+        "CHAT_REPAIR_EXTRA": CHATS["repair_extra"],
+        "CHAT_ME": CHATS["me"]
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(f"Не заданы обязательные переменные окружения: {', '.join(missing)}")
+
 ### Фразы
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PHRASES_PATH = os.path.join(BASE_DIR, "data", "phrases.json")
@@ -92,4 +106,3 @@ emojis={"roll":("⚡️","🦄","👻"),
 tags_main = '@grigorovda, @sermysh, @matveevanastya01'
 extra_tags={"Ремонт":"@RobinKruzo1",
             "Улучшение бота":"@talgos_n"}
-

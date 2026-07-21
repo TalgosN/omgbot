@@ -69,7 +69,7 @@ def change_nickname(message,bot):
         nick_name = message.text.strip()
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT * FROM users_new WHERE nick_name='%s'" % (nick_name))
+        cur.execute("SELECT * FROM users_new WHERE nick_name=?", (nick_name,))
         users = cur.fetchall()
         cur.close()
         conn.close()
@@ -99,7 +99,7 @@ def change_nickname_confirm( message, bot,nick_name):
         
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("UPDATE users_new SET nick_name='%s' WHERE chatid='%s'" % (nick_name, message.chat.id))
+        cur.execute("UPDATE users_new SET nick_name=? WHERE chatid=?", (nick_name, message.chat.id))
         conn.commit()
         cur.close()
         conn.close()
@@ -266,14 +266,14 @@ def update_all_tables(message):
     #define old login from chatid
     
     cur = conn.cursor()
-    cur.execute("SELECT login FROM users_new WHERE chatid = '%s' "% (chatid))
+    cur.execute("SELECT login FROM users_new WHERE chatid=?", (chatid,))
     logins=cur.fetchall()
     cur.close()
     old_login = logins[0][0]
     
     #users update 
     cur = conn.cursor()
-    cur.execute("UPDATE users_new SET login ='%s' WHERE login ='%s' " % (new_login,old_login))
+    cur.execute("UPDATE users_new SET login=? WHERE login=?", (new_login, old_login))
     conn.commit()
     cur.close()
     
@@ -281,14 +281,14 @@ def update_all_tables(message):
     
     for i in tables:
         cur = conn.cursor()
-        cur.execute("UPDATE '%s' SET who ='%s' WHERE who ='%s' " % (i,new_login,old_login))
+        cur.execute(f'UPDATE "{i}" SET who=? WHERE who=?', (new_login, old_login))
         conn.commit()
         cur.close()
     
     
     #openclose update 
     cur = conn.cursor()
-    cur.execute("UPDATE activity SET login ='%s' WHERE login ='%s' " % (new_login,old_login))
+    cur.execute("UPDATE activity SET login=? WHERE login=?", (new_login, old_login))
     conn.commit()
     cur.close()
     
