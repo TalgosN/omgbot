@@ -77,15 +77,38 @@ def read_ank_table():
     return df_combined
 
 def write_data(data, table, sheet):
+    rows = [list(row) for row in data]
+    row_width = len(rows[0]) if rows else 0
+    if any(len(row) != row_width for row in rows):
+        raise ValueError(f'Cannot write non-rectangular data to {table}/{sheet}')
+
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open(table)
     wks = sh.worksheet_by_title(sheet)
-    rng = wks.get_values(start='A2', end=f'F{wks.rows}', returnas='range')
-    rng.clear()
+    old_rows = wks.rows
 
-    list1 = [list(row) for row in data]
-    if len(list1) > 0:
-        wks.update_values('A2', list1)
+    if rows:
+        # extend=True не даёт выгрузке оборваться, когда данных стало больше,
+        # чем строк в текущей сетке Google Sheets.
+        wks.update_values('A2', rows, extend=True)
+
+        last_data_row = len(rows) + 1
+        if row_width < 6:
+            start_column = chr(ord('A') + row_width)
+            wks.get_values(
+                start=f'{start_column}2',
+                end=f'F{last_data_row}',
+                returnas='range',
+            ).clear()
+
+        if old_rows > last_data_row:
+            wks.get_values(
+                start=f'A{last_data_row + 1}',
+                end=f'F{old_rows}',
+                returnas='range',
+            ).clear()
+    elif old_rows >= 2:
+        wks.get_values(start='A2', end=f'F{old_rows}', returnas='range').clear()
 
 def fetch_omg_shift_rows(start_date):
     """Сначала целиком получает окно расписания, не изменяя локальную БД."""

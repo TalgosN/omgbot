@@ -4,17 +4,29 @@ WITH anki as ( -------времянка по анкетам
 
 	WITH base as (
 
-	SELECT  dt_shift,
-			club, 
-			CAST(COUNT(DISTINCT shift_second_name|| ' '|| shift_first_name) AS FLOAT) as rn
-	FROM shifts 
+	SELECT  date(substr(sh.dt_shift, 1, 10)) as dt_shift,
+			sh.club,
+			CAST(COUNT(DISTINCT COALESCE(
+				NULLIF(lower(ns.login), ''),
+				NULLIF(lower(sh.shift_login), ''),
+				lower(sh.shift_second_name|| ' '|| sh.shift_first_name)
+			)) AS FLOAT) as rn
+	FROM shifts sh
+	LEFT JOIN users_new ns ON (
+		sh.shift_login IS NOT NULL
+		AND lower(sh.shift_login) = lower(ns.login)
+	) OR (
+		sh.shift_login IS NULL
+		AND sh.shift_second_name = ns.second_name
+		AND sh.shift_first_name = ns.first_name
+	)
 
-	GROUP BY dt_shift,
-			 club 
+	GROUP BY date(substr(sh.dt_shift, 1, 10)),
+			 sh.club
 )
 
 		SELECT ns.login,
-			   sh.dt_shift,
+			   date(substr(sh.dt_shift, 1, 10)) as dt_shift,
 			   sh.club,
 			   coalesce(COUNT(DISTINCT ank.ID) *1.0 /b.rn,0) as cnt_ank
 
@@ -33,18 +45,16 @@ WITH anki as ( -------времянка по анкетам
 		
 
 		LEFT JOIN anketi ank 
-			ON date(sh.dt_shift)=date(ank.dt_ank) 
+			ON date(substr(sh.dt_shift, 1, 10))=date(substr(ank.dt_ank, 1, 10))
 			AND sh.club=ank.club_ank
 
 		LEFT JOIN base b
-			ON date(b.dt_shift)=date(ank.dt_ank) 
-			AND b.club=ank.club_ank
+			ON b.dt_shift=date(substr(sh.dt_shift, 1, 10))
+			AND b.club=sh.club
 			
 		GROUP BY 	ns.login,  
-					sh.dt_shift,
-					sh.club, 
-					sh.shift_second_name,
-                    sh.shift_first_name
+					date(substr(sh.dt_shift, 1, 10)),
+					sh.club
 
 
 )
@@ -171,7 +181,7 @@ GROUP BY	date(rv.d_rep) ,
 
 shifts='''
 SELECT 
-    DATE(sh.dt_shift, 'start of month', '+1 month', '-1 day') AS last_day_of_month,
+    DATE(substr(sh.dt_shift, 1, 10), 'start of month', '+1 month', '-1 day') AS last_day_of_month,
     ns.login AS s_name,
   sum(sh.dur) as cnt_h, --часов
     SUM(ROUND(dur / 6, 3)) AS total_cnt_smen --к-во смен
@@ -216,17 +226,29 @@ WITH all_records AS (
 	
 		WITH base as (
 	
-		SELECT  dt_shift,
-				club, 
-				CAST(COUNT(DISTINCT shift_second_name|| ' '|| shift_first_name) AS FLOAT) as rn
-		FROM shifts 
-	
-		GROUP BY dt_shift,
-				 club 
+		SELECT  date(substr(sh.dt_shift, 1, 10)) as dt_shift,
+				sh.club,
+				CAST(COUNT(DISTINCT COALESCE(
+					NULLIF(lower(ns.login), ''),
+					NULLIF(lower(sh.shift_login), ''),
+					lower(sh.shift_second_name|| ' '|| sh.shift_first_name)
+				)) AS FLOAT) as rn
+		FROM shifts sh
+		LEFT JOIN users_new ns ON (
+			sh.shift_login IS NOT NULL
+			AND lower(sh.shift_login) = lower(ns.login)
+		) OR (
+			sh.shift_login IS NULL
+			AND sh.shift_second_name = ns.second_name
+			AND sh.shift_first_name = ns.first_name
+		)
+
+		GROUP BY date(substr(sh.dt_shift, 1, 10)),
+				 sh.club
 	)
 	
 			SELECT ns.login,
-				   sh.dt_shift,
+				   date(substr(sh.dt_shift, 1, 10)) as dt_shift,
 				   sh.club,
 				   coalesce(COUNT(DISTINCT ank.ID) *1.0 /b.rn,0) as cnt_ank
 	
@@ -245,18 +267,16 @@ WITH all_records AS (
 			
 	
 			LEFT JOIN anketi ank 
-				ON date(sh.dt_shift)=date(ank.dt_ank) 
+				ON date(substr(sh.dt_shift, 1, 10))=date(substr(ank.dt_ank, 1, 10))
 				AND sh.club=ank.club_ank
 	
 			LEFT JOIN base b
-				ON date(b.dt_shift)=date(ank.dt_ank) 
-				AND b.club=ank.club_ank
+				ON b.dt_shift=date(substr(sh.dt_shift, 1, 10))
+				AND b.club=sh.club
 				
 			GROUP BY 	ns.login,  
-						sh.dt_shift,
-						sh.club, 
-						sh.shift_second_name,
-	                    sh.shift_first_name
+						date(substr(sh.dt_shift, 1, 10)),
+						sh.club
 	)
 	----ДР
 	
