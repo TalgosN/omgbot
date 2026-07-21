@@ -79,6 +79,34 @@ class AdminHealthTest(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["timeout"], 5)
         google.open.assert_called_once_with("KPI OMG VR")
 
+    def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
+        def employee(name, shifts, total, weighted, rank):
+            row = [''] * 27
+            row[1] = name
+            row[2] = shifts
+            row[20] = total
+            row[21] = weighted
+            row[24] = rank
+            return row
+
+        values = [['', '', '21.7.2026']] + [[] for _ in range(6)] + [
+            employee('Без смен', '0', '1%', '1%', '5'),
+            employee('Четвёртый', '10', '50%', '40%', '1'),
+            employee('Первый', '8', '10%', '8%', '4'),
+            employee('Третий', '9', '30%', '25%', '2'),
+            employee('Второй', '7', '20%', '15%', '3'),
+        ]
+
+        reports = self.admin.build_monthly_kpi_report(values)
+        report = '\n'.join(reports)
+
+        self.assertNotIn('Без смен', report)
+        self.assertEqual(report.count('🔴'), 3)
+        self.assertNotIn('Четвёртый', report)
+        self.assertLess(report.index('Первый'), report.index('Второй'))
+        self.assertLess(report.index('Второй'), report.index('Третий'))
+        self.assertNotIn('—', report)
+
 
 if __name__ == "__main__":
     unittest.main()

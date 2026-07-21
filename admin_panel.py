@@ -1,4 +1,5 @@
 import pygsheets
+import html
 import json
 import os
 from telebot import *
@@ -91,6 +92,9 @@ def admin_func_handler(message, bot):
 
     elif a == '🩺 Статус систем':
         handle_system_health(message, bot)
+
+    elif a == '📊 KPI сотрудников':
+        handle_monthly_kpi_report(message, bot)
         
     elif a == '⬅️ Вернуться':
         from menu import hello
@@ -135,6 +139,84 @@ def admin_func_handler(message, bot):
     else:
         from menu import admin_menu
         admin_menu(message, bot)
+
+
+def parse_report_number(value):
+    normalized = str(value or '').replace('%', '').replace(' ', '').replace(',', '.').strip()
+    try:
+        return float(normalized)
+    except ValueError:
+        return 0.0
+
+
+def build_monthly_kpi_report(values):
+    selected_date = values[0][2] if values and len(values[0]) > 2 else 'текущий месяц'
+    employees = []
+    for row in values[7:]:
+        name = str(row[1]).strip() if len(row) > 1 else ''
+        shifts = row[2] if len(row) > 2 and row[2] not in ('', None) else '0'
+        if not name or parse_report_number(shifts) <= 0:
+            continue
+        total_pct = row[20] if len(row) > 20 and row[20] not in ('', None) else '0%'
+        weighted_pct = row[21] if len(row) > 21 and row[21] not in ('', None) else '0%'
+        rank = row[24] if len(row) > 24 and row[24] not in ('', None) else 'нет'
+        employees.append({
+            'name': name,
+            'shifts': shifts,
+            'total_pct': total_pct,
+            'weighted_pct': weighted_pct,
+            'rank': rank,
+            'sort_pct': parse_report_number(total_pct),
+        })
+
+    employees.sort(key=lambda employee: (employee['sort_pct'], employee['name'].lower()))
+    header = (
+        '📊 <b>KPI сотрудников за месяц</b>\n'
+        f'📅 <i>Расчётная дата: {html.escape(str(selected_date))}</i>\n'
+        f'👥 Сотрудников со сменами: <b>{len(employees)}</b>'
+    )
+    if not employees:
+        return [f'{header}\n\nℹ️ За выбранный месяц нет сотрудников со сменами.']
+
+    weakest = employees[:3]
+
+    def employee_line(employee):
+        return (
+            f'🔴 <b>{html.escape(str(employee["name"]))}</b>: '
+            f'KPI <b>{html.escape(str(employee["total_pct"]))}</b> '
+            f'<i>({html.escape(str(employee["weighted_pct"]))} взв.)</i> | '
+            f'🕒 {html.escape(str(employee["shifts"]))} | '
+            f'🥇 {html.escape(str(employee["rank"]))}'
+        )
+
+    return [
+        f'{header}\n\n🔻 <b>Три самых слабых результата</b>\n\n'
+        + '\n'.join(employee_line(employee) for employee in weakest)
+    ]
+
+
+def handle_monthly_kpi_report(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    wait_message = bot.send_message(message.chat.id, '⏳ Собираю KPI сотрудников...')
+    try:
+        client = pygsheets.authorize(service_file=KEY_FILE)
+        spreadsheet = client.open('KPI OMG VR')
+        values = spreadsheet.worksheet_by_title('Главный').get_values(
+            start='A1', end='AA60', returnas='matrix'
+        )
+        reports = build_monthly_kpi_report(values)
+        bot.delete_message(message.chat.id, wait_message.message_id)
+        for report in reports:
+            bot.send_message(message.chat.id, report, parse_mode='HTML')
+    except Exception as exc:
+        bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=wait_message.message_id,
+            text=f'❌ Не удалось собрать KPI сотрудников: {exc}',
+        )
+    from menu import admin_menu
+    admin_menu(message, bot)
 
 
 ROLE_BUTTONS = {

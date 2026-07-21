@@ -130,6 +130,36 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.assertIn('Проверить ответ', messages[103])
         self.assertNotIn(104, messages)
 
+    def test_first_solution_has_no_mentions_in_main_chat(self):
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchone.return_value = {
+            'feedback': '',
+            'title': 'Проверить кресло',
+            'type': 'Вопрос',
+            'club': 'Прокшино',
+        }
+        bot = Mock()
+        message = Mock(text='Да', chat=Mock(id=123), from_user=Mock(id=123))
+        self.taskboard.CHATS = {
+            'reports': -1,
+            'main_group': -2,
+            'repair_extra': -3,
+        }
+        self.taskboard.types = types.SimpleNamespace(ReplyKeyboardRemove=lambda: None)
+
+        with patch.object(self.taskboard.sqlite3, 'connect', return_value=connection), \
+                patch.object(self.taskboard, 'show_active_tasks'):
+            self.taskboard.change_task(message, 1, 'Всё исправлено', bot)
+
+        main_message = next(
+            call.args[1]
+            for call in bot.send_message.call_args_list
+            if call.args[0] == self.taskboard.CHATS['main_group']
+        )
+        self.assertNotIn('@', main_message)
+        self.assertTrue(main_message.startswith('👀 <b>Решение'))
+
 
 if __name__ == '__main__':
     unittest.main()

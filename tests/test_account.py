@@ -153,6 +153,54 @@ class AccountTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.account.validate_profile_value('phone', '89990000000')
 
+    def test_other_employee_statistics_button_is_visible_to_managers(self):
+        message = Mock(chat=Mock(id=123), from_user=Mock(id=123))
+        bot = Mock()
+        keyboard = Mock()
+        bot.send_message.return_value = Mock()
+
+        with patch.object(self.account, 'require_role', return_value={'status': 2}), \
+                patch.object(
+                    self.account.telebot.types,
+                    'ReplyKeyboardMarkup',
+                    return_value=keyboard,
+                    create=True,
+                ):
+            self.account.account_settings(message, bot)
+
+        self.assertIn(self.account.OTHER_STATS_BUTTON, keyboard.add.call_args.args)
+
+    def test_other_employee_statistics_button_is_hidden_from_employees(self):
+        message = Mock(chat=Mock(id=123), from_user=Mock(id=123))
+        bot = Mock()
+        keyboard = Mock()
+        bot.send_message.return_value = Mock()
+
+        with patch.object(self.account, 'require_role', return_value={'status': 0}), \
+                patch.object(
+                    self.account.telebot.types,
+                    'ReplyKeyboardMarkup',
+                    return_value=keyboard,
+                    create=True,
+                ):
+            self.account.account_settings(message, bot)
+
+        self.assertNotIn(self.account.OTHER_STATS_BUTTON, keyboard.add.call_args.args)
+
+    def test_other_employee_monthly_statistics_uses_selected_login(self):
+        message = Mock(text='📊 За месяц')
+        bot = Mock()
+
+        with patch.object(self.account, 'require_role', return_value={'status': 2}), \
+                patch.object(self.account, 'send_monthly_stats') as send_stats, \
+                patch.object(self.account, 'account_settings') as account_settings:
+            self.account.other_stats_show(message, bot, '@employee', 'Сотрудник')
+
+        send_stats.assert_called_once_with(
+            message, bot, '@employee', 'Сотрудник'
+        )
+        account_settings.assert_called_once_with(message, bot)
+
     def test_main_sheet_kpi_is_mapped_by_telegram_login(self):
         employees_sheet = Mock()
         employees_sheet.get_values.return_value = [['Ник', '@employee']]
@@ -181,6 +229,71 @@ class AccountTest(unittest.TestCase):
         self.assertEqual(result['rank'], '2')
         self.assertEqual(result['birthdays_month'], '5')
         self.assertEqual(result['birthdays_week'], '2')
+
+    def test_monthly_kpi_uses_approved_telegram_format(self):
+        data = {
+            'nickname': 'Никита <admin>',
+            'date': '21.7.2026',
+            'shifts': '38',
+            'weighted_shifts': '57',
+            'reviews': '1',
+            'reviews_pct': '11%',
+            'forms': '32',
+            'forms_pct': '85%',
+            'extensions': '1',
+            'extensions_pct': '11%',
+            'certificates': '0',
+            'certificates_pct': '0%',
+            'subscriptions': '0',
+            'subscriptions_pct': '0%',
+            'bs': '5',
+            'bs_pct': '50%',
+            'initiatives': '3',
+            'initiatives_pct': '30%',
+            'stream': 'FALSE',
+            'penalties': '0',
+            'total_pct': '38%',
+            'weighted_pct': '26%',
+            'amount': '2 020 ₽',
+            'zone': '◉',
+            'rank': '8',
+            'birthdays_month': '0',
+            'birthdays_week': '0',
+        }
+
+        text = self.account.format_main_kpi(
+            data,
+            {'Автосимы': 1.5, 'Активации': 2, 'Двойные часы': 3},
+        )
+
+        self.assertIn('📊 <b>KPI за июль 2026</b>', text)
+        self.assertIn('👤 <b>Никита &lt;admin&gt;</b>', text)
+        self.assertIn('🕒 Смены: <b>38</b> <i>(57 взв.)</i>', text)
+        self.assertIn('🎯 Итого KPI: <b>38%</b> <i>(26% взв.)</i>', text)
+        self.assertIn('🚘 Автосимы: <b>1.5</b>', text)
+        for removed_label in ('БС:', 'Сумма:', 'Трансляция:', 'Зона:', '—'):
+            self.assertNotIn(removed_label, text)
+
+    def test_all_time_format_has_sections_and_omits_bs(self):
+        stats = {
+            'Часы': 228,
+            'Смены': 38,
+            'Отзывы': 1,
+            'Анкеты': 32,
+            'БС': 7,
+            'Автосимы': 2,
+        }
+
+        text = self.account.format_database_stats(
+            stats, '⭐ Статистика за всё время', 'Никита'
+        )
+
+        self.assertIn('<b>⭐ Статистика за всё время</b>', text)
+        self.assertIn('⏱️ <b>Рабочее время</b>', text)
+        self.assertIn('📈 <b>Показатели KPI</b>', text)
+        self.assertIn('🚀 <b>Дополнительные показатели</b>', text)
+        self.assertNotIn('БС:', text)
+        self.assertNotIn('—', text)
 
     def test_database_statistics_include_history_and_new_kpi_tables(self):
         conn = sqlite3.connect(self.db_path)

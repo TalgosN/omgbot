@@ -522,23 +522,12 @@ def change_task(message, task_id, answer, bot):
         bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
         
         # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
-        clubs = get_clubs()
-        club_tag = clubs[club_task]['tag']
         t_type_low = task_type.lower()
-        
-        mentions = ""
-        if task_type == 'Ремонт':
-            extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
-            mentions = f"{extra} {club_tag}"
-        elif task_type == 'Улучшение бота':
-            mentions = extra_tags[task_type] 
-        else:
-            mentions = club_tag
 
         msg_full = (f"👀 <b>Решение по проблеме-{t_type_low}:</b>\n{title}\n\n"
                     f"💬 <b>Ответ:</b>\n{answer}")
                     
-        msg_short = (f"{mentions}\n\n👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n"
+        msg_short = (f"👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n"
                      f"💬 <i>{answer}</i>\n\n"
                      f"👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>")
 

@@ -1,3 +1,4 @@
+import html
 import re
 import sqlite3
 from datetime import date, datetime
@@ -9,12 +10,13 @@ import telebot
 import sql_scripts
 from constants import funclist_acc
 from sheets import tables, update_status, update_table, update_table_open, update_users
-from permissions import ROLE_EMPLOYEE, require_role
+from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, require_role
 
 
 DB_PATH = 'db/omgbot.sql'
 BACK_BUTTON = '⬅️ Вернуться'
 EDIT_BACK_BUTTON = '⬅️ В аккаунт'
+OTHER_STATS_BUTTON = '🔎 Статистика сотрудника'
 PROFILE_FIELDS = {
     '💬 Ник': 'nick_name',
     '🎂 День рождения': 'bday',
@@ -92,6 +94,20 @@ def get_user_by_chat_id(chat_id):
         return conn.execute(
             'SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
             (chat_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_by_login(login):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            '''SELECT * FROM users_new
+               WHERE lower(login)=lower(?) AND status>=?
+               ORDER BY ID LIMIT 1''',
+            (normalize_login(login), ROLE_EMPLOYEE),
         ).fetchone()
     finally:
         conn.close()
@@ -192,10 +208,14 @@ def sync_google_dependencies(full=False):
 
 
 def account_settings(message, bot):
-    if not require_role(message, bot, ROLE_EMPLOYEE):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(*funclist_acc)
+    buttons = list(funclist_acc)
+    if int(user['status']) >= ROLE_MANAGER:
+        buttons.insert(-1, OTHER_STATS_BUTTON)
+    markup.add(*buttons)
     sent = bot.send_message(
         message.chat.id,
         'Здесь можно посмотреть профиль, синхронизировать имя с OMG Shift и изменить личные данные.',
@@ -217,6 +237,8 @@ def func_acc(message, bot):
         sync_omg_identity_handler(message, bot)
     elif message.text == '📊 Статистика':
         stats_handler(message, bot)
+    elif message.text == OTHER_STATS_BUTTON:
+        other_stats_prompt(message, bot)
     elif message.text == BACK_BUTTON:
         returnback(message, bot)
     else:
@@ -419,6 +441,65 @@ def stats_show(message, bot):
         stats_handler(message, bot)
 
 
+def other_stats_prompt(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+    markup.add(EDIT_BACK_BUTTON)
+    sent = bot.send_message(
+        message.chat.id,
+        '🔎 Введи Telegram username сотрудника, например @username:',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(sent, other_stats_select_user, bot)
+
+
+def other_stats_select_user(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if message.text == EDIT_BACK_BUTTON:
+        account_settings(message, bot)
+        return
+    target = get_user_by_login(message.text)
+    if not target:
+        bot.send_message(message.chat.id, 'Сотрудник с таким Telegram username не найден.')
+        other_stats_prompt(message, bot)
+        return
+
+    display_name = target['nick_name'] or target['first_name'] or target['login']
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add('📊 За месяц', '⭐ За всё время', EDIT_BACK_BUTTON)
+    sent = bot.send_message(
+        message.chat.id,
+        f'📊 Какую статистику показать для {target["login"]}?',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(
+        sent,
+        other_stats_show,
+        bot,
+        target['login'],
+        display_name,
+    )
+
+
+def other_stats_show(message, bot, login, display_name):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if message.text == EDIT_BACK_BUTTON:
+        account_settings(message, bot)
+        return
+    if message.text == '📊 За месяц':
+        send_monthly_stats(message, bot, login, display_name)
+    elif message.text == '⭐ За всё время':
+        send_all_time_stats(message, bot, login, display_name)
+    else:
+        bot.send_message(message.chat.id, 'Выбери период с помощью кнопок.')
+        other_stats_prompt(message, bot)
+        return
+    account_settings(message, bot)
+
+
 def get_main_kpi(login):
     client = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     spreadsheet = client.open('KPI OMG VR')
@@ -465,7 +546,7 @@ def get_main_kpi(login):
         'weighted_pct': cell(21),
         'amount': cell(22),
         'zone': cell(23, '—'),
-        'rank': cell(24, '—'),
+        'rank': cell(24, 'нет'),
         'birthdays_month': cell(25),
         'birthdays_week': cell(26),
     }
@@ -508,7 +589,9 @@ def get_database_stats(login, start=None, end=None):
             shift_params = [login]
         shift_date_filter = ''
         if start and end:
-            shift_date_filter = ' AND date(dt_shift) BETWEEN date(?) AND date(?)'
+            shift_date_filter = (
+                ' AND date(substr(dt_shift, 1, 10)) BETWEEN date(?) AND date(?)'
+            )
             shift_params.extend([start, end])
         shift_row = conn.execute(
             f"SELECT COALESCE(SUM(dur),0), COALESCE(SUM(dur)/6.0,0) FROM shifts WHERE {shift_identity}{shift_date_filter}",
@@ -549,40 +632,136 @@ def format_number(value):
         return str(value)
 
 
-def format_main_kpi(data):
+def escape_html(value):
+    return html.escape(str(value))
+
+
+def format_report_date(value):
+    raw_value = str(value or '').strip()
+    for date_format in ('%d.%m.%Y', '%Y-%m-%d'):
+        try:
+            parsed = datetime.strptime(raw_value, date_format)
+            months = (
+                'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+            )
+            return f'{months[parsed.month - 1]} {parsed.year}', parsed.strftime('%d.%m.%Y')
+        except ValueError:
+            continue
+    return 'текущий месяц', raw_value
+
+
+def format_main_kpi(data, extras=None):
+    extras = extras or {}
+    period, report_date = format_report_date(data['date'])
     return (
-        f'📊 KPI: {data["nickname"]}\n'
-        f'Расчётная дата: {data["date"]}\n\n'
-        f'Смены: {data["shifts"]} (взвешенные: {data["weighted_shifts"]})\n'
-        f'Отзывы: {data["reviews"]} — {data["reviews_pct"]}\n'
-        f'Анкеты: {data["forms"]} — {data["forms_pct"]}\n'
-        f'Продления: {data["extensions"]} — {data["extensions_pct"]}\n'
-        f'Сертификаты: {data["certificates"]} — {data["certificates_pct"]}\n'
-        f'Абонементы: {data["subscriptions"]} — {data["subscriptions_pct"]}\n'
-        f'БС: {data["bs"]} — {data["bs_pct"]}\n'
-        f'Инициативы: {data["initiatives"]} — {data["initiatives_pct"]}\n'
-        f'Трансляция: {data["stream"]}\n'
-        f'Штрафы: {data["penalties"]}\n\n'
-        f'Итого: {data["total_pct"]}\n'
-        f'Взвешенный балл: {data["weighted_pct"]}\n'
-        f'Сумма: {data["amount"]}\n'
-        f'Зона: {data["zone"]}\n'
-        f'Рейтинг: {data["rank"]}\n'
-        f'ДР за месяц: {data["birthdays_month"]}\n'
-        f'ДР за неделю: {data["birthdays_week"]}'
+        f'📊 <b>KPI за {escape_html(period)}</b>\n'
+        f'👤 <b>{escape_html(data["nickname"])}</b>\n'
+        f'📅 <i>Расчётная дата: {escape_html(report_date)}</i>\n\n'
+        f'📈 <b>Основные показатели</b>\n\n'
+        f'🕒 Смены: <b>{escape_html(data["shifts"])}</b> '
+        f'<i>({escape_html(data["weighted_shifts"])} взв.)</i>\n'
+        f'⭐ Отзывы: <b>{escape_html(data["reviews"])}</b> '
+        f'<i>({escape_html(data["reviews_pct"])})</i>\n'
+        f'📝 Анкеты: <b>{escape_html(data["forms"])}</b> '
+        f'<i>({escape_html(data["forms_pct"])})</i>\n'
+        f'🔄 Продления: <b>{escape_html(data["extensions"])}</b> '
+        f'<i>({escape_html(data["extensions_pct"])})</i>\n'
+        f'🎫 Сертификаты: <b>{escape_html(data["certificates"])}</b> '
+        f'<i>({escape_html(data["certificates_pct"])})</i>\n'
+        f'💳 Абонементы: <b>{escape_html(data["subscriptions"])}</b> '
+        f'<i>({escape_html(data["subscriptions_pct"])})</i>\n'
+        f'💡 Инициативы: <b>{escape_html(data["initiatives"])}</b> '
+        f'<i>({escape_html(data["initiatives_pct"])})</i>\n'
+        f'⚠️ Штрафы: <b>{escape_html(data["penalties"])}</b>\n\n'
+        f'🏆 <b>Результат</b>\n\n'
+        f'🎯 Итого KPI: <b>{escape_html(data["total_pct"])}</b> '
+        f'<i>({escape_html(data["weighted_pct"])} взв.)</i>\n'
+        f'🥇 Рейтинг: <b>{escape_html(data["rank"])}</b>\n'
+        f'🎂 ДР за месяц: <b>{escape_html(data["birthdays_month"])}</b>\n'
+        f'🗓️ ДР за неделю: <b>{escape_html(data["birthdays_week"])}</b>\n\n'
+        f'🚀 <b>Дополнительные показатели</b>\n\n'
+        f'🚘 Автосимы: <b>{escape_html(format_number(extras.get("Автосимы", 0)))}</b>\n'
+        f'⚡ Активации: <b>{escape_html(format_number(extras.get("Активации", 0)))}</b>\n'
+        f'⏱️ Двойные часы: <b>{escape_html(format_number(extras.get("Двойные часы", 0)))}</b>\n\n'
+        f'ℹ️ <i>В скобках указан процент выполнения. Пометка «взв.» означает '
+        f'значение с учётом коэффициентов.</i>'
     )
 
 
-def format_database_stats(stats, title):
-    preferred_order = [
-        'Часы', 'Смены', 'Отзывы', 'Анкеты', 'Продления', 'Сертификаты',
-        'Абонементы', 'БС', 'Инициативы', 'ДР', 'Штрафы',
-        'Автосимы', 'Активации', 'Двойные часы',
-    ]
-    lines = [title, '']
-    for name in preferred_order:
-        lines.append(f'{name}: {format_number(stats.get(name, 0))}')
+def format_database_stats(stats, title, nickname=None):
+    lines = [f'<b>{escape_html(title)}</b>']
+    if nickname:
+        lines.extend([f'👤 <b>{escape_html(nickname)}</b>'])
+    lines.extend([
+        '',
+        '⏱️ <b>Рабочее время</b>',
+        '',
+        f'🕒 Часы: <b>{escape_html(format_number(stats.get("Часы", 0)))}</b>',
+        f'📆 Смены: <b>{escape_html(format_number(stats.get("Смены", 0)))}</b>',
+        '',
+        '📈 <b>Показатели KPI</b>',
+        '',
+    ])
+    kpi_icons = {
+        'Отзывы': '⭐',
+        'Анкеты': '📝',
+        'Продления': '🔄',
+        'Сертификаты': '🎫',
+        'Абонементы': '💳',
+        'Инициативы': '💡',
+        'ДР': '🎂',
+        'Штрафы': '⚠️',
+    }
+    for name, icon in kpi_icons.items():
+        label = 'Дни рождения' if name == 'ДР' else name
+        lines.append(
+            f'{icon} {label}: <b>{escape_html(format_number(stats.get(name, 0)))}</b>'
+        )
+    lines.extend([
+        '',
+        '🚀 <b>Дополнительные показатели</b>',
+        '',
+        f'🚘 Автосимы: <b>{escape_html(format_number(stats.get("Автосимы", 0)))}</b>',
+        f'⚡ Активации: <b>{escape_html(format_number(stats.get("Активации", 0)))}</b>',
+        f'⏱️ Двойные часы: <b>{escape_html(format_number(stats.get("Двойные часы", 0)))}</b>',
+    ])
     return '\n'.join(lines)
+
+
+def send_monthly_stats(message, bot, login, display_name):
+    try:
+        data = get_main_kpi(login)
+        now = datetime.now(pytz.timezone('Europe/Moscow'))
+        start = now.replace(day=1).strftime('%Y-%m-%d')
+        end = now.strftime('%Y-%m-%d')
+        extras = get_database_stats(login, start, end)
+        text = format_main_kpi(data, extras)
+    except Exception as exc:
+        now = datetime.now(pytz.timezone('Europe/Moscow'))
+        start = now.replace(day=1).strftime('%Y-%m-%d')
+        end = now.strftime('%Y-%m-%d')
+        stats = get_database_stats(login, start, end)
+        text = format_database_stats(
+            stats,
+            '📊 Статистика за текущий месяц',
+            display_name,
+        )
+        text += (
+            '\n\n⚠️ <i>Глобальный KPI из Google Sheets временно недоступен: '
+            f'{escape_html(exc)}</i>'
+        )
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
+
+
+def send_all_time_stats(message, bot, login, display_name):
+    try:
+        update_status()
+    except Exception:
+        pass
+    stats = get_database_stats(login)
+    text = format_database_stats(stats, '⭐ Статистика за всё время', display_name)
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
 
 
 def stats_acc(message, bot):
@@ -592,27 +771,8 @@ def stats_acc(message, bot):
     if not user or not user['login']:
         bot.send_message(message.chat.id, 'Сначала синхронизируй профиль с OMG Shift.')
         return
-    try:
-        data = get_main_kpi(user['login'])
-        text = format_main_kpi(data)
-        now = datetime.now(pytz.timezone('Europe/Moscow'))
-        start = now.replace(day=1).strftime('%Y-%m-%d')
-        end = now.strftime('%Y-%m-%d')
-        extras = get_database_stats(user['login'], start, end)
-        text += (
-            '\n\nДополнительные показатели из БД:\n'
-            f'Автосимы: {format_number(extras.get("Автосимы", 0))}\n'
-            f'Активации: {format_number(extras.get("Активации", 0))}\n'
-            f'Двойные часы: {format_number(extras.get("Двойные часы", 0))}'
-        )
-    except Exception as exc:
-        now = datetime.now(pytz.timezone('Europe/Moscow'))
-        start = now.replace(day=1).strftime('%Y-%m-%d')
-        end = now.strftime('%Y-%m-%d')
-        stats = get_database_stats(user['login'], start, end)
-        text = format_database_stats(stats, '📊 Статистика за текущий месяц')
-        text += f'\n\nГлобальный KPI из Google Sheets временно недоступен: {exc}'
-    bot.send_message(message.chat.id, text)
+    display_name = user['nick_name'] or user['first_name'] or user['login']
+    send_monthly_stats(message, bot, user['login'], display_name)
 
 
 def statsall_acc(message, bot):
@@ -622,9 +782,5 @@ def statsall_acc(message, bot):
     if not user or not user['login']:
         bot.send_message(message.chat.id, 'Сначала синхронизируй профиль с OMG Shift.')
         return
-    try:
-        update_status()
-    except Exception:
-        pass
-    stats = get_database_stats(user['login'])
-    bot.send_message(message.chat.id, format_database_stats(stats, '⭐ Статистика за всё время'))
+    display_name = user['nick_name'] or user['first_name'] or user['login']
+    send_all_time_stats(message, bot, user['login'], display_name)
