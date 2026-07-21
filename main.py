@@ -313,6 +313,41 @@ def create_tables_KPI():
     conn.close()
 
 
+def migrate_callcenter_name():
+    """Переименовывает сохранённые значения клуба без удаления истории."""
+    club_columns = (
+        ('tasks', 'club'),
+        ('activity', 'club'),
+        ('nal', 'club'),
+        ('consumables', 'club'),
+        ('consumables_history', 'club'),
+        ('afterparty', 'club'),
+        ('birthday', 'club'),
+        ('initiative', 'club'),
+        ('shifts', 'club'),
+        ('anketi', 'club_ank'),
+    )
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            for table, column in club_columns:
+                if not conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone():
+                    continue
+                columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+                if column not in columns:
+                    continue
+                conn.execute(
+                    f'''UPDATE "{table}" SET "{column}"=?
+                        WHERE lower(trim(CAST("{column}" AS TEXT)))=lower(?)''',
+                    ('Коллцентр', 'КЦ'),
+                )
+    finally:
+        conn.close()
+
+
 
 
 def define_name(message):
@@ -383,6 +418,7 @@ Indexes of users
 create_tables()
 initialize_permissions_schema()
 create_tables_KPI()
+migrate_callcenter_name()
 
 
 

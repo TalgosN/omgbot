@@ -47,6 +47,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PHRASES_PATH = os.path.join(BASE_DIR, "data", "phrases.json")
 CLUBS_PATH = os.path.join(BASE_DIR, "data", "clubs.json")
 
+def migrate_callcenter_config():
+    """Один раз переименовывает клуб в локальном конфиге сервера."""
+    try:
+        with open(CLUBS_PATH, 'r', encoding='utf-8') as file:
+            clubs = json.load(file)
+        if 'КЦ' not in clubs or 'Коллцентр' in clubs:
+            return
+        callcenter = clubs.pop('КЦ')
+        if callcenter.get('acc_name') == 'КЦ':
+            callcenter['acc_name'] = 'Коллцентр'
+        clubs['Коллцентр'] = callcenter
+        with open(CLUBS_PATH, 'w', encoding='utf-8') as file:
+            json.dump(clubs, file, ensure_ascii=False, indent=2)
+    except (OSError, ValueError, TypeError) as error:
+        print(f'Ошибка переименования КЦ в clubs.json: {error}')
+
+
+migrate_callcenter_config()
+
 with open(PHRASES_PATH, "r", encoding="utf-8") as f:
     TEXTS = json.load(f)
 

@@ -81,7 +81,7 @@ def check_club(message, a, bot):
     btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
     
     # Кнопка 2: Тот самый "СКИП" (Ручной выбор)
-    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для КЦ / GPS глючит)")
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для Коллцентра / GPS глючит)")
     
     markup.add(btn_geo, btn_skip, "Вернуться")
     
@@ -103,7 +103,7 @@ def geo_router(message, a, tooearly, bot):
 
     # Если нажали кнопку "Выбрать из списка"
     # (Текст должен совпадать буква в букву с тем, что в check_club!)
-    if message.text == "📝 Выбрать из списка (Для КЦ / GPS глючит)":
+    if message.text == "📝 Выбрать из списка (Для Коллцентра / GPS глючит)":
         manual_club_selection(message, a, tooearly, bot)
         return
 
@@ -114,7 +114,7 @@ def geo_router(message, a, tooearly, bot):
     
     markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
     btn_geo = telebot.types.KeyboardButton(text="📍 Я на месте (Авто-поиск)", request_location=True)
-    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для КЦ / GPS глючит)")
+    btn_skip = telebot.types.KeyboardButton(text="📝 Выбрать из списка (Для Коллцентра / GPS глючит)")
     markup.add(btn_geo, btn_skip, "Вернуться")
     
     bot.send_message(message.chat.id, "Не то нажал! Нажми кнопку 📍 или 📝 👇", reply_markup=markup)

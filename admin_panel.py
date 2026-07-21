@@ -499,6 +499,8 @@ def sync_config():
             count_tags = 0
             for row in tags_records:
                 club = row.get('Club')
+                if club == 'КЦ':
+                    club = 'Коллцентр'
                 tag = row.get('Tag')
                 
                 # Если такой клуб есть в JSON — обновляем тег
@@ -523,6 +525,8 @@ def sync_config():
 
             for row in q_records:
                 club = row.get('Club')
+                if club == 'КЦ':
+                    club = 'Коллцентр'
                 action = row.get('Action')
                 q_text = row.get('Question')
                 q_type = row.get('Type')

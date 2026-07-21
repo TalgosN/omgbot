@@ -920,9 +920,9 @@ def pay_report(date_start,date_end,message,bot):
     for employee_id, info in data.items():
         
         ставка = info['Ставка']
-        ставкакц = info['Ставка КЦ']
+        ставка_коллцентр = info['Ставка Коллцентр']
         for club, hours in info['Смены'].items():
-            df.loc[club, employee_id] = ставка * hours if club!='Коллцентр' else ставкакц * hours
+            df.loc[club, employee_id] = ставка * hours if club != 'Коллцентр' else ставка_коллцентр * hours
             df.loc[club, employee_id] += info['ДР'][club]
             df.loc[club, employee_id] += info['Двойные'][club]
 
@@ -1033,7 +1033,7 @@ def get_data_pay_report(date_start,date_end):
     for j in response_dict_rate['users']:
         row_data={}
         row_data['Ставка']=float(j['rate'])
-        row_data['Ставка КЦ']=0
+        row_data['Ставка Коллцентр']=0
         row_data['Бонус']=0
         row_data['Штраф']=0
         row_data['Смены']={}
@@ -1042,15 +1042,15 @@ def get_data_pay_report(date_start,date_end):
         
         data[j['employee_id']]=row_data
         
-    # 2. Добавляем ставки КЦ (с защитой от новых людей)
+    # 2. Добавляем ставки Коллцентра (с защитой от новых людей)
     for j in response_dict_rate_cc['users']:
         emp_id = j['employee_id']
         
-        # Если сотрудник есть только в КЦ, но его нет в основном расписании — создаем его
+        # Если сотрудник есть только в Коллцентре, но его нет в основном расписании, создаём его
         if emp_id not in data:
             row_data={}
             row_data['Ставка']=0
-            row_data['Ставка КЦ']=float(j['rate'])
+            row_data['Ставка Коллцентр']=float(j['rate'])
             row_data['Бонус']=0
             row_data['Штраф']=0
             row_data['Смены']={}
@@ -1058,7 +1058,7 @@ def get_data_pay_report(date_start,date_end):
                 row_data['Смены'][t]=0
             data[emp_id] = row_data
         else:
-            data[emp_id]['Ставка КЦ'] = float(j['rate'])
+            data[emp_id]['Ставка Коллцентр'] = float(j['rate'])
          
     
     
