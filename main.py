@@ -139,6 +139,11 @@ def schedule_func(bot): # Не забудь передать bot!
     from consumables import auto_consumables_report
     schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
 
+    from taskboard import auto_close_review_tasks, send_shift_review_reminders
+    auto_close_review_tasks()
+    schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks)
+    schedule.every().day.at("09:20:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
+
     from rasp import start_shifton_chat_sync, start_shifton_notifications_check
     start_shifton_chat_sync()
     schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)

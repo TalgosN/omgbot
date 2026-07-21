@@ -1,7 +1,12 @@
 from telebot import *
 from constants import *
 import sqlite3
+from datetime import datetime, timedelta
+import pytz
 from permissions import ROLE_EMPLOYEE, ROLE_TECHNICIAN, require_role, role_of
+
+TASK_DB_PATH = 'db/omgbot.sql'
+TASK_REVIEW_DAYS = 14
 
 ##### taskdesk
 
@@ -36,6 +41,9 @@ def func_task(message,bot):
 
     elif message.text=='⭕ Текущие':
         show_active_tasks(message,bot)
+
+    elif message.text=='👀 Рассматриваемые':
+        show_review_tasks(message,bot)
 
     elif message.text=='🛠 Ремонт':
         show_active_type(message,bot, 'Ремонт')
@@ -279,7 +287,7 @@ def show_active_tasks(message, bot):
         return
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке')")
+    cur.execute("SELECT id, title, club, status FROM tasks WHERE status='В работе'")
     tasks = cur.fetchall()
     cur.close()
     conn.close()
@@ -297,13 +305,11 @@ def show_active_tasks(message, bot):
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
             for i, (task_id, title, status) in enumerate(club_tasks, 1):
-                # Убрали иконку ремонта, оставили только глаза
-                prefix = "👀 " if status == 'На проверке' else ""
-                text_lines.append(f"{i}) {prefix}{title}")
+                text_lines.append(f"{i}) {title}")
                 
                 short_title = title[:12] + "..." if len(title) > 12 else title
                 list_buttons.append(types.InlineKeyboardButton(
-                    f"{prefix}{club[:3]}: {short_title}",
+                    f"{club[:3]}: {short_title}",
                     callback_data=f'all_{task_id}'
                 ))
 
@@ -319,6 +325,47 @@ def show_active_tasks(message, bot):
     bot.send_message(message.chat.id, f'Вот список текущих проблем:\n{text}', reply_markup=markup, parse_mode='HTML')
     bot.send_message(message.chat.id, 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"', reply_markup=types.ReplyKeyboardRemove())
 
+
+def show_review_tasks(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, club FROM tasks WHERE status='На проверке'")
+    tasks = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    tasks_by_club = {club: [] for club in clublist_task}
+    for task_id, title, club in tasks:
+        if club in tasks_by_club:
+            tasks_by_club[club].append((task_id, title))
+
+    list_buttons = []
+    text_lines = []
+    for club in clublist_task:
+        club_tasks = tasks_by_club[club]
+        if club_tasks:
+            text_lines.append(f"\n<b>{club}:</b>")
+            for i, (task_id, title) in enumerate(club_tasks, 1):
+                text_lines.append(f"{i}) {title}")
+                short_title = title[:12] + "..." if len(title) > 12 else title
+                list_buttons.append(types.InlineKeyboardButton(
+                    f"👀 {club[:3]}: {short_title}",
+                    callback_data=f'all_{task_id}'
+                ))
+
+    markup = telebot.types.InlineKeyboardMarkup()
+    for i in range(len(list_buttons) // col):
+        markup.row(*list_buttons[i * col:(i + 1) * col])
+    if len(list_buttons) % col != 0:
+        markup.row(*list_buttons[len(list_buttons) - len(list_buttons) % col:])
+    markup.row(types.InlineKeyboardButton("Вернуться", callback_data="all_back"))
+
+    text = "\n".join(text_lines) if text_lines else "Нет задач, ожидающих проверки"
+    bot.send_message(message.chat.id, f'Вот список рассматриваемых проблем:\n{text}', reply_markup=markup, parse_mode='HTML')
+    bot.send_message(message.chat.id, 'Выбери одну, чтобы проверить решение или вернуть задачу в работу.', reply_markup=types.ReplyKeyboardRemove())
+
 ###### show repairs
 
 def show_active_type(message, bot, category):
@@ -326,7 +373,7 @@ def show_active_type(message, bot, category):
         return
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT id, title, club, status FROM tasks WHERE status IN ('В работе', 'На проверке') AND type=?", (category,))
+    cur.execute("SELECT id, title, club, status FROM tasks WHERE status='В работе' AND type=?", (category,))
     tasks = cur.fetchall()
     cur.close()
     conn.close()
@@ -345,12 +392,11 @@ def show_active_type(message, bot, category):
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
             for task_id, title, status in club_tasks:
-                prefix = "👀 " if status == 'На проверке' else ""
-                text_lines.append(f"{task_counter}) {prefix}{title}")
+                text_lines.append(f"{task_counter}) {title}")
                 
                 short_title = title[:12] + "..." if len(title) > 12 else title
                 list_buttons.append(types.InlineKeyboardButton(
-                    f"{prefix}{club[:3]}: {short_title}",
+                    f"{club[:3]}: {short_title}",
                     callback_data=f'all_{task_id}'
                 ))
                 task_counter += 1
@@ -373,7 +419,10 @@ def dotask(message, task_id, current_status, bot):
         return
 
     if message.text == 'Выбрать другое':
-        show_active_tasks(message, bot)
+        if current_status == 'На проверке':
+            show_review_tasks(message, bot)
+        else:
+            show_active_tasks(message, bot)
 
     elif current_status == 'В работе' and message.text == 'Обработать':
         if not require_role(message, bot, ROLE_TECHNICIAN):
@@ -386,15 +435,22 @@ def dotask(message, task_id, current_status, bot):
 
     elif current_status == 'На проверке':
         if message.text == '✅ Подтвердить решение':
-            today = datetime.today().strftime('%Y-%m-%d')
+            today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
             conn = sqlite3.connect('db/omgbot.sql')
             cur = conn.cursor()
-            cur.execute("UPDATE tasks SET status = 'Выполнено', dtfb = ? WHERE id = ?", (today, task_id))
+            cur.execute(
+                "UPDATE tasks SET status = 'Выполнено', dtfb = ? WHERE id = ? AND status = 'На проверке'",
+                (today, task_id),
+            )
+            changed = cur.rowcount
             conn.commit()
             cur.close()
             conn.close()
-            bot.send_message(message.chat.id, "✅ Спасибо! Проблема окончательно закрыта и перенесена в архив.", reply_markup=types.ReplyKeyboardRemove())
-            show_active_tasks(message, bot)
+            if changed:
+                bot.send_message(message.chat.id, "✅ Спасибо! Проблема окончательно закрыта и перенесена в архив.", reply_markup=types.ReplyKeyboardRemove())
+            else:
+                bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.", reply_markup=types.ReplyKeyboardRemove())
+            show_review_tasks(message, bot)
 
         elif message.text == '❌ Вернуть в работу':
             markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -402,7 +458,7 @@ def dotask(message, task_id, current_status, bot):
             bot.send_message(message.chat.id, "Опишите, почему решение не помогло или что осталось неисправным:", reply_markup=markup)
             bot.register_next_step_handler(message, return_task_to_work, task_id, bot)
         else:
-            show_active_tasks(message, bot)
+            show_review_tasks(message, bot)
     else:
         show_active_tasks(message, bot)
 
@@ -433,13 +489,21 @@ def change_task(message, task_id, answer, bot):
     if message.text == 'Нет':
         show_active_tasks(message, bot)
     elif message.text == 'Да':
-        today_short = datetime.today().strftime('%d.%m')
+        now = datetime.now(pytz.timezone('Europe/Moscow'))
+        today_short = now.strftime('%d.%m')
+        review_since = now.strftime('%Y-%m-%d')
         
         conn = sqlite3.connect('db/omgbot.sql')
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=?", (task_id,))
+        cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=? AND status='В работе'", (task_id,))
         task = cur.fetchone()
+        if not task:
+            cur.close()
+            conn.close()
+            bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.")
+            show_active_tasks(message, bot)
+            return
         
         old_feedback = task['feedback'] if task['feedback'] else ""
         title = task['title']
@@ -450,7 +514,7 @@ def change_task(message, task_id, answer, bot):
         new_entry = f"<b>[{today_short}] Админ:</b> {answer}"
         new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
 
-        cur.execute("UPDATE tasks SET status = 'На проверке', feedback = ? WHERE id = ?", (new_feedback, task_id))
+        cur.execute("UPDATE tasks SET status = 'На проверке', feedback = ?, dtfb = ? WHERE id = ?", (new_feedback, review_since, task_id))
         conn.commit()
         cur.close()
         conn.close()
@@ -491,7 +555,7 @@ def return_task_to_work(message, task_id, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
     if message.text == "Вернуться":
-        show_active_tasks(message, bot)
+        show_review_tasks(message, bot)
         return
 
     reason = message.text
@@ -500,8 +564,14 @@ def return_task_to_work(message, task_id, bot):
     conn = sqlite3.connect('db/omgbot.sql')
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=?", (task_id,))
+    cur.execute("SELECT feedback, title, type, club FROM tasks WHERE id=? AND status='На проверке'", (task_id,))
     task = cur.fetchone()
+    if not task:
+        cur.close()
+        conn.close()
+        bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.")
+        show_review_tasks(message, bot)
+        return
     
     old_feedback = task['feedback'] if task['feedback'] else ""
     title = task['title']
@@ -512,7 +582,7 @@ def return_task_to_work(message, task_id, bot):
     new_entry = f"<b>[{today_short}] Сотрудник:</b> {reason}"
     new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
 
-    cur.execute("UPDATE tasks SET status = 'В работе', feedback = ? WHERE id = ?", (new_feedback, task_id))
+    cur.execute("UPDATE tasks SET status = 'В работе', feedback = ?, dtfb = NULL WHERE id = ?", (new_feedback, task_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -545,7 +615,113 @@ def return_task_to_work(message, task_id, bot):
     if task_type == 'Ремонт':
         bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n⚠️ <b>Проблема возвращена в работу:</b> {title}\n💬 <i>{reason}</i>", parse_mode='HTML')
         
-    show_active_tasks(message, bot)
+    show_review_tasks(message, bot)
+
+
+def auto_close_review_tasks(now=None):
+    """Закрывает задачи, которые 14 дней находятся на проверке."""
+    now = now or datetime.now(pytz.timezone('Europe/Moscow'))
+    today = now.date()
+    deadline = today - timedelta(days=TASK_REVIEW_DAYS)
+    today_iso = today.strftime('%Y-%m-%d')
+    deadline_iso = deadline.strftime('%Y-%m-%d')
+    today_short = today.strftime('%d.%m')
+
+    conn = sqlite3.connect(TASK_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            # Старые задачи на проверке не имеют даты: запускаем им отсчёт сейчас.
+            conn.execute(
+                "UPDATE tasks SET dtfb=? WHERE status='На проверке' AND (dtfb IS NULL OR dtfb='')",
+                (today_iso,),
+            )
+            tasks = conn.execute(
+                """SELECT id, feedback FROM tasks
+                   WHERE status='На проверке' AND date(dtfb) <= date(?)""",
+                (deadline_iso,),
+            ).fetchall()
+
+            for task in tasks:
+                old_feedback = task['feedback'] or ''
+                entry = f"<b>[{today_short}] Система:</b> задача автоматически закрыта через {TASK_REVIEW_DAYS} дней без возврата."
+                feedback = f"{old_feedback}\n\n{entry}".strip()
+                conn.execute(
+                    "UPDATE tasks SET status='Выполнено', dtfb=?, feedback=? WHERE id=?",
+                    (today_iso, feedback, task['id']),
+                )
+    finally:
+        conn.close()
+
+    if tasks:
+        print(f"Автозакрытие задач: {len(tasks)}")
+    return len(tasks)
+
+
+def send_shift_review_reminders(bot, now=None):
+    """Напоминает сотрудникам сегодняшней смены проверить решения их клуба."""
+    now = now or datetime.now(pytz.timezone('Europe/Moscow'))
+    date_iso = now.strftime('%Y-%m-%d')
+
+    conn = sqlite3.connect(TASK_DB_PATH)
+    try:
+        tasks = conn.execute(
+            """SELECT id, type, club, title FROM tasks
+               WHERE status='На проверке' ORDER BY club, id"""
+        ).fetchall()
+        if not tasks:
+            return 0
+
+        users = conn.execute(
+            """SELECT login, chatid FROM users_new
+               WHERE status >= 0 AND login IS NOT NULL AND login <> ''
+                 AND chatid IS NOT NULL AND chatid <> ''"""
+        ).fetchall()
+    finally:
+        conn.close()
+
+    from rasp import fetch_schedule_from_api
+    schedule_data = fetch_schedule_from_api(date_iso)
+    if not schedule_data.get('ok'):
+        print(f"Ошибка напоминаний Taskboard: {schedule_data.get('error', 'расписание недоступно')}")
+        return 0
+
+    def normalize_login(login):
+        return str(login or '').strip().lstrip('@').lower()
+
+    chats_by_login = {normalize_login(login): chatid for login, chatid in users}
+    tasks_by_club = {}
+    for task_id, task_type, club, title in tasks:
+        tasks_by_club.setdefault(club, {})[task_id] = (task_type, title)
+
+    reminders = {}
+    for location in schedule_data.get('locations', []):
+        club = location.get('title')
+        club_tasks = tasks_by_club.get(club)
+        if not club_tasks:
+            continue
+        for shift in location.get('shifts', []):
+            chatid = chats_by_login.get(normalize_login(shift.get('telegram')))
+            if not chatid:
+                continue
+            reminders.setdefault(str(chatid), {}).setdefault(club, {}).update(club_tasks)
+
+    sent = 0
+    for chatid, club_tasks in reminders.items():
+        lines = ["👀 Проверьте решения по задачам вашей смены:"]
+        for club, club_task_items in club_tasks.items():
+            lines.append(f"\n{club}:")
+            for number, (_task_id, (task_type, title)) in enumerate(club_task_items.items(), 1):
+                lines.append(f"{number}) [{task_type}] {title}")
+        lines.append("\nОткройте: «Доска проблем» → «👀 Рассматриваемые». Если решение не помогло, верните задачу в работу.")
+        try:
+            target_chatid = int(chatid) if chatid.lstrip('-').isdigit() else chatid
+            bot.send_message(target_chatid, "\n".join(lines))
+            sent += 1
+        except Exception as e:
+            print(f"Ошибка напоминания Taskboard для chatid={chatid}: {e}")
+
+    return sent
     
 ##### done tasks
 
