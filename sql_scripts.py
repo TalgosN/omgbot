@@ -192,13 +192,21 @@ GROUP BY
 
 shifts_ext='''
 SELECT 
-    shift_second_name,
-    shift_first_name,
-    dt_shift,
-    club,
-    dur
+    COALESCE(ns.second_name, sh.shift_second_name) AS shift_second_name,
+    COALESCE(ns.first_name, sh.shift_first_name) AS shift_first_name,
+    sh.dt_shift,
+    sh.club,
+    sh.dur
 FROM 
-    shifts;
+    shifts sh
+LEFT JOIN users_new ns ON (
+    sh.shift_login IS NOT NULL
+    AND lower(sh.shift_login) = lower(ns.login)
+) OR (
+    sh.shift_login IS NULL
+    AND sh.shift_second_name = ns.second_name
+    AND sh.shift_first_name = ns.first_name
+);
     '''
 
 records='''

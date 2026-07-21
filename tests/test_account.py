@@ -113,6 +113,34 @@ class AccountTest(unittest.TestCase):
         self.assertEqual(login, '@old_login')
         self.assertEqual(reference, '@old_login')
 
+    def test_legacy_shift_uses_omg_name_after_identity_sync(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "UPDATE users_new SET login=?, first_name=?, second_name=? WHERE ID=1",
+            ('@maxim', 'Максим', 'Песков'),
+        )
+        conn.execute(
+            "UPDATE shifts SET shift_second_name=?, shift_first_name=?",
+            ('Песков', 'Максим'),
+        )
+        conn.commit()
+        conn.close()
+
+        with patch.object(self.account, 'DB_PATH', str(self.db_path)):
+            self.account.apply_omg_identity(
+                '12345', '@maxon', 'Песков Максон'
+            )
+
+        conn = sqlite3.connect(self.db_path)
+        raw_shift = conn.execute(
+            'SELECT shift_second_name, shift_first_name, shift_login FROM shifts'
+        ).fetchone()
+        displayed_shift = conn.execute(self.account.sql_scripts.shifts_ext).fetchone()
+        conn.close()
+
+        self.assertEqual(raw_shift, ('Песков', 'Максим', '@maxon'))
+        self.assertEqual(displayed_shift[:2], ('Песков', 'Максон'))
+
     def test_profile_validation(self):
         self.assertEqual(
             self.account.validate_profile_value('bday', '21.07.2000'),
