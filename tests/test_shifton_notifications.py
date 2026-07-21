@@ -5,6 +5,7 @@ import threading
 import time
 import types
 import unittest
+from datetime import timedelta, timezone
 from unittest.mock import Mock, patch
 
 
@@ -19,12 +20,15 @@ def load_rasp_module():
     constants.SHIFTON_API_TOKEN = "test-token"
     weather = types.ModuleType("weather")
     weather.get_weather = lambda: ""
+    pytz = types.ModuleType("pytz")
+    pytz.timezone = lambda _name: timezone(timedelta(hours=3))
 
     modules = {
         "telebot": telebot,
         "sheets": sheets,
         "constants": constants,
         "weather": weather,
+        "pytz": pytz,
     }
     with patch.dict(sys.modules, modules), patch.object(locale, "setlocale"):
         spec = importlib.util.spec_from_file_location("rasp_under_test", "rasp.py")

@@ -55,26 +55,26 @@ class KpiTest(unittest.TestCase):
 
         def handler(message, args):
             received.append((message.text, args))
-            return True, "ok", ""
+            return self.kpi.KPI_SUCCESS, "ok", ""
 
         with patch.object(self.kpi, "kpi_dict", {"#продление": handler}):
             result = self.kpi.hash_handle(self.message("#ПРОДЛЕНИЕ Татьяна 15:00-16:00"))
 
-        self.assertEqual(result, (True, "ok", ""))
+        self.assertEqual(result, (self.kpi.KPI_SUCCESS, "ok", ""))
         self.assertEqual(received, [("#ПРОДЛЕНИЕ Татьяна 15:00-16:00", "Татьяна 15:00-16:00")])
 
     def test_bonus_number_boundaries(self):
         invalid_cert = self.kpi.do_bonus("#серт", self.message(""), "2999 5000")
         invalid_subscription = self.kpi.do_bonus("#абик", self.message(""), "1000 5000")
-        self.assertFalse(invalid_cert[0])
-        self.assertFalse(invalid_subscription[0])
+        self.assertEqual(invalid_cert[0], self.kpi.KPI_INVALID)
+        self.assertEqual(invalid_subscription[0], self.kpi.KPI_INVALID)
 
         self.kpi.Insert_bonus = lambda *args: None
         self.kpi.update_table = lambda *args: None
         valid_cert = self.kpi.do_bonus("#серт", self.message(""), "3000 5000")
         valid_subscription = self.kpi.do_bonus("#абик", self.message(""), "999 5000")
-        self.assertTrue(valid_cert[0])
-        self.assertTrue(valid_subscription[0])
+        self.assertEqual(valid_cert[0], self.kpi.KPI_SUCCESS)
+        self.assertEqual(valid_subscription[0], self.kpi.KPI_SUCCESS)
 
     def test_double_accepts_decimal_comma(self):
         message = self.message("#двойная 1,5")
@@ -86,11 +86,46 @@ class KpiTest(unittest.TestCase):
         with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
             result = self.kpi.do_double(message, "1,5 описание")
 
-        self.assertTrue(result[0])
+        self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
         connection.cursor.return_value.execute.assert_called_once_with(
             "INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)",
             ("@employee", unittest.mock.ANY, 1.5, "описание"),
         )
+
+    def test_simple_amount_accepts_decimal_dot_and_comma(self):
+        self.kpi.requests.post = lambda *args, **kwargs: SimpleNamespace(json=lambda: {"ok": True})
+        self.kpi.get_user_club_today = lambda username: "Марьино"
+
+        for value in ("125.50", "125,50"):
+            connection = unittest.mock.Mock()
+            connection.cursor.return_value = unittest.mock.Mock()
+            with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
+                result = self.kpi.do_simple_amount("#активация", self.message(""), value)
+
+            self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
+            connection.cursor.return_value.execute.assert_called_once_with(
+                "INSERT INTO activation (who, d_rep, amount) VALUES (?, ?, ?)",
+                ("@employee", unittest.mock.ANY, 125.5),
+            )
+
+    def test_simple_amount_rejects_zero_negative_and_malformed_values(self):
+        for value in ("0", "-1", "1..5", "abc"):
+            result = self.kpi.do_simple_amount("#автосим", self.message(""), value)
+            self.assertEqual(result[0], self.kpi.KPI_INVALID)
+
+    def test_shifton_error_is_reported_after_local_save(self):
+        self.kpi.requests.post = lambda *args, **kwargs: SimpleNamespace(
+            json=lambda: {"ok": False, "error": "employee_not_found"}
+        )
+        self.kpi.get_user_club_today = lambda username: "Марьино"
+        connection = unittest.mock.Mock()
+        connection.cursor.return_value = unittest.mock.Mock()
+
+        with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
+            result = self.kpi.do_simple_amount("#автосим", self.message(""), "125,5")
+
+        self.assertEqual(result[0], self.kpi.KPI_SAVED_ERROR)
+        self.assertIn("employee_not_found", result[1])
 
 
 if __name__ == "__main__":

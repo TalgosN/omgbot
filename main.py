@@ -285,12 +285,12 @@ def create_tables_KPI():
     cur.close()
 
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS autosim (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount integer)')
+    cur.execute('CREATE TABLE IF NOT EXISTS autosim (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount REAL)')
     conn.commit()
     cur.close()
 
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS activation (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount integer)')
+    cur.execute('CREATE TABLE IF NOT EXISTS activation (ID INTEGER PRIMARY KEY AUTOINCREMENT, who varchar(50), d_rep date, amount REAL)')
     conn.commit()
     cur.close()
 
@@ -345,8 +345,13 @@ def send_react(message,emoji):
     try:
         response = requests.post(url, json=data, timeout=10)
         response.raise_for_status()
-    except requests.RequestException as e:
+        result = response.json()
+        if not result.get("ok"):
+            raise RuntimeError(result.get("description", "неизвестная ошибка Telegram"))
+        return True
+    except (requests.RequestException, ValueError, RuntimeError) as e:
         print(f"Ошибка отправки реакции Telegram: {e}")
+        return False
 '''
 Indexes of users
 0 - id
@@ -526,20 +531,22 @@ def HashTags(message): #KPI handler
     if is_spam(message):
         try:
             from kpi import hash_handle
-            flag, text, desc = hash_handle(message)
-            
-            # --- НОВОЕ: Отправляем текст пользователю ---
-            if text:
-                full_text = f"{text}\n{desc}".strip()
-                bot.reply_to(message, full_text, parse_mode="Markdown")
-            # --------------------------------------------
+            status, text, desc = hash_handle(message)
 
-            if flag:
-                send_react(message, random.choice(emojis['confirm']))
+            if status == kpi.KPI_SUCCESS:
                 from kpi import update_kpi
                 update_kpi()
+                if not send_react(message, random.choice(emojis['confirm'])):
+                    bot.reply_to(message, "Запись сохранена, но не удалось поставить реакцию.")
+            elif status == kpi.KPI_INVALID:
+                if not send_react(message, '👎'):
+                    bot.reply_to(message, "Не удалось поставить реакцию. Проверьте формат хештега.")
             else:
-                send_react(message, '👎')
+                if status == kpi.KPI_SAVED_ERROR:
+                    from kpi import update_kpi
+                    update_kpi()
+                full_text = f"{text}\n{desc}".strip()
+                bot.reply_to(message, full_text)
 
         except Exception as e:
             bot.send_message(CHATS['me'], str(e))
@@ -699,7 +706,7 @@ from admin_panel import register_admin_consumables_callbacks
 register_admin_consumables_callbacks(bot)
 
 if __name__ == "__main__":
-    threading.Thread(target=schedule_func, args=(bot,), daemon=True).start()
+    threading.Thread(target=schedule_func, args=(bot,), name="omgbot-scheduler", daemon=True).start()
 
     for task_name, startup_task in (("сотрудников", update_users), ("KPI", init)):
         try:

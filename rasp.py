@@ -9,6 +9,7 @@ import math
 import locale
 import sqlite3
 import threading
+import pytz
 from weather import get_weather
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
@@ -18,6 +19,16 @@ emojis = ['💀', '🤖', '🍓', '😎', '🤓', '🙄', '👽', '👻', '😈'
 
 shifton_chat_sync_lock = threading.Lock()
 shifton_notifications_lock = threading.Lock()
+shifton_runtime_status = {
+    "last_notification_check": None,
+    "last_notification_sent": None,
+    "last_notification_error": None,
+    "last_chat_sync": None,
+    "last_chat_sync_result": None
+}
+
+def moscow_timestamp():
+    return datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
 
 funclist_rasp=('📄 Расписание на сегодня','📑 Расписание на неделю', '⬅️ Вернуться')
 funclist_rasp_week=('👨🏻‍💻 По сотрудникам','🗓 По датам', '🔴 По клубам','⬅️ Вернуться')
@@ -90,6 +101,8 @@ def sync_shifton_notification_chats():
             print(f"Ошибка регистрации чата OMG Shift для {telegram_tag}: {result.get('error', 'unknown_error')}")
 
     print(f"Синхронизация чатов OMG Shift завершена: {synced} успешно, {errors} ошибок")
+    shifton_runtime_status["last_chat_sync"] = moscow_timestamp()
+    shifton_runtime_status["last_chat_sync_result"] = f"{synced} успешно, {errors} ошибок"
 
 def start_shifton_chat_sync():
     """Запускает синхронизацию чатов в фоне, не блокируя общий планировщик."""
@@ -136,10 +149,14 @@ def send_pending_shifton_notifications(bot, limit=10):
     """Отправляет ожидающие уведомления OMG Shift сотрудникам."""
     for _ in range(limit):
         result = claim_shifton_notification()
+        shifton_runtime_status["last_notification_check"] = moscow_timestamp()
         if not result.get("ok"):
-            print(f"Ошибка получения уведомлений OMG Shift: {result.get('error', 'unknown_error')}")
+            error = result.get('error', 'unknown_error')
+            shifton_runtime_status["last_notification_error"] = error
+            print(f"Ошибка получения уведомлений OMG Shift: {error}")
             return
 
+        shifton_runtime_status["last_notification_error"] = None
         notification = result.get("notification")
         if not notification:
             return
@@ -148,10 +165,15 @@ def send_pending_shifton_notifications(bot, limit=10):
         try:
             bot.send_message(notification.get("chatId"), notification.get("text"))
             complete_shifton_notification(notification_id, True)
+            shifton_runtime_status["last_notification_sent"] = moscow_timestamp()
             print(f"Уведомление OMG Shift отправлено: {notification_id}")
         except Exception as e:
             complete_shifton_notification(notification_id, False, str(e))
+            shifton_runtime_status["last_notification_error"] = str(e)
             print(f"Ошибка отправки уведомления OMG Shift {notification_id}: {e}")
+
+def get_shifton_runtime_status():
+    return dict(shifton_runtime_status)
 
 def start_shifton_notifications_check(bot):
     """Запускает обработку очереди в фоне и не допускает параллельных проверок."""

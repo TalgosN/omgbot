@@ -4,12 +4,17 @@ import os
 from telebot import *
 import sqlite3
 import re
-from constants import CHATS, clublist_task
+import threading
+from datetime import datetime
+import requests
+import pytz
+from constants import CHATS, clublist_task, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
 from sender import safe_send
 
 # Путь к ключу (как в твоем sheets.py)
 KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
 temp_broadcasts = {}
+health_check_lock = threading.Lock()
 
 def generate_days_keyboard(selected_days=""):
     markup = types.InlineKeyboardMarkup()
@@ -71,6 +76,9 @@ def admin_func_handler(message, bot):
         
     elif a == '⚙️ Обновить настройки':
         handle_update_config(message, bot)
+
+    elif a == '🩺 Статус систем':
+        handle_system_health(message, bot)
         
     elif a == '⬅️ Вернуться':
         from menu import hello
@@ -108,6 +116,93 @@ def admin_func_handler(message, bot):
     else:
         from menu import admin_menu
         admin_menu(message, bot)
+
+def collect_system_health(bot):
+    moscow_now = datetime.now(pytz.timezone('Europe/Moscow'))
+    lines = [f"🩺 Статус систем на {moscow_now.strftime('%d.%m.%Y %H:%M:%S')}"]
+
+    try:
+        me = bot.get_me()
+        lines.append(f"✅ Telegram: @{me.username}")
+    except Exception as e:
+        lines.append(f"❌ Telegram: {str(e)[:120]}")
+
+    try:
+        conn = sqlite3.connect('db/omgbot.sql', timeout=5)
+        users_count = conn.execute("SELECT COUNT(*) FROM users_new").fetchone()[0]
+        conn.close()
+        lines.append(f"✅ SQLite: доступна, сотрудников {users_count}")
+    except Exception as e:
+        lines.append(f"❌ SQLite: {str(e)[:120]}")
+
+    try:
+        validate_config()
+        lines.append("✅ Конфигурация: обязательные параметры заданы")
+    except Exception as e:
+        lines.append(f"❌ Конфигурация: {str(e)[:120]}")
+
+    try:
+        today = moscow_now.strftime('%Y-%m-%d')
+        response = requests.get(
+            f"{SHIFTON_API_URL}/api/bot/schedule?date={today}",
+            headers={"Authorization": f"Bearer {SHIFTON_API_TOKEN}"},
+            timeout=5
+        )
+        data = response.json()
+        if data.get("ok"):
+            lines.append("✅ OMG Shift API: доступен")
+        else:
+            lines.append(f"❌ OMG Shift API: {data.get('error', 'неизвестная ошибка')}")
+    except Exception as e:
+        lines.append(f"❌ OMG Shift API: {str(e)[:120]}")
+
+    try:
+        gc = pygsheets.authorize(service_file=KEY_FILE)
+        gc.open('KPI OMG VR')
+        lines.append("✅ Google Sheets: доступен")
+    except Exception as e:
+        lines.append(f"❌ Google Sheets: {str(e)[:120]}")
+
+    scheduler = next((thread for thread in threading.enumerate() if thread.name == "omgbot-scheduler"), None)
+    if scheduler and scheduler.is_alive():
+        lines.append("✅ Планировщик: работает")
+    else:
+        lines.append("❌ Планировщик: поток не найден")
+
+    try:
+        from rasp import get_shifton_runtime_status
+        runtime = get_shifton_runtime_status()
+        last_check = runtime.get("last_notification_check") or "ещё не выполнялась"
+        last_sync = runtime.get("last_chat_sync") or "ещё не выполнялась"
+        lines.append(f"ℹ️ Очередь уведомлений: последняя проверка {last_check}")
+        sync_result = runtime.get("last_chat_sync_result") or "результат отсутствует"
+        lines.append(f"ℹ️ Синхронизация чатов: {last_sync}, {sync_result}")
+        if runtime.get("last_notification_error"):
+            lines.append(f"⚠️ Последняя ошибка очереди: {runtime['last_notification_error'][:120]}")
+    except Exception as e:
+        lines.append(f"⚠️ Состояние уведомлений недоступно: {str(e)[:120]}")
+
+    return "\n".join(lines)
+
+def handle_system_health(message, bot):
+    if not health_check_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, "⏳ Проверка систем уже выполняется.")
+        return
+
+    msg = bot.send_message(message.chat.id, "⏳ Проверяю Telegram, SQLite, OMG Shift и Google Sheets...")
+
+    def worker():
+        try:
+            report = collect_system_health(bot)
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=report)
+        except Exception as e:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка проверки систем: {e}")
+        finally:
+            health_check_lock.release()
+            from menu import admin_menu
+            admin_menu(message, bot)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def handle_update_config(message, bot):
     # 1. Сообщение "Ждите"
