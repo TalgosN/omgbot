@@ -7,12 +7,17 @@ import os
 from datetime import datetime, timedelta
 import math
 import locale
+import sqlite3
+import threading
 from weather import get_weather
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
 clubs_color = {'Прокшино':'🔴', 'Каширка':'🟠', 'Марьино':'🟣', 'Коллцентр':'🔈', 'Ленинский':'🟢','Дмитровка':'🟡'}
 emojis = ['💀', '🤖', '🍓', '😎', '🤓', '🙄', '👽', '👻', '😈', '😇', '😅', '🤑', '😉', '🐯', '🌝', '🌚', '🥟']
+
+shifton_chat_sync_lock = threading.Lock()
+shifton_notifications_lock = threading.Lock()
 
 funclist_rasp=('📄 Расписание на сегодня','📑 Расписание на неделю', '⬅️ Вернуться')
 funclist_rasp_week=('👨🏻‍💻 По сотрудникам','🗓 По датам', '🔴 По клубам','⬅️ Вернуться')
@@ -28,6 +33,138 @@ def fetch_schedule_from_api(date_iso):
         return response.json()
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+def register_shifton_chat(telegram_tag, chat_id):
+    """Привязывает личный Telegram-чат сотрудника к его карточке в OMG Shift."""
+    url = f"{SHIFTON_API_URL}/api/bot/register-chat"
+    headers = {
+        "Authorization": f"Bearer {SHIFTON_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.post(
+            url,
+            json={"telegram": telegram_tag, "chatId": chat_id},
+            headers=headers,
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"ok": False, "error": "request_failed", "details": str(e)}
+
+def sync_shifton_notification_chats():
+    """Передаёт в OMG Shift Telegram chatid всех действующих сотрудников."""
+    try:
+        conn = sqlite3.connect('db/omgbot.sql')
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT login, chatid
+            FROM users_new
+            WHERE COALESCE(status, 0) <> -1
+              AND login IS NOT NULL AND login <> ''
+              AND chatid IS NOT NULL AND chatid <> ''
+        """)
+        users = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Ошибка чтения чатов для OMG Shift: {e}")
+        return
+
+    synced = 0
+    errors = 0
+    for login, chat_id in users:
+        telegram_tag = login if str(login).startswith('@') else f"@{login}"
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            errors += 1
+            print(f"Некорректный chatid для {telegram_tag}: {chat_id}")
+            continue
+
+        result = register_shifton_chat(telegram_tag, chat_id)
+        if result.get("ok"):
+            synced += 1
+        else:
+            errors += 1
+            print(f"Ошибка регистрации чата OMG Shift для {telegram_tag}: {result.get('error', 'unknown_error')}")
+
+    print(f"Синхронизация чатов OMG Shift завершена: {synced} успешно, {errors} ошибок")
+
+def start_shifton_chat_sync():
+    """Запускает синхронизацию чатов в фоне, не блокируя общий планировщик."""
+    if not shifton_chat_sync_lock.acquire(blocking=False):
+        return
+
+    def worker():
+        try:
+            sync_shifton_notification_chats()
+        finally:
+            shifton_chat_sync_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+def claim_shifton_notification():
+    """Забирает одно ожидающее уведомление об изменении расписания."""
+    url = f"{SHIFTON_API_URL}/api/bot/notifications/claim"
+    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        return response.json()
+    except Exception as e:
+        return {"ok": False, "error": "request_failed", "details": str(e)}
+
+def complete_shifton_notification(notification_id, success, error=""):
+    """Сообщает OMG Shift результат отправки уведомления в Telegram."""
+    url = f"{SHIFTON_API_URL}/api/bot/notifications/complete"
+    headers = {
+        "Authorization": f"Bearer {SHIFTON_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.post(
+            url,
+            json={"id": notification_id, "success": bool(success), "error": error},
+            headers=headers,
+            timeout=10
+        )
+        return response.json()
+    except Exception as e:
+        return {"ok": False, "error": "request_failed", "details": str(e)}
+
+def send_pending_shifton_notifications(bot, limit=10):
+    """Отправляет ожидающие уведомления OMG Shift сотрудникам."""
+    for _ in range(limit):
+        result = claim_shifton_notification()
+        if not result.get("ok"):
+            print(f"Ошибка получения уведомлений OMG Shift: {result.get('error', 'unknown_error')}")
+            return
+
+        notification = result.get("notification")
+        if not notification:
+            return
+
+        notification_id = notification.get("id")
+        try:
+            bot.send_message(notification.get("chatId"), notification.get("text"))
+            complete_shifton_notification(notification_id, True)
+            print(f"Уведомление OMG Shift отправлено: {notification_id}")
+        except Exception as e:
+            complete_shifton_notification(notification_id, False, str(e))
+            print(f"Ошибка отправки уведомления OMG Shift {notification_id}: {e}")
+
+def start_shifton_notifications_check(bot):
+    """Запускает обработку очереди в фоне и не допускает параллельных проверок."""
+    if not shifton_notifications_lock.acquire(blocking=False):
+        return
+
+    def worker():
+        try:
+            send_pending_shifton_notifications(bot)
+        finally:
+            shifton_notifications_lock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def calculate_duration(start_time_str, end_time_str):
     """Вычисляет длительность в часах из строк вида '09:30' и '20:00'"""

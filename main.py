@@ -136,6 +136,11 @@ def schedule_func(bot): # Не забудь передать bot!
   
     from consumables import auto_consumables_report
     schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
+
+    from rasp import start_shifton_chat_sync, start_shifton_notifications_check
+    start_shifton_chat_sync()
+    schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)
+    schedule.every(15).seconds.do(start_shifton_notifications_check, bot)
     # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
     # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
     # Можно оставить так, пробежавшись один раз при старте
@@ -382,6 +387,12 @@ def start(message):
                 bot.send_message(message.chat.id, 'Внутренняя ошибка проверки прав доступа.')
                 return
             # ------------------------------------
+
+            if message.from_user.username:
+                from rasp import register_shifton_chat
+                registration = register_shifton_chat(f"@{message.from_user.username}", message.chat.id)
+                if not registration.get("ok"):
+                    print(f"Ошибка регистрации чата OMG Shift для @{message.from_user.username}: {registration.get('error', 'unknown_error')}")
 
             users = define_name(message)
 

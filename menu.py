@@ -107,27 +107,31 @@ def admin_menu(message, bot):
 
 def help(bot, message):
     bot.send_message(message.chat.id,
-                     'Ну, так уж и быть, помогу! Смотри, какие у меня есть команды!\n\n*/start* - Начать работу со мной (только в ЛС!)\n*/help* - Ну ты вроде и так понял что к чему\n*/stats* - Расскажу о твоих достижениях! (или о достижениях другого если напишешь *тег* после команды)\n*/roll* - Разрешу любой спор', parse_mode="Markdown")
+                     'Ну, так уж и быть, помогу! Смотри, какие у меня есть команды!\n\n*/start* - Начать работу со мной (только в ЛС!)\n*/weather* - Показать погоду\n*/today* - Показать расписание на сегодня\n*/repair* - Показать список проблем\n*/roll* - Разрешу любой спор', parse_mode="Markdown")
     
     bot.send_message(message.chat.id,
-                     'Хочешь отличиться? Пиши хештеги!\n\n*#продление*\n*#др*\n*#инициатива*\n\nНе забудь дописать название клуба и добавить четкое описание! Сейчас покажу...', parse_mode="Markdown")
+                     'Хочешь отличиться? Пиши хештеги!\n\n*#продление*\n*#др*\n*#инициатива*\n\nДобавь чёткое описание. Клуб указывать не нужно — я определю его автоматически по твоей смене на сегодня. Сейчас покажу...', parse_mode="Markdown")
     bot.send_message(message.chat.id,
-                     "```KPI\n#продление лен Татьяна 15:00-16:00```", parse_mode='MarkdownV2')
+                     "```Правильно!\n#продление Татьяна 15:00-16:00```", parse_mode='MarkdownV2')
     
     bot.send_message(message.chat.id,
-                     'Продал сертификат или абонемент? Запиши, чтобы не забыть!\n\n*#серт*\n*#абик*\n\nВот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#серт *номер* *сумма*```", parse_mode='MarkdownV2')
+                     'Продал сертификат или абонемент? Запиши, чтобы не забыть!\n\n*#серт* — номер от 3000\n*#абик* — номер меньше 1000\n\nНомер и сумма должны состоять только из цифр. Вот например...', parse_mode="Markdown")
+    bot.send_message(message.chat.id, "```Правильно!\n#серт *номер* *сумма*\n#абик *номер* *сумма*```", parse_mode='MarkdownV2')
     
     bot.send_message(message.chat.id,
                      'О тебе много пишут в интернете?\n\n*#отзывы* - команда для тебя!\n\nВот например...', parse_mode="Markdown")
     bot.send_message(message.chat.id, "```Правильно!\n#отзывы *количество* *описание* (2гис, яндекс)*```", parse_mode='MarkdownV2')
 
     bot.send_message(message.chat.id,
-                     'Хотел поесть, но пришло много клиентов?\n\nПиши *#двойная*!\n\nВот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#двойная *количество целых часов* *описание*```", parse_mode='MarkdownV2')
+                     'Хотел поесть, но пришло много клиентов?\n\nПиши *#двойная*! Можно указать целое или дробное количество часов.\n\nВот например...', parse_mode="Markdown")
+    bot.send_message(message.chat.id, "```Правильно!\n#двойная *количество часов* *описание*```", parse_mode='MarkdownV2')
 
     bot.send_message(message.chat.id,
-                     'Какой-то кожанный мешок не повинуется?\n\n*#штраф* - покажи ему кто тут хозяин!\n\nВот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#штраф *@тег* *описание*```", parse_mode='MarkdownV2')
+                     'Продал автосимулятор или провёл активацию?\n\n*#автосим*\n*#активация*\n\nПосле хештега укажи сумму бонуса.', parse_mode="Markdown")
+    bot.send_message(message.chat.id, "```Правильно!\n#автосим *сумма бонуса*\n#активация *сумма бонуса*```", parse_mode='MarkdownV2')
+
+    bot.send_message(message.chat.id,
+                     '*#штраф* доступен только руководству. Укажи Telegram-логин сотрудника из базы и причину.', parse_mode="Markdown")
+    bot.send_message(message.chat.id, "```Правильно!\n#штраф *@логин* *причина*```", parse_mode='MarkdownV2')
 
     bot.send_message(message.chat.id, "Надеюсь помог тебе! До встречи 🌍")
