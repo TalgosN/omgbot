@@ -508,17 +508,24 @@ def HashTags(message): #KPI handler
     if is_spam(message):
         try:
             from kpi import hash_handle
-            flag,text,desc = hash_handle (message)
+            flag, text, desc = hash_handle(message)
+            
+            # --- НОВОЕ: Отправляем текст пользователю ---
+            if text:
+                full_text = f"{text}\n{desc}".strip()
+                bot.reply_to(message, full_text, parse_mode="Markdown")
+            # --------------------------------------------
+
             if flag:
-                send_react(message,random.choice(emojis['confirm']))
+                send_react(message, random.choice(emojis['confirm']))
                 from kpi import update_kpi
                 update_kpi()
             else:
-                send_react(message,'👎')
+                send_react(message, '👎')
 
         except Exception as e:
-            bot.send_message (CHATS['me'], e)
-            bot.reply_to(message, f"По-видимому, что-то пошло не так:(")
+            bot.send_message(CHATS['me'], str(e))
+            bot.reply_to(message, "По-видимому, что-то пошло не так:(")
             
 
 

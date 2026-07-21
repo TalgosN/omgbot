@@ -3,20 +3,25 @@ import pytz
 from telebot import *
 from constants import *
 import pygsheets
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import json
-import locale
 import math
 import sql_scripts
 from sheets import *
 import random
-from constants import *
+import os
 
 
+# Словари
+clubs = {'мар':'Марьино','лен':'Ленинский','про':'Прокшино','каш':'Каширка','дми':'Дмитровка'}
+action = {'#продление':'afterparty', '#др':'birthday', '#инициатива':'initiative'}
+bonus = {'#серт':'sert', '#абик':'abik'}
 
-
+# ==========================================
+# 1. ЗАГРУЗКА И ВЫГРУЗКА ДАННЫХ И СМЕН
+# ==========================================
 
 def read_kpi():
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
@@ -29,9 +34,7 @@ def read_kpi():
     df_tasks = pd.DataFrame(tasks, columns=['Task'])
     df_price = pd.DataFrame(price, columns=['Club'])
     df_plan = pd.DataFrame(plan, columns=['Date'])
-
-    df_combined = pd.concat([df_tasks, df_price, df_plan], axis=1)
-    return df_combined
+    return pd.concat([df_tasks, df_price, df_plan], axis=1)
 
 def read_ank_table():
     conn = sqlite3.connect('db/omgbot.sql')
@@ -56,8 +59,7 @@ def read_ank_table():
     df_combined = pd.concat([df_ids, df_club_ank, df_dt_ank], axis=1)
     df_combined['Date'] = pd.to_datetime(df_combined['Date'], format='%d.%m.%Y', errors='coerce')
 
-    current_date = pd.Timestamp.now()
-    three_months_ago = current_date - pd.DateOffset(months=3)
+    three_months_ago = pd.Timestamp.now() - pd.DateOffset(months=3)
     df_filtered = df_combined[df_combined['Date'] >= three_months_ago]
 
     for index, row in df_filtered.iterrows():
@@ -130,7 +132,6 @@ def read_shifts():
     conn.commit()
     cur.close()
     conn.close()
-    
     return pd.DataFrame(schedule_list, columns=['shift_second_name', 'shift_first_name', 'dt_shift', 'club', 'dur'])
 
 def sql_select(command):
@@ -142,198 +143,272 @@ def sql_select(command):
     conn.close()
     return a
 
-def hash_handle(message):
+# ==========================================
+# 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ХЕШТЕГОВ
+# ==========================================
+
+def get_user_club_today(username):
+    """Определяет текущий клуб сотрудника по API расписания на сегодня"""
+    today_iso = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
     try:
-        message1 = ' '.join(message.text.split())
-        parts = message1.split(' ', 2)
-        if len(parts) == 2:
-            parts.append("")
-        elif len(parts) > 3:
-            pass
-
-        if parts[0] in kpi_dict:
-            flag, answer, desc = kpi_dict[parts[0]](message, parts)
-        else:
-            return False, "Не понимаю о чем ты 🙈", "```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
-
-        return flag, answer, desc
+        resp = requests.get(f"{SHIFTON_API_URL}/api/bot/schedule?date={today_iso}", headers=headers, timeout=5).json()
+        if resp.get("ok"):
+            for loc in resp.get("locations", []):
+                club_name = loc.get("title", "Неизвестно")
+                for shift in loc.get("shifts", []):
+                    # API отдает телеграм с @ или без, подстраховываемся:
+                    api_tg = shift.get("telegram", "").lower().strip()
+                    if api_tg == username.lower() or api_tg == f"@{username.lower()}":
+                        return club_name
     except Exception as e:
-        print(e)
-        return True, "Что-то пошло не так!", ""
+        print(f"Ошибка получения расписания: {e}")
+    return None
 
-def do_action(message, parts):
+# ==========================================
+# 3. МОДУЛЬНЫЕ ОБРАБОТЧИКИ ХЕШТЕГОВ
+# ==========================================
+
+def do_club_action(hashtag, message, text_args):
+    """Обработчик для #др, #продление, #инициатива (автоматически тянет клуб)"""
     if "факт" in message.text.lower():
         return False, 'Даже у меня есть имя, значит и у него есть!',  "```Правильно!\nНикаких 'фактов'!```"
-    
-    action_do = parts[0].lower()
-    club = parts[1].lower()
-    
-    if club in clubs:
-        club = clubs[club]
-        table = action[action_do]
-        user_name = "@" + message.from_user.username
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
-        desc = parts[2].strip() if len(parts) > 2 else ""
-        
-        if len(desc) > 1024:
-            return False, "Слишком длинно!", "```Правильно!\nПожалуйста, меньше 1024 символов```"
-        
-        # Интеграция с новым API для #ДР
-        if action_do == "#др":
-            try:
-                headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
-                payload = {"telegram": user_name, "comment": desc}
-                requests.post(f"{SHIFTON_API_URL}/api/bot/birthday", json=payload, headers=headers, timeout=5)
-            except Exception as e:
-                print(f"Ошибка API при отправке ДР: {e}")
+    if len(text_args) > 1024:
+        return False, "Слишком длинно!", "```Правильно!\nПожалуйста, меньше 1024 символов```"
 
-        update_status()
-        Insert(table, today, user_name, club, desc)
+    user_name = "@" + message.from_user.username
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S')
+
+    # Ищем пользователя на смене
+    club = get_user_club_today(message.from_user.username)
+    shift_not_found = (club is None)
+    if shift_not_found:
+        club = "Неизвестно"
+
+    api_error = None
+    if hashtag == "#др":
+        try:
+            headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
+            payload = {"telegram": user_name, "comment": text_args}
+            res = requests.post(f"{SHIFTON_API_URL}/api/bot/birthday", json=payload, headers=headers, timeout=5).json()
+            if not res.get("ok"):
+                api_error = res.get("error")
+        except Exception as e:
+            print(f"Ошибка API при отправке ДР: {e}")
+
+    # Запись в локальную базу
+    table = action[hashtag]
+    update_status() # Функция из твоего старого кода (возможно в sheets.py)
+    Insert(table, today, user_name, club, text_args)
+    update_table(table)
+
+    # Формируем красивый ответ
+    if shift_not_found or api_error == "shift_not_found":
+        return True, f"Сохранено! Но я не нашел тебя на смене сегодня (Клуб: Неизвестно).", ""
+    return True, random.choice(TEXTS['aff']) + f" (Клуб: {club})", ""
+
+
+def do_double(message, text_args):
+    """Обработчик для #двойная"""
+    parts = text_args.split(maxsplit=1)
+    if not parts:
+        return False, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
+        
+    hours_str = parts[0].strip().replace(',', '.')
+    desc = parts[1].strip() if len(parts) > 1 else ""
+
+    if not hours_str.replace('.', '', 1).isnumeric():
+        return False, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
+
+    user_name = "@" + message.from_user.username
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    hours = float(hours_str)
+
+    api_error = None
+    try:
+        headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
+        payload = {"telegram": user_name, "hours": hours}
+        res = requests.post(f"{SHIFTON_API_URL}/api/bot/double", json=payload, headers=headers, timeout=5).json()
+        if not res.get("ok"):
+            api_error = res.get("error")
+    except Exception as e:
+        print(f"Ошибка API при отправке двойной: {e}")
+
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    cur.execute("INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)", (user_name, today, hours, desc))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    club = get_user_club_today(message.from_user.username)
+    if club is None or api_error == "shift_not_found":
+        return True, "Сохранено! Но я не нашел тебя на смене сегодня.", ""
+    
+    return True, random.choice(TEXTS['aff']), ""
+
+
+def do_simple_amount(hashtag, message, text_args):
+    """Обработчик для #автосим (10%) и #активация (100%)"""
+    autosim_coeff=1
+    if not text_args.strip().isnumeric():
+        return False, "Неверный формат хештега!", f"```Правильно!\n{hashtag} *сумма оплаты*```"
+    
+    user_name = "@" + message.from_user.username
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    raw_amount = float(text_args.strip())
+    
+    # Математика в зависимости от тега
+    if hashtag == '#автосим':
+        amount = raw_amount * autosim_coeff
+        api_endpoint = "/api/bot/autosim"
+    else:
+        amount = raw_amount
+        api_endpoint = "/api/bot/activation"
+
+    api_error = None
+    try:
+        headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
+        payload = {"telegram": user_name, "amount": amount}
+        res = requests.post(f"{SHIFTON_API_URL}{api_endpoint}", json=payload, headers=headers, timeout=5).json()
+        if not res.get("ok"):
+            api_error = res.get("error")
+    except Exception as e:
+        print(f"Ошибка API при отправке {hashtag}: {e}")
+
+    table_name = 'autosim' if hashtag == '#автосим' else 'activation'
+
+    conn = sqlite3.connect('db/omgbot.sql')
+    cur = conn.cursor()
+    cur.execute(f"INSERT INTO {table_name} (who, d_rep, amount) VALUES (?, ?, ?)", (user_name, today, amount))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    club = get_user_club_today(message.from_user.username)
+    if club is None or api_error == "shift_not_found":
+        return True, f"Сохранено ({amount} руб), но я не нашел тебя на смене сегодня!", ""
+    
+    return True, random.choice(TEXTS['aff']) + f" (Сумма бонуса: {amount} руб)", ""
+
+
+def do_bonus(hashtag, message, text_args):
+    """Обработчик для #серт и #абик"""
+    parts = text_args.split()
+    if len(parts) != 2 or not parts[0].isnumeric() or not parts[1].isnumeric():
+        return False, "Неверно написан хештег! Формат:", f"```Правильно!\n{hashtag} *номер* *сумма*```"
+        
+    num = parts[0]
+    sale = parts[1]
+    
+    if (hashtag == "#абик" and int(num) < 1000) or (hashtag == "#серт" and int(num) >= 3000):
+        table = bonus[hashtag]
+        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+        who = "@" + message.from_user.username
+        Insert_bonus(table, num, today, who, sale)
         update_table(table)
         return True, random.choice(TEXTS['aff']), ""
     else:
-        return False, "Неверно написан хештег!", "```Правильно!\nКоды клубов: лен, мар, каш, про, дми```"
-
-def do_double(message, parts):
-    # Разрешаем запятую для дробных часов (например, 1,5)
-    hours_str = parts[1].strip().replace(',', '.')
-    
-    if hours_str.replace('.', '', 1).isnumeric() and len(parts) == 3:
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-        user_name = "@" + message.from_user.username
-        
-        # --- ИНТЕГРАЦИЯ С НОВЫМ API ДЛЯ #ДВОЙНАЯ ---
-        try:
-            headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
-            payload = {"telegram": user_name, "hours": float(hours_str)}
-            requests.post(f"{SHIFTON_API_URL}/api/bot/double", json=payload, headers=headers, timeout=5)
-        except Exception as e:
-            print(f"Ошибка API при отправке двойной: {e}")
-        # ------------------------------------------
-
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)", 
-                    (user_name, today, float(hours_str), parts[2].strip()))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return True, random.choice(TEXTS['aff']), ""
-    else:
-        return False, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
+        return False, "Неверно написан хештег!", "```Правильно!\nАбики имеют номер < 1000, серты >= 3000```"
 
 
-def do_simple_amount(message, parts):
-    """Универсальный обработчик для хештегов #автосим и #активация"""
-    if len(parts) >= 2 and parts[1].strip().isnumeric():
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-        amount = int(parts[1].strip())
-        who = "@" + message.from_user.username
-        
-        # Определяем таблицу
-        table_name = 'autosim' if parts[0].lower() == '#автосим' else 'activation'
-
-        conn = sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        # Используем безопасную вставку
-        cur.execute(f"INSERT INTO {table_name} (who, d_rep, amount) VALUES (?, ?, ?)", (who, today, amount))
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        return True, random.choice(TEXTS['aff']), ""
-    else:
-        return False, "Неверный формат хештега!", f"```Правильно!\n#автосим *сумма оплаты*```"
-
-def do_bonus(message,parts):
-    
-    if parts[1].isnumeric() and parts[2].isnumeric():
-        if (parts[0]=="#абик" and int(parts[1])<1000) or (parts[0]=="#серт" and int(parts[1])>=3000):
-           
-            table = bonus[parts[0]]
-            today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-            num = parts[1]
-            sale = parts[2]
-            who = "@"+message.from_user.username
-            Insert_bonus(table,num,today,who,sale)
-            update_table(table)
-            return True, random.choice(TEXTS['aff']),""
-
-        else:
-            return  False, "Неверно написан хештег!", "```Правильно!\nАбики имеют номер 001, серты имеют номер 3001```"
-    else:
-        return False, "Неверно написан хештег! Формат:", "```Правильно!\n#серт *номер* *сумма*```"
-        
-def do_review(message,parts):
-    
-    if parts[1].strip().isnumeric() and len (parts)==3:
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-
-        conn=sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("INSERT INTO '%s' (who,d_rep, amount, desc) VALUES ('%s','%s','%s','%s')" % ('reviews',"@"+message.from_user.username,today,int(parts[1]),parts[2].strip()))
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        update_table('reviews')
-        return True, random.choice(TEXTS['aff']),""
-    else:
+def do_review(message, text_args):
+    """Обработчик для #отзывы"""
+    parts = text_args.split(maxsplit=1)
+    if not parts or not parts[0].isnumeric():
         return False, "Неверно написан хештег! Формат:", "```Правильно!\n#отзывы *количество* *описание*```"
-    
-def do_penalty(message,parts):
-    conn=sqlite3.connect('db/omgbot.sql')
+        
+    amount = int(parts[0])
+    desc = parts[1].strip() if len(parts) > 1 else ""
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    who = "@" + message.from_user.username
+
+    conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT login FROM users_new WHERE login='%s'" % (parts[1]))
-    fet = cur.fetchall()
-
-    if fet:
-        pass
-    else:
-        return False, 'Нет таких!', "```Правильно!\n#штраф *логин* *описание*```"
+    cur.execute("INSERT INTO reviews (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)", (who, today, amount, desc))
+    conn.commit()
+    cur.close()
+    conn.close()
     
-    cur.close()
+    update_table('reviews')
+    return True, random.choice(TEXTS['aff']), ""
 
+
+def do_penalty(message, text_args, bypass_admin=False):
+    """Обработчик для #штраф"""
+    # Поддержка старого вызова с OPENCLOSE
+    if isinstance(text_args, list):
+        if len(text_args) > 0 and text_args[0] == 'OPENCLOSE':
+            bypass_admin = True
+            text_args = " ".join(text_args[1:])
+
+    parts = text_args.split(maxsplit=1)
+    if len(parts) < 2:
+        return False, 'Формат неверный!', "```Правильно!\n#штраф @логин причина```"
+        
+    target_login = parts[0]
+    desc = parts[1]
+    
+    conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT status FROM users_new WHERE login='%s'" % (f"@{message.from_user.username}"))
-    fet2 = cur.fetchall()
-    cur.close()
-    if fet2:
-        if int(fet2[0][0])==2 or parts[0]=='OPENCLOSE':
-            today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-            cur = conn.cursor()
-            cur.execute("INSERT INTO penalty (dt, name, desc) VALUES ('%s', '%s', '%s')" % (today, parts[1], parts[2]))
-            conn.commit()
-            conn.close()
-            return True, random.choice(TEXTS['penalty_phrases']),""
-        else:
-            conn.close()
-            return False, 'Ещё чего выдумал!', "```Правильно!\nШтраф выписывает только руководство```"
+    cur.execute("SELECT login FROM users_new WHERE login=?", (target_login,))
+    if not cur.fetchone():
+        conn.close()
+        return False, 'Нет такого логина в базе!', "```Правильно!\n#штраф @логин причина```"
+    
+    cur.execute("SELECT status FROM users_new WHERE login=?", (f"@{message.from_user.username}",))
+    fet2 = cur.fetchone()
+    
+    if fet2 and (int(fet2[0]) == 2 or bypass_admin):
+        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+        cur.execute("INSERT INTO penalty (dt, name, desc) VALUES (?, ?, ?)", (today, target_login, desc))
+        conn.commit()
+        conn.close()
+        return True, random.choice(TEXTS['penalty_phrases']), ""
     else:
-        return False, 'Ты кто?', "```Правильно!\nШтраф выписывает только руководство```"
+        conn.close()
+        return False, 'Ещё чего выдумал!', "```Правильно!\nШтраф выписывает только руководство```"
 
+# ==========================================
+# 4. РОУТЕР ХЕШТЕГОВ (Главная точка входа)
+# ==========================================
 
-clubs = {'мар':'Марьино','лен':'Ленинский','про':'Прокшино','каш':'Каширка','дми':'Дмитровка'}
-action = {'#продление':'afterparty','#др':'birthday','#инициатива':'initiative'}
-symb = {'#продление':10,'#др':3,'#инициатива':11}
-bonus = {'#серт':'sert','#абик':'abik'}
-
-# 1. ИСПРАВЛЕНО: Добавлены #автосим и #активация
 kpi_dict = {
-    '#серт': do_bonus, 
-    '#абик': do_bonus, 
-    '#штраф': do_penalty,
-    '#двойная': do_double, 
-    '#продление': do_action,
-    '#др': do_action,
-    '#инициатива': do_action,
+    '#серт': lambda m, args: do_bonus('#серт', m, args),
+    '#абик': lambda m, args: do_bonus('#абик', m, args),
+    '#штраф': lambda m, args: do_penalty(m, args),
+    '#двойная': do_double,
+    '#продление': lambda m, args: do_club_action('#продление', m, args),
+    '#др': lambda m, args: do_club_action('#др', m, args),
+    '#инициатива': lambda m, args: do_club_action('#инициатива', m, args),
     '#отзывы': do_review,
-    '#автосим': do_simple_amount,
-    '#активация': do_simple_amount
+    '#автосим': lambda m, args: do_simple_amount('#автосим', m, args),
+    '#активация': lambda m, args: do_simple_amount('#активация', m, args)
 }
 
-# 2. ИСПРАВЛЕНО: Чистый вызов функций без списков
+def hash_handle(message):
+    try:
+        # Разделяем на 2 части: хештег и всё остальное (аргументы)
+        parts = message.text.split(maxsplit=1)
+        if not parts:
+            return False, "Текст пустой!", ""
+            
+        hashtag = parts[0].lower()
+        text_args = parts[1].strip() if len(parts) > 1 else ""
+        
+        if hashtag in kpi_dict:
+            flag, answer, desc = kpi_dict[hashtag](message, text_args)
+            return flag, answer, desc
+        else:
+            return False, "Не понимаю о чем ты 🙈", "```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
+    except Exception as e:
+        print(f"Ошибка в hash_handle: {e}")
+        return True, "Что-то пошло не так!", ""
+
+# ==========================================
+# 5. СИНХРОНИЗАЦИЯ
+# ==========================================
+
 def init():
     read_ank_table()
     read_shifts()
