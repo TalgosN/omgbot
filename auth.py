@@ -118,7 +118,7 @@ def check_pass (message,bot, first_name,second_name,nick_name,bday,number,email,
 def check_user(message,bot, first_name,second_name,nick_name,bday,number,email,status):
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE nick_name='%s'" % (nick_name))
+    cur.execute("SELECT * FROM users_new WHERE nick_name=?", (nick_name,))
     users = cur.fetchall()
     cur.close()
     conn.close()
@@ -159,7 +159,11 @@ def confirm (message,bot, first_name,second_name,nick_name,bday,number,email,sta
 def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,status):
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("UPDATE users_new SET  first_name='%s', second_name='%s', nick_name='%s', bday='%s', phone='%s', email='%s',status='%s',chatid='%s' WHERE login= '%s'" % (first_name,second_name,nick_name,bday,number,email,status,message.chat.id,"@"+message.from_user.username))
+        cur.execute("""
+            UPDATE users_new
+            SET first_name=?, second_name=?, nick_name=?, bday=?, phone=?, email=?, status=?, chatid=?
+            WHERE login=?
+        """, (first_name, second_name, nick_name, bday, number, email, status, message.chat.id, "@"+message.from_user.username))
         conn.commit()
         conn.close()
         bot.send_message(message.chat.id, f'Все в порядке! Будем знакомы!\n\nНе забудь подписаться на наш инфоканал! https://t.me/+Q2YQbLpwLIswYWY6',reply_markup=types.ReplyKeyboardRemove())
@@ -179,7 +183,6 @@ def edit_nick(message,bot, first_name,second_name,nick_name,bday,number,email,st
         bot.send_message(message.chat.id, 'Что-то слишком длинное, не смогу запомнить, может, есть сокращенный вариант?')
         bot.register_next_step_handler(message, edit_nick,bot,first_name,second_name,nick_name,bday,number,email,status)
     
-
 
 
 

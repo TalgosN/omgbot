@@ -15,20 +15,28 @@ symb = {'#продление':10,'#др':3,'#инициатива':11}
 bonus = {'#серт':'sert','#абик':'abik'}
          
 tables = ['afterparty','birthday','initiative','abik','sert']
+allowed_tables = set(tables + ['reviews'])
+
+def validate_table(table):
+    if table not in allowed_tables:
+        raise ValueError(f"Неизвестная KPI-таблица: {table}")
+    return table
     
 
 def Insert(table,date,user,club,desc):
+    table = validate_table(table)
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("INSERT INTO '%s' (dt_rep, who, club, desc,status) VALUES ('%s','%s','%s','%s','%s')" % (table,date,user,club,desc,'На проверке'))
+    cur.execute(f'INSERT INTO "{table}" (dt_rep, who, club, desc, status) VALUES (?, ?, ?, ?, ?)', (date, user, club, desc, 'На проверке'))
     conn.commit()
     cur.close()
     conn.close()
 
 def Insert_bonus(table,num,date,user,sale):
+    table = validate_table(table)
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("INSERT INTO '%s' (num,d_rep,who,bonus) VALUES ('%s','%s','%s','%s')" % (table,num,date,user,sale))
+    cur.execute(f'INSERT INTO "{table}" (num, d_rep, who, bonus) VALUES (?, ?, ?, ?)', (num, date, user, sale))
     conn.commit()
     cur.close()
     conn.close()
@@ -36,12 +44,13 @@ def Insert_bonus(table,num,date,user,sale):
 
 
 def update_table(table):
+    table = validate_table(table)
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open('KPI helper')
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM '%s'" % (table))
+    cur.execute(f'SELECT * FROM "{table}"')
     data = cur.fetchall()
     cur.close()
     conn.close()
@@ -73,8 +82,8 @@ def update_status():
     conn=sqlite3.connect('db/omgbot.sql')
 
     for i in action:
-       
         table = action[i]
+        validate_table(table)
         wks = sh.worksheet_by_title(table)
         ids = wks.get_values(start='A', end='A', returnas='matrix')
         statuses = wks.get_values(start='F', end='F', returnas='matrix')
@@ -83,7 +92,7 @@ def update_status():
            
             if (statuses[k]!="") and (statuses[k]!="В обработке"):
                 cur = conn.cursor()
-                cur.execute("UPDATE '%s' SET status = '%s' WHERE id = '%s'" % (table, statuses[k][0],ids[k][0]))
+                cur.execute(f'UPDATE "{table}" SET status=? WHERE id=?', (statuses[k][0], ids[k][0]))
                 
     conn.commit()
     conn.close()
@@ -96,9 +105,12 @@ def update_status():
 
 def def_count (table,user_name,begin,today):
 
+    table = validate_table(table)
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT COUNT (*) FROM '%s' WHERE who = '%s' AND dt_rep BETWEEN '%s' AND datetime('%s','+1 day') AND status = 'Одобрено'" % (table, user_name, begin, today))
+    cur.execute(f'''SELECT COUNT (*) FROM "{table}"
+                    WHERE who=? AND dt_rep BETWEEN ? AND datetime(?, '+1 day')
+                    AND status='Одобрено' ''', (user_name, begin, today))
     count = cur.fetchall()[0][0]
     cur.close()
     conn.close() 
@@ -106,9 +118,11 @@ def def_count (table,user_name,begin,today):
 
 def def_sum_bonus (table,user_name,begin,today):
 
+    table = validate_table(table)
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT SUM (bonus) FROM '%s' WHERE who = '%s' AND d_rep BETWEEN '%s' AND datetime('%s','+1 day')" % (table, user_name, begin, today))
+    cur.execute(f'''SELECT SUM (bonus) FROM "{table}"
+                    WHERE who=? AND d_rep BETWEEN ? AND datetime(?, '+1 day')''', (user_name, begin, today))
     sum1 = cur.fetchall()[0][0]
     cur.close()
     conn.close() 
@@ -183,4 +197,3 @@ def update_table_open():
     # Полностью сносим старые данные и заливаем новый срез с автоподгоном границ
     wks.clear()
     wks.set_dataframe(df_activity, start='A1', copy_head=True, fit=True)
-   

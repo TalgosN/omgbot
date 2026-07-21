@@ -518,7 +518,7 @@ def get_distance(lat1, lon1, lat2, lon2):
 def send_status_close(club,bot):
    conn=sqlite3.connect('db/omgbot.sql')
    cur = conn.cursor()
-   cur.execute("SELECT * FROM clubs WHERE status='Открыт' and club='%s'"%(club))
+   cur.execute("SELECT * FROM clubs WHERE status='Открыт' and club=?", (club,))
    clubs = cur.fetchall()
    cur.close()
    conn.close()
@@ -529,7 +529,7 @@ def send_status_close(club,bot):
 def send_status_open(club,bot):
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT * FROM clubs WHERE status='Закрыт' and club='%s'"%(club))
+        cur.execute("SELECT * FROM clubs WHERE status='Закрыт' and club=?", (club,))
         clubs = cur.fetchall()
         cur.close()
         conn.close()
@@ -539,7 +539,7 @@ def send_status_open(club,bot):
 def close_club (club,bot):
    conn=sqlite3.connect('db/omgbot.sql')
    cur = conn.cursor()
-   cur.execute("UPDATE clubs SET status='Закрыт' WHERE status='Открыт' and club='%s'"%(club))
+   cur.execute("UPDATE clubs SET status='Закрыт' WHERE status='Открыт' and club=?", (club,))
    rows_affected = cur.rowcount  # Количество измененных строк
    conn.commit()
    cur.close()

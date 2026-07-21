@@ -53,7 +53,7 @@ def func_task(message,bot):
 def add_task(message,bot):
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT title FROM tasks WHERE status='%s'" % ("В работе"))
+        cur.execute("SELECT title FROM tasks WHERE status=?", ("В работе",))
         titles = cur.fetchall()
         cur.close()
         conn.close()

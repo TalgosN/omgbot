@@ -71,18 +71,22 @@ weather_conditions = {
 }
 
 def get_weather():
-  response = requests.request("GET", f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&units=metric", headers=headers)
+  try:
+    response = requests.request("GET", f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&units=metric", headers=headers, timeout=10)
+    response.raise_for_status()
+    response_dict = response.json()
 
-  response_dict = response.json()
+    response2 = requests.request("GET", f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&units=metric&lang={lang}", headers=headers, timeout=10)
+    response2.raise_for_status()
+    response_dict2 = response2.json()
 
-  response2 = requests.request("GET", f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={key}&units=metric&lang={lang}", headers=headers)
+    temp = round(response_dict["main"]["temp"])
+    feels_like = round(response_dict["main"]["feels_like"])
+    weather_desk=response_dict["weather"][0]["description"]
+    weather_desk_ru=response_dict2["weather"][0]["description"]
+    weather_icon = icons.get(weather_conditions.get(weather_desk, ""), "")
 
-  response_dict2 = response2.json()
-
-  temp = round(response_dict["main"]["temp"])
-  feels_like = round(response_dict["main"]["feels_like"])
-  weather_desk=response_dict["weather"][0]["description"]
-  weather_desk_ru=response_dict2["weather"][0]["description"]
-  weather_icon = icons[weather_conditions[weather_desk]]
-
-  return (f"Температура {temp}°C, ощущается как: {feels_like}°C\n{weather_desk_ru.title()} {weather_icon}")
+    return (f"Температура {temp}°C, ощущается как: {feels_like}°C\n{weather_desk_ru.title()} {weather_icon}")
+  except (requests.RequestException, KeyError, TypeError, ValueError) as e:
+    print(f"Ошибка получения погоды: {e}")
+    return "Погода временно недоступна"

@@ -14,6 +14,7 @@ from kpi import init
 import requests
 from sender import safe_send
 
+validate_config()
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
 
 ############################# main constants
@@ -27,7 +28,7 @@ def all_active_tasks_schedule():
     list_title=[]
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT title FROM tasks WHERE status='%s'" % ("В работе"))
+    cur.execute("SELECT title FROM tasks WHERE status=?", ("В работе",))
     titles = cur.fetchall()
     cur.close()
     conn.close()
@@ -156,7 +157,10 @@ def schedule_func(bot): # Не забудь передать bot!
 
     # Вечный цикл
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            print(f"Ошибка фонового задания: {e}")
         time.sleep(1)
 
 
@@ -303,7 +307,7 @@ def create_tables_KPI():
 def define_name(message):
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE login='%s'" % ("@"+message.from_user.username))
+    cur.execute("SELECT * FROM users_new WHERE login=?", ("@"+message.from_user.username,))
     users = cur.fetchall()
     cur.close()
     conn.close()
@@ -325,7 +329,7 @@ def is_spam(message):
 
 def send_react(message,emoji):
     
-    url = f'https://api.telegram.org/bot6942615682:AAEhsdJuy6M8JwQ57pimD6XA3QIu9dGIRbc/setMessageReaction'
+    url = f'https://api.telegram.org/bot{TELEGRAM_API_KEY}/setMessageReaction'
     data = {
         'chat_id': message.chat.id,
         'message_id': message.id,
@@ -338,8 +342,11 @@ def send_react(message,emoji):
         ],
         'is_big': False
     }
-    response = requests.post(url, json=data)
-    result = response.json()
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"Ошибка отправки реакции Telegram: {e}")
 '''
 Indexes of users
 0 - id
@@ -552,13 +559,13 @@ def handler_new_member(message): # Приветсвие нового сотру�
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE login='%s'" % ("@"+message.new_chat_members[0].username))
+    cur.execute("SELECT * FROM users_new WHERE login=?", ("@"+message.new_chat_members[0].username,))
     users = cur.fetchall()
     cur.close()
     
     if len(users)==0:
         cur = conn.cursor()
-        cur.execute("INSERT INTO users_new (login) VALUES ('%s')" % ("@"+message.new_chat_members[0].username))
+        cur.execute("INSERT INTO users_new (login) VALUES (?)", ("@"+message.new_chat_members[0].username,))
         conn.commit()
         cur.close()
     conn.close()
@@ -570,7 +577,7 @@ def handler_left_member(message): # Прощание с сотрудником �
     bot.send_message(message.chat.id, "Туда тебе и дорога, {0}!".format(user_name))
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE users_new SET status ='%s' WHERE login ='%s' " % (-1,"@"+message.left_chat_member.username))
+    cur.execute("UPDATE users_new SET status=? WHERE login=?", (-1, "@"+message.left_chat_member.username))
     conn.commit()
     cur.close()
     conn.close()
@@ -692,9 +699,13 @@ from admin_panel import register_admin_consumables_callbacks
 register_admin_consumables_callbacks(bot)
 
 if __name__ == "__main__":
-    threading.Thread(target=schedule_func, args=(bot,)).start()
-    update_users()
-    init()
+    threading.Thread(target=schedule_func, args=(bot,), daemon=True).start()
+
+    for task_name, startup_task in (("сотрудников", update_users), ("KPI", init)):
+        try:
+            startup_task()
+        except Exception as e:
+            print(f"Ошибка стартовой синхронизации {task_name}: {e}")
 
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
