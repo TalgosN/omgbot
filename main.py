@@ -14,7 +14,6 @@ from kpi import init
 import requests
 from sender import safe_send
 from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
-from db_migrations import migrate_table_names
 
 validate_config()
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
@@ -369,9 +368,6 @@ Indexes of users
 
 
 ############################# start
-migration_actions = migrate_table_names()
-for migration_action in migration_actions:
-    print(f'Миграция БД: {migration_action}')
 create_tables()
 initialize_permissions_schema()
 create_tables_KPI()

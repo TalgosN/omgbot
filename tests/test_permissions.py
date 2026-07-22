@@ -48,9 +48,6 @@ class PermissionsTest(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         statuses = dict(conn.execute('SELECT login, status FROM users'))
         audit_count = conn.execute('SELECT COUNT(*) FROM role_audit').fetchone()[0]
-        migration_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
-        ).fetchone()
         conn.close()
         self.assertEqual(statuses, {
             '@employee': 0,
@@ -59,7 +56,6 @@ class PermissionsTest(unittest.TestCase):
             '@owner': 3,
         })
         self.assertEqual(audit_count, 0)
-        self.assertIsNone(migration_table)
 
     def test_permissions_use_numeric_telegram_id(self):
         permissions.initialize_permissions_schema()
