@@ -3,9 +3,11 @@ import pytz
 from telebot import *
 #from constants import *
 from constants import get_clubs, get_clublist, funclist_today, CHATS, TEXTS, tags_main
+from club_config import select_question_set
 from sheets import *
 from datetime import datetime,timedelta
 import math
+import random
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 
 ############################# core openclose
@@ -281,14 +283,9 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
         return
     current_datetime = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%H:%M")
     
-    # Чек-лист
-    checklist = club_config.get('checklists', {}).get(a, [])
-    check_list_text = "\n– " + "\n– ".join(checklist) if checklist else " Отсутствует"
-
-    # Выбор варианта вопросов
-    q_variants = club_config.get('questions', {}).get(a, [[]])
-    variant_index = datetime.now().weekday() % len(q_variants)
-    questions = q_variants[variant_index]
+    # Чек-лист того же случайного набора
+    questions, checklist = select_question_set(club_config, a)
+    check_list_text = "\n• " + "\n• ".join(checklist) if checklist else " Отсутствует"
     
     # 3. Приветствие
     try:

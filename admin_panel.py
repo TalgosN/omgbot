@@ -13,6 +13,7 @@ from constants import CHATS, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
 from club_config import get_club_config_status, get_clubs, save_clubs
 from club_config_sync import (
     ConfigValidationError,
+    VALIDATION_SHEET,
     config_diff,
     count_config,
     read_config,
@@ -509,7 +510,7 @@ def sync_config():
         validation_warning = None
         try:
             write_validation(
-                worksheets['Config Validation'],
+                worksheets[VALIDATION_SHEET],
                 f'OK, опубликована версия {status["version"]}',
             )
         except Exception as error:

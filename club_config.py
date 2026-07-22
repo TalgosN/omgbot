@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -116,6 +117,19 @@ def get_schedule_locations():
             'emoji': info['schedule_emoji'],
         })
     return result
+
+
+def select_question_set(club_config, action):
+    question_variants = club_config.get('questions', {}).get(action, [[]])
+    variant_index = random.randrange(len(question_variants))
+    questions = question_variants[variant_index]
+
+    checklist_variants = club_config.get('checklists', {}).get(action, [])
+    if checklist_variants and isinstance(checklist_variants[0], list):
+        checklist = checklist_variants[variant_index]
+    else:
+        checklist = checklist_variants
+    return questions, checklist
 
 
 def save_clubs(clubs, source='google'):
