@@ -5,6 +5,9 @@ import pytz
 import locale
 import pandas as pd
 import math
+from collections import defaultdict
+from copy import copy
+from decimal import Decimal, ROUND_HALF_UP
 from openpyxl import load_workbook
 from telebot import *
 import os
@@ -14,24 +17,6 @@ from sender import safe_send
 from permissions import ROLE_OWNER, require_role
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
-
-################# ShiftON
-companyId = 16303
-projectId = 17253
-scheduleId = 27521
-scheduleId_сс = 27341
-############ Get ShiftOn Token (it changes weekly)
-def get_shifton_token():
-    
-    url = "https://api2.shifton.com/oauth/token"
-
-    payload = json.dumps(SHIFTON_CREDITNAILS)
-    headers_token = {'Accept': 'application/json',
-               'Content-Type': 'application/json'}
-
-    response_token = requests.request("POST", url, headers=headers_token, data=payload) 
-    response_dict_token = response_token.json()
-    return response_dict_token
 
 
 
@@ -902,228 +887,388 @@ def nal_to_dt (start_dt,end_dt,message,bot):
     finance(message,bot)
 
 ################################ Pay Report
-def pay_report(date_start,date_end,message,bot):
-    
-    start_time = datetime.strptime(date_start,'%Y-%m-%dT%H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
-    end_time = datetime.strptime(date_end,'%Y-%m-%dT%H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
-    
-    data =get_data_pay_report (start_time, end_time)
-    
-    # Создаем пустой DataFrame
-    clubs = list(set() | {club for info in data.values() for club in info['Смены'].keys()})
 
 
-    # Создаем DataFrame с клубами в строках и ID сотрудников в столбцах
-    df = pd.DataFrame(index=clubs, columns=data.keys())
 
-    # Заполняем DataFrame
-    for employee_id, info in data.items():
-        
-        ставка = info['Ставка']
-        ставка_коллцентр = info['Ставка Коллцентр']
-        for club, hours in info['Смены'].items():
-            df.loc[club, employee_id] = ставка * hours if club != 'Коллцентр' else ставка_коллцентр * hours
-            df.loc[club, employee_id] += info['ДР'][club]
-            df.loc[club, employee_id] += info['Двойные'][club]
+PAYROLL_DB_PATH = 'db/omgbot.sql'
+PAYROLL_TEMPLATE_PATH = './Reports/Шаблон_ЗП.xlsx'
+PAYROLL_EMPLOYEE_COLUMNS = 30
+PAYROLL_SPECIAL_ROWS = ('Двойные без клуба', 'Автосим', 'Активации')
 
-    # Заполняем пустые значения нулями
-    df.fillna(0, inplace=True)
 
-    # Путь к вашему шаблону
-    template_path = './Reports/Шаблон_ЗП.xlsx'
-    # Имя для сохранения
-    sdt=datetime.strptime(start_time,'%Y-%m-%d %H:%M:%S').strftime('%d.%m.%y')
-    edt=datetime.strptime(end_time,'%Y-%m-%d %H:%M:%S').strftime('%d.%m.%y')                   
-    output_path = f'./Reports/Отчет_ЗП_{sdt}-{edt}.xlsx'
+def _canonical_login(login):
+    return str(login or '').strip().lower()
 
-    # Загружаем книгу и выбираем лист
-    wb = load_workbook(template_path)
-    ws = wb['ЗП']  # или wb['SheetName'], если знаете имя листа
 
-    # Записываем заголовки столбцов
-    for c_idx, column_name in enumerate(df.columns):
-        ws.cell(row=1, column=c_idx + 2, value=column_name)  # +2 для пропуска первого столбца и заголовка
+def _decimal(value):
+    return Decimal(str(value or 0))
 
-    # Записываем заголовки строк (клубов)
-    for r_idx, club in enumerate(df.index):
-        ws.cell(row=r_idx + 2, column=1, value=club)  # +2 для пропуска заголовка
 
-    # Записываем данные в нужные ячейки, начиная со второй строки и второго столбца
-    for r_idx, row in enumerate(df.itertuples(index=False), start=2):  # start=2 для начала со второй строки
-        for c_idx, value in enumerate(row):
-            ws.cell(row=r_idx, column=c_idx + 2, value=value)  # +1 для пропуска заголовка строк и +2 для столбцов
+def _money(value):
+    return float(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
-    # Записываем бонусы и штрафы в соответствующие ячейки
-    for employee_id, info in data.items():
-        bonus = info['Бонус']
-        penalty = info['Штраф']
-        doubles = info['Двойные']
-        bdays = info['ДР']
-        # Находим индекс сотрудника в заголовках
-        emp_col_idx = list(df.columns).index(employee_id) + 2  # +2 из-за заголовков
 
-        # Записываем бонус и штраф в соответствующие строки (например, строки 2 и 3)
-        ws.cell(row=len(df) + 2, column=emp_col_idx, value=bonus)  # строка для бонуса
-        ws.cell(row=len(df) + 3, column=emp_col_idx, value=penalty)  # строка для штрафа
+def _parse_payroll_period(date_start, date_end):
+    start_dt = datetime.strptime(date_start, '%Y-%m-%d %H:%M:%S')
+    end_dt = datetime.strptime(date_end, '%Y-%m-%d %H:%M:%S')
+    if end_dt <= start_dt:
+        raise ValueError('Дата конца отчёта должна быть позже даты начала')
+    return start_dt, end_dt
 
-    # Удаляем последние пустые строки
-    max_row = ws.max_row
-    while ws[max_row][0].value is None and max_row > 1:  # Проверяем только строки после заголовка
-        ws.delete_rows(max_row)
-        max_row -= 1
 
-    # Автоподбор ширины столбцов
+def _fetch_missing_payroll_shifts(conn, start_dt, end_dt):
+    """Дополняет только полностью отсутствующие в БД даты через OMG Shift."""
+    start_iso = start_dt.date().isoformat()
+    end_iso = end_dt.date().isoformat()
+    existing_dates = {
+        row[0] for row in conn.execute(
+            """SELECT DISTINCT date(dt_shift)
+               FROM shifts
+               WHERE date(dt_shift) >= date(?) AND date(dt_shift) < date(?)""",
+            (start_iso, end_iso),
+        )
+    }
+    location_names = {
+        club['source_name']: club['name'] for club in get_schedule_locations()
+    }
+    current_date = start_dt.date()
+    end_date = end_dt.date()
+
+    while current_date < end_date:
+        date_iso = current_date.isoformat()
+        current_date += timedelta(days=1)
+        if date_iso in existing_dates:
+            continue
+
+        response = requests.get(
+            f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}",
+            headers={"Authorization": f"Bearer {SHIFTON_API_TOKEN}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get('ok'):
+            error = payload.get('error', 'invalid_response') if isinstance(payload, dict) else 'invalid_response'
+            raise RuntimeError(f'OMG Shift не вернул расписание за {date_iso}: {error}')
+
+        rows = []
+        seen = set()
+        for location in payload.get('locations', []):
+            source_club = location.get('title', 'Неизвестно')
+            club = location_names.get(source_club, source_club)
+            for shift in location.get('shifts', []):
+                employee = str(shift.get('employee') or '').strip()
+                if not employee or employee.upper() == 'СВОБОДНАЯ СМЕНА':
+                    continue
+
+                start_time = datetime.strptime(shift['start'], '%H:%M')
+                end_time = datetime.strptime(shift['end'], '%H:%M')
+                if end_time <= start_time:
+                    end_time += timedelta(days=1)
+                duration = round((end_time - start_time).total_seconds() / 3600, 1)
+
+                name_parts = employee.split()
+                second_name = name_parts[0]
+                first_name = name_parts[1] if len(name_parts) > 1 else ''
+                login = str(shift.get('telegram') or '').strip() or None
+                if login and not login.startswith('@'):
+                    login = f'@{login}'
+
+                row_key = (
+                    second_name, first_name, club, shift['start'], shift['end'],
+                    _canonical_login(login),
+                )
+                if row_key in seen:
+                    continue
+                seen.add(row_key)
+                rows.append((second_name, first_name, date_iso, club, duration, login))
+
+        if rows:
+            conn.executemany(
+                """INSERT INTO shifts
+                   (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source)
+                   VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')""",
+                rows,
+            )
+            conn.commit()
+
+
+def _load_payroll_rates(conn, start_dt, end_dt):
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='payroll_rates'"
+    ).fetchone()
+    if not table_exists:
+        raise RuntimeError('Таблица ставок payroll_rates не создана. Перезапусти бота и импортируй ставки')
+
+    rates = defaultdict(list)
+    for login, club, hourly_rate, valid_from, valid_to in conn.execute(
+        """SELECT login, club, hourly_rate, valid_from, valid_to
+           FROM payroll_rates
+           WHERE date(valid_from) < date(?)
+             AND (valid_to IS NULL OR date(valid_to) >= date(?))
+           ORDER BY date(valid_from) DESC""",
+        (end_dt.date().isoformat(), start_dt.date().isoformat()),
+    ):
+        rates[(_canonical_login(login), club)].append(
+            (datetime.strptime(valid_from, '%Y-%m-%d').date(),
+             datetime.strptime(valid_to, '%Y-%m-%d').date() if valid_to else None,
+             _decimal(hourly_rate))
+        )
+    return rates
+
+
+def _find_payroll_rate(rates, login, club, shift_date):
+    for rate_club in (club, '*'):
+        for valid_from, valid_to, hourly_rate in rates.get((_canonical_login(login), rate_club), []):
+            if valid_from <= shift_date and (valid_to is None or shift_date <= valid_to):
+                return hourly_rate
+    return None
+
+
+def get_data_pay_report(date_start, date_end):
+    start_dt, end_dt = _parse_payroll_period(date_start, date_end)
+    start_iso = start_dt.date().isoformat()
+    end_iso = end_dt.date().isoformat()
+    conn = sqlite3.connect(PAYROLL_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        _fetch_missing_payroll_shifts(conn, start_dt, end_dt)
+        rates = _load_payroll_rates(conn, start_dt, end_dt)
+
+        users = {}
+        user_columns = {row[1] for row in conn.execute('PRAGMA table_info(users)')}
+        if {'second_name', 'first_name'} <= user_columns:
+            user_rows = conn.execute(
+                "SELECT login, second_name, first_name FROM users WHERE login IS NOT NULL"
+            )
+            for row in user_rows:
+                login = _canonical_login(row['login'])
+                full_name = ' '.join(filter(None, (row['second_name'], row['first_name']))).strip()
+                users[login] = full_name or row['login']
+        elif 'name' in user_columns:
+            for row in conn.execute("SELECT login, name FROM users WHERE login IS NOT NULL"):
+                users[_canonical_login(row['login'])] = row['name'] or row['login']
+
+        data = {}
+
+        def employee_data(login, fallback_name=''):
+            login_key = _canonical_login(login)
+            if not login_key:
+                raise RuntimeError(f'У смены сотрудника {fallback_name or "без имени"} не указан Telegram-логин')
+            if login_key not in data:
+                data[login_key] = {
+                    'Логин': login,
+                    'Имя': fallback_name or users.get(login_key) or login,
+                    'Клубы': defaultdict(Decimal),
+                    'Двойные без клуба': Decimal('0'),
+                    'Автосим': Decimal('0'),
+                    'Активации': Decimal('0'),
+                }
+            return data[login_key]
+
+        shifts = conn.execute(
+            """SELECT shift_second_name, shift_first_name, date(dt_shift) AS shift_date,
+                      club, dur, shift_login
+               FROM shifts
+               WHERE date(dt_shift) >= date(?) AND date(dt_shift) < date(?)""",
+            (start_iso, end_iso),
+        ).fetchall()
+
+        shift_clubs = defaultdict(set)
+        missing_rates = set()
+        for shift in shifts:
+            fallback_name = ' '.join(filter(None, (
+                shift['shift_second_name'], shift['shift_first_name']
+            ))).strip()
+            employee = employee_data(shift['shift_login'], fallback_name)
+            shift_date = datetime.strptime(shift['shift_date'], '%Y-%m-%d').date()
+            login_key = _canonical_login(shift['shift_login'])
+            rate = _find_payroll_rate(rates, login_key, shift['club'], shift_date)
+            if rate is None:
+                missing_rates.add((employee['Имя'], employee['Логин'], shift['club'], shift['shift_date']))
+                continue
+            employee['Клубы'][shift['club']] += _decimal(shift['dur']) * rate
+            shift_clubs[(login_key, shift['shift_date'])].add(shift['club'])
+
+        doubles = conn.execute(
+            """SELECT who, date(d_rep) AS report_date, amount
+               FROM double
+               WHERE date(d_rep) >= date(?) AND date(d_rep) < date(?)""",
+            (start_iso, end_iso),
+        ).fetchall()
+        for item in doubles:
+            employee = employee_data(item['who'])
+            login_key = _canonical_login(item['who'])
+            item_date = datetime.strptime(item['report_date'], '%Y-%m-%d').date()
+            clubs = shift_clubs.get((login_key, item['report_date']), set())
+            club = next(iter(clubs)) if len(clubs) == 1 else None
+            rate = _find_payroll_rate(rates, login_key, club or '*', item_date)
+            if rate is None:
+                missing_rates.add((employee['Имя'], employee['Логин'], club or 'без клуба', item['report_date']))
+                continue
+            amount = _decimal(item['amount']) * rate
+            if club:
+                employee['Клубы'][club] += amount
+            else:
+                employee['Двойные без клуба'] += amount
+
+        birthdays = conn.execute(
+            """SELECT who, club, COUNT(DISTINCT ID) AS amount
+               FROM birthday
+               WHERE date(dt_rep) >= date(?) AND date(dt_rep) < date(?)
+                 AND status = 'Одобрено'
+               GROUP BY who, club""",
+            (start_iso, end_iso),
+        ).fetchall()
+        for item in birthdays:
+            employee_data(item['who'])['Клубы'][item['club']] += _decimal(item['amount']) * _decimal(bdays_rate)
+
+        for table, field in (('autosim', 'Автосим'), ('activation', 'Активации')):
+            rows = conn.execute(
+                f"""SELECT who, SUM(amount) AS amount FROM {table}
+                    WHERE date(d_rep) >= date(?) AND date(d_rep) < date(?)
+                    GROUP BY who""",
+                (start_iso, end_iso),
+            ).fetchall()
+            for item in rows:
+                employee_data(item['who'])[field] += _decimal(item['amount'])
+
+        if missing_rates:
+            details = ', '.join(
+                f'{name} ({login}), {club}, {report_date}'
+                for name, login, club, report_date in sorted(missing_rates)[:10]
+            )
+            if len(missing_rates) > 10:
+                details += f' и ещё {len(missing_rates) - 10}'
+            raise RuntimeError(f'Не найдены ставки: {details}')
+
+        for employee in data.values():
+            employee['Клубы'] = {
+                club: _money(amount) for club, amount in employee['Клубы'].items()
+            }
+            for field in PAYROLL_SPECIAL_ROWS:
+                employee[field] = _money(employee[field])
+        return data
+    finally:
+        conn.close()
+
+
+def _find_excel_row(ws, label):
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row=row, column=1).value == label:
+            return row
+    raise RuntimeError(f'В шаблоне зарплаты не найдена строка «{label}»')
+
+
+def _copy_excel_row_style(ws, source_row, target_row):
+    ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
+    for column in range(1, ws.max_column + 1):
+        source = ws.cell(source_row, column)
+        target = ws.cell(target_row, column)
+        if source.has_style:
+            target._style = copy(source._style)
+        if source.number_format:
+            target.number_format = source.number_format
+        target.alignment = copy(source.alignment)
+        target.protection = copy(source.protection)
+
+
+def _prepare_payroll_rows(ws, row_count):
+    anchor_row = _find_excel_row(ws, 'Возмещение / Доп')
+    available_rows = anchor_row - 2
+    if row_count > available_rows:
+        extra_rows = row_count - available_rows
+        ws.insert_rows(anchor_row, amount=extra_rows)
+        for row in range(anchor_row, anchor_row + extra_rows):
+            _copy_excel_row_style(ws, 2, row)
+        anchor_row += extra_rows
+
+    for row in range(2, anchor_row):
+        for column in range(1, 32):
+            ws.cell(row=row, column=column).value = None
+        ws.cell(row=row, column=32, value=f'=SUM(B{row}:AE{row})')
+        ws.cell(row=row, column=34, value=f'=SUM(B{row}:AE{row})-AG{row}')
+    return anchor_row
+
+
+def _write_payroll_formulas(ws):
+    payment_row = _find_excel_row(ws, 'К оплате:')
+    comment_row = _find_excel_row(ws, 'Комментарий')
+    for label in ('Возмещение / Доп', 'Штраф', 'Бонус KPI', 'ОФ'):
+        row = _find_excel_row(ws, label)
+        ws.cell(row, 32, value=f'=SUM(B{row}:AE{row})')
+        ws.cell(row, 34, value=f'=SUM(B{row}:AE{row})')
+    for column in range(2, 32):
+        letter = ws.cell(row=1, column=column).column_letter
+        ws.cell(payment_row, column, value=f'=SUM({letter}1:{letter}{payment_row - 1})')
+    ws.cell(payment_row, 32, value=f'=SUM(B{payment_row}:AE{payment_row})')
+    ws.cell(payment_row, 34, value=f'=AF{payment_row}-AG{comment_row}')
+    ws.cell(comment_row, 32, value=f'=SUM(AF2:AF{payment_row - 1})')
+    ws.cell(comment_row, 33, value=f'=SUM(AG2:AG{payment_row - 1})')
+    ws.cell(comment_row, 34, value=f'=SUM(AH2:AH{payment_row - 1})')
+
+
+def pay_report(date_start, date_end, message, bot):
+    start_dt = datetime.strptime(date_start, '%Y-%m-%dT%H:%M:%S')
+    end_dt = datetime.strptime(date_end, '%Y-%m-%dT%H:%M:%S')
+    data = get_data_pay_report(
+        start_dt.strftime('%Y-%m-%d %H:%M:%S'),
+        end_dt.strftime('%Y-%m-%d %H:%M:%S'),
+    )
+    if not data:
+        raise RuntimeError('За выбранный период нет смен и начислений')
+
+    employees = sorted(data.values(), key=lambda item: (item['Имя'].lower(), item['Логин'].lower()))
+    if len(employees) > PAYROLL_EMPLOYEE_COLUMNS:
+        raise RuntimeError(f'Шаблон зарплаты поддерживает не более {PAYROLL_EMPLOYEE_COLUMNS} сотрудников')
+
+    duplicate_names = defaultdict(int)
+    for employee in employees:
+        duplicate_names[employee['Имя']] += 1
+    column_names = [
+        employee['Имя'] if duplicate_names[employee['Имя']] == 1
+        else f"{employee['Имя']} ({employee['Логин']})"
+        for employee in employees
+    ]
+
+    used_clubs = {club for employee in employees for club in employee['Клубы']}
+    configured_clubs = [club for club in get_clubs() if club in used_clubs]
+    clubs = configured_clubs + sorted(used_clubs - set(configured_clubs), key=str.lower)
+    report_rows = clubs + list(PAYROLL_SPECIAL_ROWS)
+
+    wb = load_workbook(PAYROLL_TEMPLATE_PATH)
+    ws = wb['ЗП']
+    _prepare_payroll_rows(ws, len(report_rows))
+
+    for column in range(2, 2 + PAYROLL_EMPLOYEE_COLUMNS):
+        ws.cell(row=1, column=column).value = None
+    for column, name in enumerate(column_names, start=2):
+        ws.cell(row=1, column=column, value=name)
+
+    for row, row_name in enumerate(report_rows, start=2):
+        ws.cell(row=row, column=1, value=row_name)
+        for column, employee in enumerate(employees, start=2):
+            value = employee['Клубы'].get(row_name, 0) if row_name in clubs else employee[row_name]
+            ws.cell(row=row, column=column, value=value)
+            ws.cell(row=row, column=column).number_format = '#,##0.00'
+
+    _write_payroll_formulas(ws)
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.forceFullCalc = True
+
     for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter  # Получаем букву столбца
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except:
-                pass
-        adjusted_width = (max_length + 2)  # Добавляем немного пространства
-        ws.column_dimensions[column_letter].width = adjusted_width
+        max_length = max((len(str(cell.value)) for cell in column if cell.value is not None), default=0)
+        ws.column_dimensions[column[0].column_letter].width = max_length + 2
 
-    # Сохраняем новый файл
+    start_label = start_dt.strftime('%d.%m.%y')
+    end_label = (end_dt - timedelta(days=1)).strftime('%d.%m.%y')
+    output_path = f'./Reports/Отчет_ЗП_{start_label}-{end_label}.xlsx'
     wb.save(output_path)
 
+    with open(output_path, 'rb') as document:
+        bot.send_document(message.chat.id, document)
+    finance(message, bot)
 
-    doc = open(output_path, 'rb')
-    bot.send_document(message.chat.id, doc)
-    finance(message,bot)
-
-
-    
-def get_data_pay_report(date_start,date_end):
-    data ={}
-    
-    response_dict_token = get_shifton_token()
-    
-    headers_ShiftOn = {'Accept': 'application/json',
-               'Content-Type': 'application/json',
-               'Authorization':f"Bearer {response_dict_token['access_token']}",
-               'refresh_token': response_dict_token["refresh_token"]}
-
-    response_employ = requests.request("GET", f'https://api2.shifton.com/work/1.0.0/companies/{companyId}/employees', headers=headers_ShiftOn)
-
-    response_dict_employ = response_employ.json()
-    
-    payload_ShiftOn = json.dumps({
-                          "start": date_start,
-                          "end": date_end})
-    
-    response_rate = requests.request("GET", f'https://api.shifton.com/work/1.0.0/schedules/{scheduleId}', headers=headers_ShiftOn)
-
-    response_dict_rate = response_rate.json()
-    
-    response_rate_cc = requests.request("GET", f'https://api.shifton.com/work/1.0.0/schedules/{scheduleId_сс}', headers=headers_ShiftOn)
-
-    response_dict_rate_cc = response_rate_cc.json()   
-    
-    response_shifts = requests.request("GET", f'https://api.shifton.com/work/1.0.0/projects/{projectId}/shifts', headers=headers_ShiftOn, data = payload_ShiftOn)
-
-    response_dict_shifts = response_shifts.json()
-    
-    
-    location_titles = set(sorted([entry['location']['title'] for entry in response_dict_shifts if entry.get('location')],key=str.lower))
-    
-
-# 1. Заполняем ставки из основного расписания
-    for j in response_dict_rate['users']:
-        row_data={}
-        row_data['Ставка']=float(j['rate'])
-        row_data['Ставка Коллцентр']=0
-        row_data['Бонус']=0
-        row_data['Штраф']=0
-        row_data['Смены']={}
-        for t in location_titles:
-            row_data['Смены'][t]=0
-        
-        data[j['employee_id']]=row_data
-        
-    # 2. Добавляем ставки Коллцентра (с защитой от новых людей)
-    for j in response_dict_rate_cc['users']:
-        emp_id = j['employee_id']
-        
-        # Если сотрудник есть только в Коллцентре, но его нет в основном расписании, создаём его
-        if emp_id not in data:
-            row_data={}
-            row_data['Ставка']=0
-            row_data['Ставка Коллцентр']=float(j['rate'])
-            row_data['Бонус']=0
-            row_data['Штраф']=0
-            row_data['Смены']={}
-            for t in location_titles:
-                row_data['Смены'][t]=0
-            data[emp_id] = row_data
-        else:
-            data[emp_id]['Ставка Коллцентр'] = float(j['rate'])
-         
-    
-    
-    
-    for i in response_dict_shifts:
-        
-        if i["location"] is not None and i["employee_id"] in data:
-            
-            for j in i['bonuses']:
-                if j['type']=='bonus':
-                    data[i["employee_id"]]['Бонус']+=j['amount']
-                
-                if j['type']=='penalty':
-                    data[i["employee_id"]]['Штраф']-=j['amount']   
-            
-            data[i["employee_id"]]['Смены'][i["location"]['title']]+=i['duration']/60
-        
-    new_data = {}
-    conn=sqlite3.connect('db/omgbot.sql')
-    
-    
-    for key in data:
-        # Ищем имя по id в словаре response_dict_employ
-        name = ''
-        for employ in response_dict_employ:
-            if employ['id'] == key:
-                name = employ['full_name']
-                
-                cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, sum(amount) AS amount, club FROM double d LEFT JOIN users n on n.login = d.who LEFT JOIN shifts s on n.second_name = s.shift_second_name AND n.first_name = s.shift_first_name AND date(d.d_rep)=date(s.dt_shift) WHERE nameuser=? AND d_rep BETWEEN ? and ? GROUP BY club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
-                doubles = cur.fetchall()
-                cur.close()
-                
-                doubles_dict={}
-                                
-                cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, COUNT (DISTINCT b.id) as cnt, b.club FROM birthday b JOIN users n on n.login = b.who WHERE nameuser=? AND b.dt_rep BETWEEN ? and ? AND b.status = 'Одобрено' GROUP BY b.club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
-                bdays = cur.fetchall()
-                cur.close()
-
-                bdays_dict={}
-
-                for i in location_titles:
-                    bdays_dict[i]= 0
-                    doubles_dict[i]= 0
-
-                for i in location_titles:
-                    for j in bdays:
-                        if j[2]==i:
-                            bdays_dict[i]= j[1]*bdays_rate
-                            break
-
-                    for j in doubles:
-                        if j[2]==i:
-                            doubles_dict[i]= j[1]*data[key]['Ставка']
-                            break
-
-                data[key]['ДР']=bdays_dict
-                data[key]['Двойные'] = doubles_dict
-                break
-        
-        # Добавляем в новый словарь запись с именем в качестве ключа
-        new_data[name] = data[key]
-    conn.close()
-    return new_data
 
 ################################ Сводка
 def format_money(amount):

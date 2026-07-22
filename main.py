@@ -199,6 +199,24 @@ def create_tables():
     cur.execute('CREATE TABLE IF NOT EXISTS penalty (ID INTEGER PRIMARY KEY, dt DATE, name varchar(50), desc varchar(50))')
     conn.commit()
     cur.close()
+
+    # Почасовые ставки с историей изменений и переопределением для отдельных клубов
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS payroll_rates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT NOT NULL,
+            club TEXT NOT NULL DEFAULT '*',
+            hourly_rate REAL NOT NULL CHECK (hourly_rate >= 0),
+            valid_from DATE NOT NULL,
+            valid_to DATE,
+            source TEXT NOT NULL DEFAULT 'manual',
+            UNIQUE(login, club, valid_from)
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_payroll_rates_login_dates ON payroll_rates(login, valid_from, valid_to)')
+    conn.commit()
+    cur.close()
     
     cur = conn.cursor()
     cur.execute('''
