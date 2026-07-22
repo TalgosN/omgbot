@@ -115,6 +115,10 @@ def func_fin(message, bot):
         # Для инкассации логичнее дни, для остального - периоды
         if operation == '💰 Инкассация':
             markup.add('Вчера', 'Сегодня', '⬅️ Вернуться')
+        elif operation == '👨🏻‍💻 ЗП за период':
+            markup.add('Текущий месяц', 'Прошлый месяц')
+            markup.add('Текущая неделя', 'Прошлая неделя')
+            markup.add('Вчера', '⬅️ Вернуться')
         else:
             markup.add('Текущий месяц', 'Прошлый месяц')
             markup.add('Текущая неделя', 'Вчера')
@@ -153,7 +157,10 @@ def handle_start(message, bot, operation):
         finance(message, bot)
         return
 
-    quick_ranges = ['Текущий месяц', 'Прошлый месяц', 'Текущая неделя', 'Вчера', 'Сегодня']
+    quick_ranges = [
+        'Текущий месяц', 'Прошлый месяц', 'Текущая неделя',
+        'Прошлая неделя', 'Вчера', 'Сегодня',
+    ]
     
     if message.text in quick_ranges:
         tz = pytz.timezone('Europe/Moscow')
@@ -168,6 +175,10 @@ def handle_start(message, bot, operation):
         elif message.text == 'Текущая неделя':
             d_start = today - timedelta(days=today.weekday())
             d_end = today + timedelta(days=1)
+        elif message.text == 'Прошлая неделя':
+            current_week_start = today - timedelta(days=today.weekday())
+            d_start = current_week_start - timedelta(days=7)
+            d_end = current_week_start
         elif message.text == 'Текущий месяц':
             d_start = today.replace(day=1)
             d_end = today + timedelta(days=1)
@@ -1025,7 +1036,7 @@ def _find_payroll_rate(rates, login, club, shift_date):
     return None
 
 
-def get_data_pay_report(date_start, date_end):
+def _collect_payroll_report_data(date_start, date_end):
     start_dt, end_dt = _parse_payroll_period(date_start, date_end)
     start_iso = start_dt.date().isoformat()
     end_iso = end_dt.date().isoformat()
@@ -1075,7 +1086,7 @@ def get_data_pay_report(date_start, date_end):
         ).fetchall()
 
         shift_clubs = defaultdict(set)
-        missing_rates = set()
+        missing_rates = defaultdict(set)
         for shift in shifts:
             fallback_name = ' '.join(filter(None, (
                 shift['shift_second_name'], shift['shift_first_name']
@@ -1085,7 +1096,7 @@ def get_data_pay_report(date_start, date_end):
             login_key = _canonical_login(shift['shift_login'])
             rate = _find_payroll_rate(rates, login_key, shift['club'], shift_date)
             if rate is None:
-                missing_rates.add((employee['Имя'], employee['Логин'], shift['club'], shift['shift_date']))
+                missing_rates[login_key].add((shift['club'], shift['shift_date']))
                 continue
             employee['Клубы'][shift['club']] += _decimal(shift['dur']) * rate
             shift_clubs[(login_key, shift['shift_date'])].add(shift['club'])
@@ -1104,7 +1115,7 @@ def get_data_pay_report(date_start, date_end):
             club = next(iter(clubs)) if len(clubs) == 1 else None
             rate = _find_payroll_rate(rates, login_key, club or '*', item_date)
             if rate is None:
-                missing_rates.add((employee['Имя'], employee['Логин'], club or 'без клуба', item['report_date']))
+                missing_rates[login_key].add((club or 'без клуба', item['report_date']))
                 continue
             amount = _decimal(item['amount']) * rate
             if club:
@@ -1133,14 +1144,19 @@ def get_data_pay_report(date_start, date_end):
             for item in rows:
                 employee_data(item['who'])[field] += _decimal(item['amount'])
 
-        if missing_rates:
-            details = ', '.join(
-                f'{name} ({login}), {club}, {report_date}'
-                for name, login, club, report_date in sorted(missing_rates)[:10]
-            )
-            if len(missing_rates) > 10:
-                details += f' и ещё {len(missing_rates) - 10}'
-            raise RuntimeError(f'Не найдены ставки: {details}')
+        rate_logins = {login for login, _club in rates}
+        for login_key in data:
+            if login_key not in rate_logins and login_key not in missing_rates:
+                missing_rates[login_key].add(('ставка не задана', start_iso))
+
+        skipped_employees = []
+        for login_key, problems in sorted(missing_rates.items()):
+            employee = data.pop(login_key)
+            skipped_employees.append({
+                'Логин': employee['Логин'],
+                'Имя': employee['Имя'],
+                'Проблемы': sorted(problems),
+            })
 
         for employee in data.values():
             employee['Клубы'] = {
@@ -1148,9 +1164,14 @@ def get_data_pay_report(date_start, date_end):
             }
             for field in PAYROLL_SPECIAL_ROWS:
                 employee[field] = _money(employee[field])
-        return data
+        return data, skipped_employees
     finally:
         conn.close()
+
+
+def get_data_pay_report(date_start, date_end):
+    data, _skipped_employees = _collect_payroll_report_data(date_start, date_end)
+    return data
 
 
 def _find_excel_row(ws, label):
@@ -1208,14 +1229,25 @@ def _write_payroll_formulas(ws):
     ws.cell(comment_row, 34, value=f'=SUM(AH2:AH{payment_row - 1})')
 
 
+def _format_skipped_payroll_message(skipped_employees):
+    lines = ['⚠️ В отчёт не включены сотрудники без ставки:']
+    for employee in skipped_employees:
+        login = employee['Логин']
+        name = employee['Имя']
+        identity = name if _canonical_login(name) == _canonical_login(login) else f'{name} ({login})'
+        clubs = ', '.join(sorted({club for club, _date in employee['Проблемы']}, key=str.lower))
+        lines.append(f'• {identity}: {clubs}')
+    return '\n'.join(lines)
+
+
 def pay_report(date_start, date_end, message, bot):
     start_dt = datetime.strptime(date_start, '%Y-%m-%dT%H:%M:%S')
     end_dt = datetime.strptime(date_end, '%Y-%m-%dT%H:%M:%S')
-    data = get_data_pay_report(
+    data, skipped_employees = _collect_payroll_report_data(
         start_dt.strftime('%Y-%m-%d %H:%M:%S'),
         end_dt.strftime('%Y-%m-%d %H:%M:%S'),
     )
-    if not data:
+    if not data and not skipped_employees:
         raise RuntimeError('За выбранный период нет смен и начислений')
 
     employees = sorted(data.values(), key=lambda item: (item['Имя'].lower(), item['Логин'].lower()))
@@ -1267,6 +1299,8 @@ def pay_report(date_start, date_end, message, bot):
 
     with open(output_path, 'rb') as document:
         bot.send_document(message.chat.id, document)
+    if skipped_employees:
+        bot.send_message(message.chat.id, _format_skipped_payroll_message(skipped_employees))
     finance(message, bot)
 
 

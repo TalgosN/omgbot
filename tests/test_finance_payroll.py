@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from openpyxl import load_workbook
@@ -51,13 +52,18 @@ class PayrollReportTests(unittest.TestCase):
         ''')
         conn.executemany(
             'INSERT INTO users VALUES (?, ?, ?)',
-            [('@one', 'Первый', 'Сотрудник'), ('@two', 'Второй', 'Сотрудник')],
+            [
+                ('@one', 'Первый', 'Сотрудник'),
+                ('@two', 'Второй', 'Сотрудник'),
+                ('@three', 'Третий', 'Без Ставки'),
+            ],
         )
         conn.executemany(
             'INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?, ?)',
             [
                 ('Первый', 'Сотрудник', '2026-07-20', 'Ленинский', 8, 'legacy_shifton', '@one'),
                 ('Первый', 'Сотрудник', '2026-07-21', 'Коллцентр', 5.5, 'omg_shift', '@one'),
+                ('Третий', 'Без Ставки', '2026-07-20', 'Ленинский', 8, 'omg_shift', '@three'),
             ],
         )
         conn.executemany(
@@ -94,6 +100,18 @@ class PayrollReportTests(unittest.TestCase):
         self.assertEqual(data['@one']['Автосим'], 50)
         self.assertEqual(data['@one']['Активации'], 25.5)
         self.assertEqual(data['@two']['Двойные без клуба'], 400)
+        self.assertNotIn('@three', data)
+
+    def test_reports_employee_skipped_because_rate_is_missing(self):
+        with patch.object(finance, 'PAYROLL_DB_PATH', self.db_path):
+            data, skipped = finance._collect_payroll_report_data(
+                '2026-07-20 00:00:00', '2026-07-22 00:00:00'
+            )
+
+        self.assertNotIn('@three', data)
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]['Логин'], '@three')
+        self.assertEqual(skipped[0]['Проблемы'], [('Ленинский', '2026-07-20')])
 
     def test_expands_template_before_manual_rows(self):
         workbook = load_workbook('Reports/Шаблон_ЗП.xlsx')
@@ -137,6 +155,62 @@ class PayrollReportTests(unittest.TestCase):
         rows = conn.execute('SELECT dur, source FROM shifts ORDER BY rowid').fetchall()
         conn.close()
         self.assertEqual(rows, [(3, 'omg_shift'), (3, 'omg_shift')])
+
+    def test_pay_report_sends_separate_missing_rate_warning(self):
+        class Bot:
+            def __init__(self):
+                self.documents = 0
+                self.messages = []
+
+            def send_document(self, _chat_id, _document):
+                self.documents += 1
+
+            def send_message(self, _chat_id, text):
+                self.messages.append(text)
+
+        skipped = [{
+            'Логин': '@three',
+            'Имя': 'Третий Без Ставки',
+            'Проблемы': [('Ленинский', '2099-01-01')],
+        }]
+        bot = Bot()
+        message = SimpleNamespace(chat=SimpleNamespace(id=1))
+
+        with patch.object(finance, '_collect_payroll_report_data', return_value=({}, skipped)), \
+                patch.object(finance, 'finance', return_value=None):
+            finance.pay_report(
+                '2099-01-01T00:00:00', '2099-01-08T00:00:00', message, bot
+            )
+
+        self.assertEqual(bot.documents, 1)
+        self.assertEqual(len(bot.messages), 1)
+        self.assertIn('@three', bot.messages[0])
+        self.assertIn('Ленинский', bot.messages[0])
+
+    def test_salary_menu_has_previous_week_button(self):
+        class Bot:
+            def __init__(self):
+                self.markup = None
+
+            def send_message(self, _chat_id, _text, reply_markup=None):
+                if reply_markup is not None:
+                    self.markup = reply_markup
+
+            def register_next_step_handler(self, *_args):
+                return None
+
+        bot = Bot()
+        message = SimpleNamespace(
+            text='👨🏻‍💻 ЗП за период',
+            chat=SimpleNamespace(id=1),
+        )
+
+        with patch.object(finance, 'require_role', return_value=True):
+            finance.func_fin(message, bot)
+
+        buttons = [button['text'] for row in bot.markup.keyboard for button in row]
+        self.assertIn('Текущая неделя', buttons)
+        self.assertIn('Прошлая неделя', buttons)
 
 
 if __name__ == '__main__':
