@@ -147,7 +147,7 @@ def update_users():
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new")
+    cur.execute("SELECT * FROM users")
     data = cur.fetchall()
     cur.close()
     conn.close()

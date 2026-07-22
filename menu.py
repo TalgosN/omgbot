@@ -8,7 +8,7 @@ def chatid_to_users(chatid):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     # ИСПРАВЛЕНО: Безопасный запрос через ?
-    cur.execute("SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (chatid,))
+    cur.execute("SELECT * FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (chatid,))
     users = cur.fetchall()
     cur.close()
     conn.close()

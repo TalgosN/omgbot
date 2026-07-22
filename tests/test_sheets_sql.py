@@ -59,7 +59,7 @@ class SheetsSqlTest(unittest.TestCase):
 
     def test_unknown_table_is_rejected(self):
         with self.assertRaises(ValueError):
-            self.sheets.validate_table("afterparty; DROP TABLE users_new")
+            self.sheets.validate_table("afterparty; DROP TABLE users")
 
     def test_update_table_exports_only_last_three_months(self):
         real_connect = sqlite3.connect

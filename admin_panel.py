@@ -289,7 +289,7 @@ def role_select_user(message, bot):
     conn.row_factory = sqlite3.Row
     try:
         target = conn.execute(
-            'SELECT * FROM users_new WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+            'SELECT * FROM users WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
             (login,),
         ).fetchone()
     finally:
@@ -378,7 +378,7 @@ def collect_system_health(bot):
 
     try:
         conn = sqlite3.connect('db/omgbot.sql', timeout=5)
-        users_count = conn.execute("SELECT COUNT(*) FROM users_new").fetchone()[0]
+        users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         conn.close()
         lines.append(f"✅ SQLite: доступна, сотрудников {users_count}")
     except Exception as e:
@@ -500,7 +500,7 @@ def sync_config():
         client = pygsheets.authorize(service_file=KEY_FILE)
         spreadsheet = client.open_by_key(CONFIG_SPREADSHEET_ID)
         current_config = get_clubs()
-        new_config, worksheets, created = read_config(spreadsheet, current_config)
+        new_config, worksheets = read_config(spreadsheet, current_config)
         changes = config_diff(current_config, new_config)
         clubs_count, questions_count, checklists_count = count_config(new_config)
         save_clubs(new_config, source='google')
@@ -523,8 +523,6 @@ def sync_config():
             f'📋 Пунктов чек-листов: {checklists_count}',
             f'🔖 Версия: {status["version"]}',
         ]
-        if created:
-            lines.extend(['', f'🆕 Созданы листы: {", ".join(created)}'])
         if changes['added']:
             lines.append(f'➕ Добавлены клубы: {", ".join(changes["added"])}')
         if changes['removed']:
@@ -654,7 +652,7 @@ def bc_show_active(message, bot):
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT ID, text, time, freq_type, freq_days, status FROM broadcasts_new")
+        cur.execute("SELECT ID, text, time, freq_type, freq_days, status FROM broadcasts")
         broadcasts = cur.fetchall()
         cur.close()
         conn.close()
@@ -706,7 +704,7 @@ def bc_view_card(message, b_id, bot):
         conn = sqlite3.connect('db/omgbot.sql')
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT * FROM broadcasts_new WHERE ID=?", (b_id,))
+        cur.execute("SELECT * FROM broadcasts WHERE ID=?", (b_id,))
         b = cur.fetchone()
         cur.close()
         conn.close()
@@ -786,11 +784,11 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("SELECT status FROM broadcasts_new WHERE ID=?", (b_id,))
+                cur.execute("SELECT status FROM broadcasts WHERE ID=?", (b_id,))
                 res = cur.fetchone()
                 if res:
                     new_status = 0 if res[0] == 1 else 1
-                    cur.execute("UPDATE broadcasts_new SET status=? WHERE ID=?", (new_status, b_id))
+                    cur.execute("UPDATE broadcasts SET status=? WHERE ID=?", (new_status, b_id))
                     conn.commit()
                 cur.close()
                 conn.close()
@@ -802,7 +800,7 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("DELETE FROM broadcasts_new WHERE ID=?", (b_id,))
+                cur.execute("DELETE FROM broadcasts WHERE ID=?", (b_id,))
                 conn.commit()
                 cur.close()
                 conn.close()
@@ -885,7 +883,7 @@ def register_broadcast_callbacks(bot):
             conn = sqlite3.connect('db/omgbot.sql')
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO broadcasts_new (text, photo, time, freq_type, freq_days, status) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO broadcasts (text, photo, time, freq_type, freq_days, status) VALUES (?, ?, ?, ?, ?, ?)",
                 (data['text'], data['photo'], data['time'], freq_type, freq_days, 1)
             )
             conn.commit()
@@ -930,7 +928,7 @@ def register_broadcast_callbacks(bot):
             cur = conn.cursor()
             # Перезаписываем данные КОНКРЕТНОЙ рассылки
             cur.execute(
-                "UPDATE broadcasts_new SET freq_type=?, freq_days=? WHERE id=?",
+                "UPDATE broadcasts SET freq_type=?, freq_days=? WHERE id=?",
                 (freq_type, freq_days, b_id)
             )
             conn.commit()
@@ -954,7 +952,7 @@ def bc_save_new_text(message, b_id, bot):
     
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts_new SET text=? WHERE ID=?", (message.text, b_id))
+    cur.execute("UPDATE broadcasts SET text=? WHERE ID=?", (message.text, b_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -977,7 +975,7 @@ def bc_save_new_time(message, b_id, bot):
         
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts_new SET time=? WHERE ID=?", (time_str, b_id))
+    cur.execute("UPDATE broadcasts SET time=? WHERE ID=?", (time_str, b_id))
     conn.commit()
     cur.close()
     conn.close()

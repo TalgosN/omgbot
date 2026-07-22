@@ -14,6 +14,7 @@ from kpi import init
 import requests
 from sender import safe_send
 from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
+from db_migrations import migrate_table_names
 
 validate_config()
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
@@ -72,7 +73,7 @@ def check_dynamic_events(bot):
         cur = conn.cursor()
         
         # Читаем из НОВОЙ таблицы
-        cur.execute("SELECT id, text, photo, time, freq_type, freq_days FROM broadcasts_new WHERE status = 1")
+        cur.execute("SELECT id, text, photo, time, freq_type, freq_days FROM broadcasts WHERE status = 1")
         active_broadcasts = cur.fetchall()
 
         for b_id, b_text, b_photo, b_time, freq_type, freq_days in active_broadcasts:
@@ -93,7 +94,7 @@ def check_dynamic_events(bot):
                     
                     # Отключаем только если тип строго "once" (однократно)
                     if freq_type == "once":
-                        cur.execute("UPDATE broadcasts_new SET status = 0 WHERE id = ?", (b_id,))
+                        cur.execute("UPDATE broadcasts SET status = 0 WHERE id = ?", (b_id,))
                         conn.commit()
 
         cur.close()
@@ -185,7 +186,7 @@ def create_tables():
     # Новая таблица юзеров
     # Статусы: -1 - заблокирован, 0 - сотрудник, 1 - ремонтник, 2 - менеджер, 3 - руководство
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF  NOT EXISTS users_new (ID INTEGER PRIMARY KEY AUTOINCREMENT,  login varchar(50), first_name varchar(50), second_name varchar(50), nick_name varchar(50), bday date, phone varchar(50), email varchar(50),status INTEGER, chatid varchar(50))')
+    cur.execute('CREATE TABLE IF  NOT EXISTS users (ID INTEGER PRIMARY KEY AUTOINCREMENT,  login varchar(50), first_name varchar(50), second_name varchar(50), nick_name varchar(50), bday date, phone varchar(50), email varchar(50),status INTEGER, chatid varchar(50))')
     conn.commit()
     cur.close()
     #таблица нала
@@ -200,11 +201,6 @@ def create_tables():
     conn.commit()
     cur.close()
     
-    cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS broadcasts (ID INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, photo TEXT, trep TEXT, freq INTEGER, status INTEGER)')
-    conn.commit()
-    cur.close()
-
     cur = conn.cursor()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS consumables (
@@ -236,7 +232,7 @@ def create_tables():
 
     cur = conn.cursor()
     cur.execute('''
-        CREATE TABLE IF NOT EXISTS broadcasts_new (
+        CREATE TABLE IF NOT EXISTS broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             text TEXT,
             photo TEXT,
@@ -308,47 +304,10 @@ def create_tables_KPI():
     conn.close()
 
 
-def migrate_callcenter_name():
-    """Переименовывает сохранённые значения клуба без удаления истории."""
-    club_columns = (
-        ('tasks', 'club'),
-        ('activity', 'club'),
-        ('nal', 'club'),
-        ('consumables', 'club'),
-        ('consumables_history', 'club'),
-        ('afterparty', 'club'),
-        ('birthday', 'club'),
-        ('initiative', 'club'),
-        ('shifts', 'club'),
-        ('anketi', 'club_ank'),
-    )
-    conn = sqlite3.connect('db/omgbot.sql')
-    try:
-        with conn:
-            for table, column in club_columns:
-                if not conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                    (table,),
-                ).fetchone():
-                    continue
-                columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
-                if column not in columns:
-                    continue
-                conn.execute(
-                    f'''UPDATE "{table}" SET "{column}"=?
-                        WHERE lower(trim(CAST("{column}" AS TEXT)))=lower(?)''',
-                    ('Коллцентр', 'КЦ'),
-                )
-    finally:
-        conn.close()
-
-
-
-
 def define_name(message):
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE login=?", ("@"+message.from_user.username,))
+    cur.execute("SELECT * FROM users WHERE login=?", ("@"+message.from_user.username,))
     users = cur.fetchall()
     cur.close()
     conn.close()
@@ -410,10 +369,12 @@ Indexes of users
 
 
 ############################# start
+migration_actions = migrate_table_names()
+for migration_action in migration_actions:
+    print(f'Миграция БД: {migration_action}')
 create_tables()
 initialize_permissions_schema()
 create_tables_KPI()
-migrate_callcenter_name()
 
 
 
@@ -454,7 +415,7 @@ def start(message):
                 conn.row_factory = sqlite3.Row
                 try:
                     same_login = conn.execute(
-                        'SELECT * FROM users_new WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+                        'SELECT * FROM users WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
                         (login,),
                     ).fetchone()
                     if same_login and same_login['chatid'] not in (None, ''):
@@ -463,12 +424,12 @@ def start(message):
                     with conn:
                         if same_login:
                             conn.execute(
-                                'UPDATE users_new SET chatid=? WHERE ID=?',
+                                'UPDATE users SET chatid=? WHERE ID=?',
                                 (str(message.from_user.id), same_login['ID']),
                             )
                         else:
                             conn.execute(
-                                'INSERT INTO users_new (login, chatid) VALUES (?, ?)',
+                                'INSERT INTO users (login, chatid) VALUES (?, ?)',
                                 (login, str(message.from_user.id)),
                             )
                 finally:
@@ -633,7 +594,7 @@ def handler_new_member(message): # Приветсвие нового сотру�
     
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (member.id,))
+    cur.execute("SELECT * FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (member.id,))
     users = cur.fetchall()
     cur.close()
     
@@ -644,7 +605,7 @@ def handler_new_member(message): # Приветсвие нового сотру�
             return
         cur = conn.cursor()
         same_login = cur.execute(
-            'SELECT 1 FROM users_new WHERE lower(login)=lower(?) LIMIT 1',
+            'SELECT 1 FROM users WHERE lower(login)=lower(?) LIMIT 1',
             (f'@{member.username}',),
         ).fetchone()
         if same_login:
@@ -652,7 +613,7 @@ def handler_new_member(message): # Приветсвие нового сотру�
             conn.close()
             bot.send_message(message.chat.id, f'{user_name}, этот username уже связан с другой учётной записью. Обратись к руководству.')
             return
-        cur.execute("INSERT INTO users_new (login, chatid) VALUES (?, ?)", ("@"+member.username, str(member.id)))
+        cur.execute("INSERT INTO users (login, chatid) VALUES (?, ?)", ("@"+member.username, str(member.id)))
         conn.commit()
         cur.close()
     conn.close()
@@ -666,10 +627,10 @@ def handler_left_member(message): # Прощание с сотрудником �
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     previous = cur.execute(
-        "SELECT login, status, chatid FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)",
+        "SELECT login, status, chatid FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)",
         (message.left_chat_member.id,),
     ).fetchone()
-    cur.execute("UPDATE users_new SET status=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (-1, message.left_chat_member.id))
+    cur.execute("UPDATE users SET status=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)", (-1, message.left_chat_member.id))
     if previous and previous[1] != -1:
         cur.execute(
             '''INSERT INTO role_audit
@@ -811,7 +772,7 @@ if __name__ == "__main__":
 
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT chatid FROM users_new WHERE status <>-1")
+    cur.execute("SELECT chatid FROM users WHERE status <>-1")
     users=cur.fetchall()
     
 

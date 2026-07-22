@@ -665,7 +665,7 @@ def send_shift_review_reminders(bot, now=None):
             return 0
 
         users = conn.execute(
-            """SELECT login, chatid FROM users_new
+            """SELECT login, chatid FROM users
                WHERE status >= 0 AND login IS NOT NULL AND login <> ''
                  AND chatid IS NOT NULL AND chatid <> ''"""
         ).fetchall()

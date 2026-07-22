@@ -51,7 +51,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
                )'''
         )
         conn.execute(
-            '''CREATE TABLE users_new (
+            '''CREATE TABLE users (
                    id INTEGER PRIMARY KEY, login TEXT, status INTEGER, chatid TEXT
                )'''
         )
@@ -100,7 +100,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
             ],
         )
         conn.executemany(
-            'INSERT INTO users_new (login, status, chatid) VALUES (?, ?, ?)',
+            'INSERT INTO users (login, status, chatid) VALUES (?, ?, ?)',
             [('@Alice', 0, '101'), ('@Charlie', 1, '103'), ('@Blocked', -1, '104')],
         )
         conn.commit()

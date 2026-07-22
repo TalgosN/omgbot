@@ -7,6 +7,16 @@ from unittest.mock import patch
 import club_config
 
 
+def runtime_club(club_id, tag, visible=True):
+    return {
+        '_config_id': club_id,
+        'tag': tag,
+        'shift_name': 'OMG Shift club',
+        'schedule_visible': visible,
+        'schedule_emoji': '🎮' if visible else '',
+    }
+
+
 class ClubConfigStoreTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -35,8 +45,8 @@ class ClubConfigStoreTest(unittest.TestCase):
         )
 
     def test_save_updates_memory_immediately_and_keeps_backup(self):
-        old = {'Старый': {'tag': '@old'}}
-        new = {'Новый': {'tag': '@new'}}
+        old = {'Старый': runtime_club('club_old', '@old')}
+        new = {'Новый': runtime_club('club_new', '@new')}
         self.write(old)
 
         with self.patched_paths():
@@ -49,27 +59,27 @@ class ClubConfigStoreTest(unittest.TestCase):
             self.assertEqual(json.loads(self.backup.read_text(encoding='utf-8')), old)
             self.assertFalse(self.path.with_name('clubs.json.tmp').exists())
 
-    def test_legacy_callcenter_key_is_migrated_on_load(self):
-        self.write({'КЦ': {'acc_name': 'КЦ', 'tag': '@callcenter'}})
+    def test_incomplete_runtime_config_is_rejected(self):
+        self.write({'Сломанный': {'tag': '@broken'}})
 
         with self.patched_paths():
             club_config._clubs = None
-            clubs = club_config.reload_clubs()
-
-            self.assertNotIn('КЦ', clubs)
-            self.assertEqual(clubs['Коллцентр']['acc_name'], 'Коллцентр')
-            persisted = json.loads(self.path.read_text(encoding='utf-8'))
-            self.assertIn('Коллцентр', persisted)
+            with self.assertRaisesRegex(ValueError, '_config_id'):
+                club_config.reload_clubs()
 
     def test_schedule_locations_use_separate_shift_name(self):
         club_config._clubs = {
             'Название в боте': {
+                '_config_id': 'club_visible',
                 'shift_name': 'Название в OMG Shift',
                 'schedule_visible': True,
                 'schedule_emoji': '🎮',
             },
             'Скрытый клуб': {
+                '_config_id': 'club_hidden',
+                'shift_name': 'Скрытый клуб',
                 'schedule_visible': False,
+                'schedule_emoji': '',
             },
         }
 

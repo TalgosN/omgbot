@@ -11,7 +11,6 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 CLUBS_PATH = BASE_DIR / 'data' / 'clubs.json'
 CLUBS_BACKUP_PATH = BASE_DIR / 'data' / 'clubs.json.bak'
-DEFAULT_SCHEDULE_EMOJIS = ('🟢', '🟣', '🟠', '🔴', '🟡', '🔈')
 
 _lock = threading.RLock()
 _clubs = None
@@ -25,6 +24,28 @@ _status = {
 def _version(data):
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:12]
+
+
+def _validate_clubs(clubs):
+    if not isinstance(clubs, dict) or not clubs:
+        raise ValueError('clubs.json должен содержать непустой объект клубов')
+    used_ids = set()
+    for name, info in clubs.items():
+        if not isinstance(info, dict):
+            raise ValueError(f'clubs.json: конфигурация клуба {name!r} должна быть объектом')
+        club_id = str(info.get('_config_id') or '').strip()
+        if not club_id:
+            raise ValueError(f'clubs.json: у клуба {name!r} отсутствует _config_id')
+        if club_id in used_ids:
+            raise ValueError(f'clubs.json: _config_id {club_id!r} используется повторно')
+        used_ids.add(club_id)
+        if not str(info.get('shift_name') or '').strip():
+            raise ValueError(f'clubs.json: у клуба {name!r} отсутствует shift_name')
+        if not isinstance(info.get('schedule_visible'), bool):
+            raise ValueError(f'clubs.json: у клуба {name!r} schedule_visible должен быть boolean')
+        if info['schedule_visible'] and not str(info.get('schedule_emoji') or '').strip():
+            raise ValueError(f'clubs.json: у клуба {name!r} отсутствует schedule_emoji')
+    return clubs
 
 
 def _write_atomic(data, path, backup=False):
@@ -49,16 +70,7 @@ def _load_file(path=None):
     path = Path(path or CLUBS_PATH)
     with path.open('r', encoding='utf-8') as file:
         clubs = json.load(file)
-    if not isinstance(clubs, dict) or not clubs:
-        raise ValueError('clubs.json должен содержать непустой объект клубов')
-
-    if 'КЦ' in clubs and 'Коллцентр' not in clubs:
-        callcenter = clubs.pop('КЦ')
-        if callcenter.get('acc_name') == 'КЦ':
-            callcenter['acc_name'] = 'Коллцентр'
-        clubs['Коллцентр'] = callcenter
-        _write_atomic(clubs, path)
-    return clubs
+    return _validate_clubs(clubs)
 
 
 def reload_clubs(source='disk'):
@@ -96,27 +108,19 @@ def get_clublist_task():
 def get_schedule_locations():
     result = []
     for name, info in get_clubs().items():
-        visible = info.get('schedule_visible')
-        if visible is None:
-            visible = bool(info.get('schedule') or info.get('is_physical'))
-        if not visible:
+        if not info['schedule_visible']:
             continue
-        index = len(result)
         result.append({
             'name': name,
-            'source_name': info.get('shift_name') or name,
-            'emoji': info.get('schedule_emoji') or DEFAULT_SCHEDULE_EMOJIS[
-                index % len(DEFAULT_SCHEDULE_EMOJIS)
-            ],
+            'source_name': info['shift_name'],
+            'emoji': info['schedule_emoji'],
         })
     return result
 
 
 def save_clubs(clubs, source='google'):
     global _clubs
-    if not isinstance(clubs, dict) or not clubs:
-        raise ValueError('Нельзя сохранить пустую конфигурацию клубов')
-    snapshot = copy.deepcopy(clubs)
+    snapshot = _validate_clubs(copy.deepcopy(clubs))
     with _lock:
         _write_atomic(snapshot, CLUBS_PATH, backup=True)
         _clubs = snapshot

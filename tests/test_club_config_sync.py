@@ -1,66 +1,121 @@
 import unittest
 
 from club_config_sync import (
-    ConfigValidationError,
+    CHECKLIST_HEADERS,
     CHECKLISTS_SHEET,
     CLUB_HEADERS,
     CLUBS_SHEET,
+    ConfigValidationError,
+    QUESTION_HEADERS,
     QUESTIONS_SHEET,
     VALIDATION_SHEET,
     build_config,
-    checklists_to_values,
-    clubs_to_values,
     count_config,
-    questions_to_values,
     read_config,
     validate_stable_identity,
 )
 
 
-def sample_config():
-    return {
-        'Тестовый клуб': {
-            'tag': '@employee',
-            'acc_name': 'Тестовый клуб',
-            'is_physical': True,
-            'require_geo': True,
-            'coords': {'lat': 55.7, 'lon': 37.6},
-            'radius': 500,
-            'schedule': {
-                'auto_close_time': '05:00:00',
-                'status_close_time': '23:00:00',
-                'early_check_time': '22:30:00',
-                'open': {'weekdays': '10:00:00', 'weekend': '09:00:00'},
-                'open_strict': {'weekdays': '10:15:00', 'weekend': '09:15:00'},
-            },
-            'checklists': {
-                '✅ Открыть смену': ['Включить ПК'],
-                '🚫 Закрыть смену': ['Выключить ПК'],
-            },
-            'questions': {
-                '✅ Открыть смену': [
-                    [{'type': 'photo', 'text': 'Фото ПК'}],
-                    [{'type': 'photo', 'text': 'Фото ПК'}],
-                ],
-                '🚫 Закрыть смену': [
-                    [{'type': 'num', 'text': 'Сколько нала?'}],
-                    [{'type': 'num', 'text': 'Сколько нала?'}],
-                ],
-            },
-        },
-        'Глобально': {
-            'tag': '@owner, @manager',
-            'acc_name': 'Глобально',
-            'is_physical': False,
-            'require_geo': False,
-        },
-    }
+def make_row(headers, **values):
+    return [values.get(header, '') for header in headers]
+
+
+def sheet_values():
+    clubs = [
+        CLUB_HEADERS,
+        make_row(
+            CLUB_HEADERS,
+            ClubID='club_test',
+            Name='Тестовый клуб',
+            AccountName='Тестовый клуб',
+            ShiftName='Тестовый клуб OMG',
+            ScheduleVisible=True,
+            ScheduleEmoji='🎮',
+            Tag='@employee',
+            Physical=True,
+            GeoRequired=True,
+            Latitude=55.7,
+            Longitude=37.6,
+            Radius=500,
+            AutoCloseTime='05:00:00',
+            StatusCloseTime='23:00:00',
+            EarlyCheckTime='22:30:00',
+            OpenWeekdays='10:00:00',
+            OpenWeekend='09:00:00',
+            StrictWeekdays='10:15:00',
+            StrictWeekend='09:15:00',
+            QuestionVariants=2,
+            Active=True,
+            SortOrder=1,
+        ),
+        make_row(
+            CLUB_HEADERS,
+            ClubID='club_global',
+            Name='Глобально',
+            AccountName='Глобально',
+            ShiftName='Глобально',
+            ScheduleVisible=False,
+            Tag='@owner, @manager',
+            Physical=False,
+            GeoRequired=False,
+            QuestionVariants=0,
+            Active=True,
+            SortOrder=2,
+        ),
+    ]
+    questions = [
+        QUESTION_HEADERS,
+        make_row(
+            QUESTION_HEADERS,
+            QuestionID='q_open',
+            ClubID='club_test',
+            Action='open',
+            Variants='all',
+            Order=1,
+            Type='photo',
+            Question='Фото ПК',
+            Active=True,
+        ),
+        make_row(
+            QUESTION_HEADERS,
+            QuestionID='q_close',
+            ClubID='club_test',
+            Action='close',
+            Variants='all',
+            Order=1,
+            Type='num',
+            Question='Сколько нала?',
+            Active=True,
+        ),
+    ]
+    checklists = [
+        CHECKLIST_HEADERS,
+        make_row(
+            CHECKLIST_HEADERS,
+            ChecklistID='c_open',
+            ClubID='club_test',
+            Action='open',
+            Order=1,
+            Text='Включить ПК',
+            Active=True,
+        ),
+        make_row(
+            CHECKLIST_HEADERS,
+            ChecklistID='c_close',
+            ClubID='club_test',
+            Action='close',
+            Order=1,
+            Text='Выключить ПК',
+            Active=True,
+        ),
+    ]
+    return clubs, questions, checklists
 
 
 class FakeWorksheet:
-    def __init__(self, title):
+    def __init__(self, title, values):
         self.title = title
-        self.values = []
+        self.values = values
 
     def update_values(self, _cell, values, extend=False):
         self.values = values
@@ -70,51 +125,54 @@ class FakeWorksheet:
 
 
 class FakeSpreadsheet:
-    def __init__(self):
-        self.items = []
+    def __init__(self, values, missing=()):
+        clubs, questions, checklists = values
+        by_title = {
+            CLUBS_SHEET: clubs,
+            QUESTIONS_SHEET: questions,
+            CHECKLISTS_SHEET: checklists,
+            VALIDATION_SHEET: [['Параметр', 'Значение']],
+        }
+        self.items = [
+            FakeWorksheet(title, rows)
+            for title, rows in by_title.items()
+            if title not in missing
+        ]
 
     def worksheets(self):
         return self.items
 
-    def add_worksheet(self, title, rows, cols):
-        worksheet = FakeWorksheet(title)
-        self.items.append(worksheet)
-        return worksheet
-
 
 class ClubConfigSyncTest(unittest.TestCase):
     def sheet_values(self):
-        current = sample_config()
-        clubs, ids = clubs_to_values(current)
-        questions = questions_to_values(current, ids)
-        checklists = checklists_to_values(current, ids)
-        return clubs, questions, checklists
+        return sheet_values()
 
-    def test_exported_config_round_trips_and_common_questions_use_all(self):
+    def test_config_compiles_shared_questions(self):
         clubs, questions, checklists = self.sheet_values()
-
-        self.assertTrue(any(row[3] == 'all' for row in questions[1:]))
         compiled = build_config(clubs, questions, checklists)
 
         self.assertEqual(list(compiled), ['Тестовый клуб', 'Глобально'])
         self.assertEqual(compiled['Тестовый клуб']['radius'], 500)
+        self.assertEqual(compiled['Тестовый клуб']['shift_name'], 'Тестовый клуб OMG')
         self.assertEqual(count_config(compiled), (2, 4, 2))
 
-    def test_first_sync_creates_and_immediately_reads_new_sheets(self):
-        spreadsheet = FakeSpreadsheet()
+    def test_sync_reads_existing_sheets_without_creating_anything(self):
+        values = self.sheet_values()
+        spreadsheet = FakeSpreadsheet(values)
 
-        compiled, worksheets, created = read_config(spreadsheet, sample_config())
+        compiled, worksheets = read_config(spreadsheet, {})
 
         self.assertEqual(
-            set(created),
+            set(worksheets),
             {CLUBS_SHEET, QUESTIONS_SHEET, CHECKLISTS_SHEET, VALIDATION_SHEET},
         )
-        self.assertEqual(set(worksheets), set(created))
         self.assertEqual(count_config(compiled), (2, 4, 2))
 
-        compiled_again, _worksheets, created_again = read_config(spreadsheet, compiled)
-        self.assertEqual(created_again, [])
-        self.assertEqual(compiled_again, compiled)
+    def test_missing_required_sheet_is_rejected(self):
+        spreadsheet = FakeSpreadsheet(self.sheet_values(), missing=(QUESTIONS_SHEET,))
+
+        with self.assertRaisesRegex(ConfigValidationError, 'Config Questions'):
+            read_config(spreadsheet, {})
 
     def test_duplicate_question_inside_variant_is_rejected(self):
         clubs, questions, checklists = self.sheet_values()
@@ -128,7 +186,7 @@ class ClubConfigSyncTest(unittest.TestCase):
 
     def test_invalid_sheet_does_not_silently_turn_variant_into_zero(self):
         clubs, questions, checklists = self.sheet_values()
-        questions[1][3] = 'ошибка'
+        questions[1][QUESTION_HEADERS.index('Variants')] = 'ошибка'
 
         with self.assertRaisesRegex(ConfigValidationError, 'Variants'):
             build_config(clubs, questions, checklists)
@@ -158,32 +216,44 @@ class ClubConfigSyncTest(unittest.TestCase):
 
         self.assertEqual(compiled['Тестовый клуб']['tag'], '@employee')
 
+    def test_visible_club_requires_explicit_schedule_emoji(self):
+        clubs, questions, checklists = self.sheet_values()
+        clubs[1][CLUB_HEADERS.index('ScheduleEmoji')] = ''
+
+        with self.assertRaisesRegex(ConfigValidationError, 'ScheduleEmoji'):
+            build_config(clubs, questions, checklists)
+
     def test_existing_club_identity_cannot_be_changed(self):
         clubs, questions, checklists = self.sheet_values()
         current = build_config(clubs, questions, checklists)
-        clubs[1][1] = 'Новое имя'
+        clubs[1][CLUB_HEADERS.index('Name')] = 'Новое имя'
         renamed = build_config(clubs, questions, checklists)
 
         with self.assertRaisesRegex(ConfigValidationError, 'историей'):
             validate_stable_identity(current, renamed)
 
     def test_nonphysical_club_can_keep_schedule_and_questions(self):
-        current = sample_config()
-        source = current['Тестовый клуб']
-        current['Коллцентр'] = {
-            'tag': '@callcenter',
-            'acc_name': 'Коллцентр',
-            'is_physical': False,
-            'require_geo': False,
-            'schedule': source['schedule'],
-            'questions': source['questions'],
-        }
-        clubs, ids = clubs_to_values(current)
-        compiled = build_config(
-            clubs,
-            questions_to_values(current, ids),
-            checklists_to_values(current, ids),
-        )
+        clubs, questions, checklists = self.sheet_values()
+        callcenter = list(clubs[1])
+        callcenter[CLUB_HEADERS.index('ClubID')] = 'club_callcenter'
+        callcenter[CLUB_HEADERS.index('Name')] = 'Коллцентр'
+        callcenter[CLUB_HEADERS.index('AccountName')] = 'Коллцентр'
+        callcenter[CLUB_HEADERS.index('ShiftName')] = 'Коллцентр'
+        callcenter[CLUB_HEADERS.index('Physical')] = False
+        callcenter[CLUB_HEADERS.index('GeoRequired')] = False
+        callcenter[CLUB_HEADERS.index('Latitude')] = ''
+        callcenter[CLUB_HEADERS.index('Longitude')] = ''
+        callcenter[CLUB_HEADERS.index('Radius')] = ''
+        callcenter[CLUB_HEADERS.index('SortOrder')] = 3
+        clubs.append(callcenter)
+
+        for source in questions[1:3]:
+            question = list(source)
+            question[QUESTION_HEADERS.index('QuestionID')] += '_callcenter'
+            question[QUESTION_HEADERS.index('ClubID')] = 'club_callcenter'
+            questions.append(question)
+
+        compiled = build_config(clubs, questions, checklists)
 
         self.assertIn('schedule', compiled['Коллцентр'])
         self.assertIn('questions', compiled['Коллцентр'])

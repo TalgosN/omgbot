@@ -37,8 +37,6 @@ LOGIN_REFERENCES = {
     'penalty': 'name',
     'bs': 'name_bs',
     'consumables_history': 'user_name',
-    'admins': 'login',
-    'users': 'login',
     'shifts': 'shift_login',
 }
 
@@ -78,7 +76,7 @@ def ensure_shift_identity_column(conn):
     conn.execute(
         """UPDATE shifts
            SET shift_login = (
-               SELECT login FROM users_new
+               SELECT login FROM users
                WHERE second_name = shifts.shift_second_name
                  AND first_name = shifts.shift_first_name
                LIMIT 1
@@ -92,7 +90,7 @@ def get_user_by_chat_id(chat_id):
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(
-            'SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
+            'SELECT * FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
             (chat_id,),
         ).fetchone()
     finally:
@@ -104,7 +102,7 @@ def get_user_by_login(login):
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(
-            '''SELECT * FROM users_new
+            '''SELECT * FROM users
                WHERE lower(login)=lower(?) AND status>=?
                ORDER BY ID LIMIT 1''',
             (normalize_login(login), ROLE_EMPLOYEE),
@@ -125,14 +123,14 @@ def apply_omg_identity(chat_id, login, employee):
     try:
         with conn:
             user = conn.execute(
-                'SELECT * FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
+                'SELECT * FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
                 (chat_id,),
             ).fetchone()
             if not user:
                 raise ValueError('Пользователь не найден в БД')
 
             duplicate = conn.execute(
-                'SELECT ID FROM users_new WHERE lower(login)=lower(?) AND ID<>?',
+                'SELECT ID FROM users WHERE lower(login)=lower(?) AND ID<>?',
                 (login, user['ID']),
             ).fetchone()
             if duplicate:
@@ -150,7 +148,7 @@ def apply_omg_identity(chat_id, login, employee):
                     )
 
             conn.execute(
-                """UPDATE users_new
+                """UPDATE users
                    SET login=?, first_name=?, second_name=?, chatid=?
                    WHERE ID=?""",
                 (login, first_name, second_name, str(chat_id), user['ID']),
@@ -351,7 +349,7 @@ def save_profile_field(message, bot, field):
         try:
             if field == 'nick_name':
                 duplicate = conn.execute(
-                    """SELECT 1 FROM users_new
+                    """SELECT 1 FROM users
                        WHERE lower(nick_name)=lower(?)
                          AND CAST(chatid AS TEXT)<>CAST(? AS TEXT)""",
                     (value, message.from_user.id),
@@ -360,7 +358,7 @@ def save_profile_field(message, bot, field):
                     raise ValueError('Такой ник уже занят')
             with conn:
                 cur = conn.execute(
-                    f'UPDATE users_new SET "{field}"=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
+                    f'UPDATE users SET "{field}"=? WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
                     (value, message.from_user.id),
                 )
                 if cur.rowcount == 0:
@@ -575,7 +573,7 @@ def get_database_stats(login, start=None, end=None):
         result = {name: value or 0 for name, value in rows}
 
         user = conn.execute(
-            'SELECT first_name, second_name FROM users_new WHERE lower(login)=lower(?)',
+            'SELECT first_name, second_name FROM users WHERE lower(login)=lower(?)',
             (login,),
         ).fetchone()
         if user:

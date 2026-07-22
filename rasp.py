@@ -70,7 +70,7 @@ def sync_shifton_notification_chats():
         cur = conn.cursor()
         cur.execute("""
             SELECT login, chatid
-            FROM users_new
+            FROM users
             WHERE COALESCE(status, 0) <> -1
               AND login IS NOT NULL AND login <> ''
               AND chatid IS NOT NULL AND chatid <> ''

@@ -1088,14 +1088,14 @@ def get_data_pay_report(date_start,date_end):
                 name = employ['full_name']
                 
                 cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, sum(amount) AS amount, club FROM double d LEFT JOIN users_new n on n.login = d.who LEFT JOIN shifts s on n.second_name = s.shift_second_name AND n.first_name = s.shift_first_name AND date(d.d_rep)=date(s.dt_shift) WHERE nameuser=? AND d_rep BETWEEN ? and ? GROUP BY club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
+                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, sum(amount) AS amount, club FROM double d LEFT JOIN users n on n.login = d.who LEFT JOIN shifts s on n.second_name = s.shift_second_name AND n.first_name = s.shift_first_name AND date(d.d_rep)=date(s.dt_shift) WHERE nameuser=? AND d_rep BETWEEN ? and ? GROUP BY club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
                 doubles = cur.fetchall()
                 cur.close()
                 
                 doubles_dict={}
                                 
                 cur = conn.cursor()
-                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, COUNT (DISTINCT b.id) as cnt, b.club FROM birthday b JOIN users_new n on n.login = b.who WHERE nameuser=? AND b.dt_rep BETWEEN ? and ? AND b.status = 'Одобрено' GROUP BY b.club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
+                cur.execute("SELECT (n.second_name||' '|| n.first_name) AS nameuser, COUNT (DISTINCT b.id) as cnt, b.club FROM birthday b JOIN users n on n.login = b.who WHERE nameuser=? AND b.dt_rep BETWEEN ? and ? AND b.status = 'Одобрено' GROUP BY b.club", (employ['full_name'], datetime.strptime(date_start,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d'), datetime.strptime(date_end,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')))
                 bdays = cur.fetchall()
                 cur.close()
 

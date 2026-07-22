@@ -8,7 +8,7 @@ class SqlScriptsTest(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.conn.execute(
-            "CREATE TABLE users_new (login TEXT, first_name TEXT, second_name TEXT)"
+            "CREATE TABLE users (login TEXT, first_name TEXT, second_name TEXT)"
         )
         self.conn.execute(
             "CREATE TABLE shifts (shift_second_name TEXT, shift_first_name TEXT, "
@@ -31,7 +31,7 @@ class SqlScriptsTest(unittest.TestCase):
 
     def test_questionnaires_use_shift_login_for_renamed_employee(self):
         self.conn.execute(
-            "INSERT INTO users_new VALUES (?, ?, ?)",
+            "INSERT INTO users VALUES (?, ?, ?)",
             ("@maxon", "Максон", "Песков"),
         )
         self.conn.executemany(
@@ -60,7 +60,7 @@ class SqlScriptsTest(unittest.TestCase):
             "date('now', '+3 hours', '-1 month')"
         ).fetchone()
         self.conn.execute(
-            "INSERT INTO users_new VALUES (?, ?, ?)",
+            "INSERT INTO users VALUES (?, ?, ?)",
             ("@employee", "Иван", "Иванов"),
         )
         self.conn.executemany(

@@ -174,7 +174,7 @@ class KpiTest(unittest.TestCase):
 
         connect.assert_not_called()
 
-    def test_shift_sync_preserves_history_and_legacy_backfill(self):
+    def test_shift_sync_preserves_history_from_other_sources(self):
         timestamp = SimpleNamespace(now=lambda tz=None: datetime(2026, 7, 21))
         real_connect = sqlite3.connect
         with tempfile.TemporaryDirectory() as temp_dir:

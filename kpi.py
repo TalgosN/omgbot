@@ -177,13 +177,13 @@ def read_shifts():
             if 'shift_login' not in columns:
                 cur.execute('ALTER TABLE shifts ADD COLUMN shift_login varchar(50)')
             users_table = cur.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users_new'"
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
             ).fetchone()
             if users_table:
                 cur.execute(
                     """UPDATE shifts
                        SET shift_login = (
-                           SELECT login FROM users_new
+                           SELECT login FROM users
                            WHERE second_name = shifts.shift_second_name
                              AND first_name = shifts.shift_first_name
                            LIMIT 1
@@ -436,7 +436,7 @@ def do_penalty(message, text_args, bypass_admin=False):
     
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT login FROM users_new WHERE login=?", (target_login,))
+    cur.execute("SELECT login FROM users WHERE login=?", (target_login,))
     if not cur.fetchone():
         conn.close()
         return KPI_INVALID, 'Нет такого логина в базе!', "```Правильно!\n#штраф @логин причина```"

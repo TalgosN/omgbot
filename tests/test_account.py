@@ -47,11 +47,11 @@ class AccountTest(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / 'test.sql'
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            'CREATE TABLE users_new (ID INTEGER PRIMARY KEY, login TEXT, first_name TEXT, '
+            'CREATE TABLE users (ID INTEGER PRIMARY KEY, login TEXT, first_name TEXT, '
             'second_name TEXT, nick_name TEXT, bday TEXT, phone TEXT, email TEXT, status INTEGER, chatid TEXT)'
         )
         conn.execute(
-            'INSERT INTO users_new VALUES (1, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)',
+            'INSERT INTO users VALUES (1, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)',
             ('@old_login', 'СтароеИмя', 'СтараяФамилия', 'Ник', '12345'),
         )
         for table, column in self.account.LOGIN_REFERENCES.items():
@@ -82,7 +82,7 @@ class AccountTest(unittest.TestCase):
         self.assertTrue(result['changed'])
         conn = sqlite3.connect(self.db_path)
         user = conn.execute(
-            'SELECT login, first_name, second_name FROM users_new WHERE ID=1'
+            'SELECT login, first_name, second_name FROM users WHERE ID=1'
         ).fetchone()
         self.assertEqual(user, ('@new_login', 'Саша', 'Бондаренко'))
         for table, column in self.account.LOGIN_REFERENCES.items():
@@ -96,7 +96,7 @@ class AccountTest(unittest.TestCase):
     def test_duplicate_login_rolls_back_everything(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            'INSERT INTO users_new VALUES (2, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)',
+            'INSERT INTO users VALUES (2, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)',
             ('@occupied', 'Другой', 'Сотрудник', 'Другой', '99999'),
         )
         conn.commit()
@@ -107,7 +107,7 @@ class AccountTest(unittest.TestCase):
                 self.account.apply_omg_identity('12345', '@occupied', 'Бондаренко Саша')
 
         conn = sqlite3.connect(self.db_path)
-        login = conn.execute('SELECT login FROM users_new WHERE ID=1').fetchone()[0]
+        login = conn.execute('SELECT login FROM users WHERE ID=1').fetchone()[0]
         reference = conn.execute('SELECT who FROM afterparty').fetchone()[0]
         conn.close()
         self.assertEqual(login, '@old_login')
@@ -116,7 +116,7 @@ class AccountTest(unittest.TestCase):
     def test_legacy_shift_uses_omg_name_after_identity_sync(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            "UPDATE users_new SET login=?, first_name=?, second_name=? WHERE ID=1",
+            "UPDATE users SET login=?, first_name=?, second_name=? WHERE ID=1",
             ('@maxim', 'Максим', 'Песков'),
         )
         conn.execute(

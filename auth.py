@@ -86,7 +86,7 @@ def ask_mail (message,bot,first_name,second_name,nick_name,bday,number):
 def check_user(message,bot, first_name,second_name,nick_name,bday,number,email,status):
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users_new WHERE nick_name=?", (nick_name,))
+    cur.execute("SELECT * FROM users WHERE nick_name=?", (nick_name,))
     users = cur.fetchall()
     cur.close()
     conn.close()
@@ -147,11 +147,11 @@ def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,st
         conn=sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
         previous = cur.execute(
-            'SELECT status FROM users_new WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
+            'SELECT status FROM users WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)',
             (message.from_user.id,),
         ).fetchone()
         cur.execute("""
-            UPDATE users_new
+            UPDATE users
             SET login=?, first_name=?, second_name=?, nick_name=?, bday=?, phone=?, email=?, status=?, chatid=?
             WHERE CAST(chatid AS TEXT)=CAST(? AS TEXT)
         """, (login, first_name, second_name, nick_name, bday, number, email, status, message.from_user.id, message.from_user.id))

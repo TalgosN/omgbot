@@ -3,18 +3,21 @@ import math
 from collections import defaultdict
 from datetime import datetime
 
-from club_config import DEFAULT_SCHEDULE_EMOJIS
-
 
 CLUBS_SHEET = 'Clubs'
 QUESTIONS_SHEET = 'Config Questions'
 CHECKLISTS_SHEET = 'Config Checklists'
 VALIDATION_SHEET = 'Config Validation'
+REQUIRED_SHEETS = (
+    CLUBS_SHEET,
+    QUESTIONS_SHEET,
+    CHECKLISTS_SHEET,
+    VALIDATION_SHEET,
+)
 
 OPEN_ACTION = '✅ Открыть смену'
 CLOSE_ACTION = '🚫 Закрыть смену'
 ACTION_CODES = {'open': OPEN_ACTION, 'close': CLOSE_ACTION}
-ACTION_NAMES = {value: key for key, value in ACTION_CODES.items()}
 QUESTION_TYPES = {'text', 'photo', 'num'}
 
 CLUB_HEADERS = [
@@ -175,15 +178,31 @@ def _parse_clubs(values):
             record['QuestionVariants'], CLUBS_SHEET, row, 'QuestionVariants',
             1 if physical else 0,
         )
+        schedule_visible = _bool(
+            record['ScheduleVisible'], CLUBS_SHEET, row, 'ScheduleVisible',
+        )
+        schedule_emoji = _text(record['ScheduleEmoji'])
+        if schedule_visible and not schedule_emoji:
+            raise ConfigValidationError(
+                f'{CLUBS_SHEET}, строка {row}: ScheduleEmoji не заполнен'
+            )
+        account_name = _text(record['AccountName'])
+        if not account_name:
+            raise ConfigValidationError(
+                f'{CLUBS_SHEET}, строка {row}: AccountName не заполнен'
+            )
+        shift_name = _text(record['ShiftName'])
+        if not shift_name:
+            raise ConfigValidationError(
+                f'{CLUBS_SHEET}, строка {row}: ShiftName не заполнен'
+            )
         info = {
             '_config_id': club_id,
-            'schedule_visible': _bool(
-                record['ScheduleVisible'], CLUBS_SHEET, row, 'ScheduleVisible',
-            ),
-            'schedule_emoji': _text(record['ScheduleEmoji']) or '📍',
+            'schedule_visible': schedule_visible,
+            'schedule_emoji': schedule_emoji,
             'tag': _tag(record['Tag'], CLUBS_SHEET, row),
-            'acc_name': _text(record['AccountName']) or name,
-            'shift_name': _text(record['ShiftName']) or name,
+            'acc_name': account_name,
+            'shift_name': shift_name,
             'is_physical': physical,
             'require_geo': require_geo,
         }
@@ -419,128 +438,7 @@ def build_config(club_values, question_values, checklist_values):
     return {club['name']: club['info'] for club in ordered}
 
 
-def _club_ids(clubs):
-    result = {}
-    used = set()
-    for name, info in clubs.items():
-        club_id = _text(info.get('_config_id')).casefold()
-        if re.fullmatch(r'[a-z0-9][a-z0-9_-]*', club_id) and club_id not in used:
-            result[name] = club_id
-            used.add(club_id)
-
-    index = 1
-    for name in clubs:
-        if name in result:
-            continue
-        while f'club_{index:02d}' in used:
-            index += 1
-        club_id = f'club_{index:02d}'
-        result[name] = club_id
-        used.add(club_id)
-        index += 1
-    return result
-
-
-def clubs_to_values(clubs):
-    ids = _club_ids(clubs)
-    rows = [CLUB_HEADERS]
-    schedule_index = 0
-    for sort_order, (name, info) in enumerate(clubs.items(), start=1):
-        schedule = info.get('schedule', {})
-        open_schedule = schedule.get('open', {})
-        strict_schedule = schedule.get('open_strict', {})
-        coords = info.get('coords', {})
-        variant_count = max(
-            [len(variants) for variants in info.get('questions', {}).values()] or [0]
-        )
-        schedule_visible = info.get('schedule_visible')
-        if schedule_visible is None:
-            schedule_visible = bool(info.get('schedule') or info.get('is_physical'))
-        schedule_emoji = info.get('schedule_emoji')
-        if schedule_visible and not schedule_emoji:
-            schedule_emoji = DEFAULT_SCHEDULE_EMOJIS[
-                schedule_index % len(DEFAULT_SCHEDULE_EMOJIS)
-            ]
-        if schedule_visible:
-            schedule_index += 1
-        rows.append([
-            ids[name], name, info.get('acc_name', name), info.get('shift_name', name),
-            schedule_visible,
-            schedule_emoji or '📍', _text(info.get('tag')).replace('\n', ' '),
-            bool(info.get('is_physical')), bool(info.get('require_geo')),
-            coords.get('lat', ''), coords.get('lon', ''), info.get('radius', ''),
-            schedule.get('auto_close_time', ''), schedule.get('status_close_time', ''),
-            schedule.get('early_check_time', ''), open_schedule.get('weekdays', ''),
-            open_schedule.get('weekend', ''), strict_schedule.get('weekdays', ''),
-            strict_schedule.get('weekend', ''), variant_count, True, sort_order,
-        ])
-    return rows, ids
-
-
-def questions_to_values(clubs, ids):
-    rows = [QUESTION_HEADERS]
-    for club_name, info in clubs.items():
-        club_id = ids[club_name]
-        for action_name, variants in info.get('questions', {}).items():
-            action = ACTION_NAMES.get(action_name)
-            if not action:
-                continue
-            cleaned = []
-            for questions in variants:
-                seen = set()
-                variant_questions = []
-                for question in questions:
-                    key = (_text(question.get('type')).casefold(), _text(question.get('text')).casefold())
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    variant_questions.append(question)
-                cleaned.append(variant_questions)
-            grouped = defaultdict(set)
-            details = {}
-            for variant, questions in enumerate(cleaned):
-                for order, question in enumerate(questions, start=1):
-                    key = (order, _text(question.get('type')).casefold(), _text(question.get('text')))
-                    grouped[key].add(variant)
-                    details[key] = question
-            for index, key in enumerate(sorted(grouped, key=lambda item: (item[0], item[2])), start=1):
-                order, question_type, question_text = key
-                variants_set = grouped[key]
-                variants_value = (
-                    'all' if variants_set == set(range(len(cleaned)))
-                    else ','.join(str(value) for value in sorted(variants_set))
-                )
-                rows.append([
-                    f'q_{club_id}_{action}_{index:03d}', club_id, action,
-                    variants_value, order, question_type, question_text, True,
-                ])
-    return rows
-
-
-def checklists_to_values(clubs, ids):
-    rows = [CHECKLIST_HEADERS]
-    for club_name, info in clubs.items():
-        club_id = ids[club_name]
-        for action_name, checklist in info.get('checklists', {}).items():
-            action = ACTION_NAMES.get(action_name)
-            if not action:
-                continue
-            seen = set()
-            order = 0
-            for text in checklist:
-                normalized = _text(text)
-                if not normalized or normalized.casefold() in seen:
-                    continue
-                seen.add(normalized.casefold())
-                order += 1
-                rows.append([
-                    f'c_{club_id}_{action}_{order:03d}', club_id, action,
-                    order, normalized, True,
-                ])
-    return rows
-
-
-def validation_values(message='Листы созданы из текущего clubs.json'):
+def validation_values(message='Конфигурация проверена'):
     return [
         ['Параметр', 'Значение'],
         ['Статус', message],
@@ -553,32 +451,15 @@ def validation_values(message='Листы созданы из текущего c
 
 
 def _worksheet_map(spreadsheet):
-    return {worksheet.title: worksheet for worksheet in spreadsheet.worksheets()}
-
-
-def _create_sheet(spreadsheet, title, values):
-    rows = max(len(values) + 20, 100)
-    columns = max(len(values[0]) + 2, 10)
-    worksheet = spreadsheet.add_worksheet(title, rows=rows, cols=columns)
-    worksheet.update_values('A1', values, extend=True)
-    return worksheet
-
-
-def ensure_config_sheets(spreadsheet, clubs):
-    worksheets = _worksheet_map(spreadsheet)
-    club_values, ids = clubs_to_values(clubs)
-    seeds = {
-        CLUBS_SHEET: club_values,
-        QUESTIONS_SHEET: questions_to_values(clubs, ids),
-        CHECKLISTS_SHEET: checklists_to_values(clubs, ids),
-        VALIDATION_SHEET: validation_values(),
+    worksheets = {
+        worksheet.title: worksheet for worksheet in spreadsheet.worksheets()
     }
-    created = []
-    for title, values in seeds.items():
-        if title not in worksheets:
-            worksheets[title] = _create_sheet(spreadsheet, title, values)
-            created.append(title)
-    return worksheets, created
+    missing = [title for title in REQUIRED_SHEETS if title not in worksheets]
+    if missing:
+        raise ConfigValidationError(
+            f'В таблице отсутствуют обязательные листы: {", ".join(missing)}'
+        )
+    return worksheets
 
 
 def _sheet_values(worksheet):
@@ -652,7 +533,7 @@ def validate_stable_identity(current_config, new_config):
 
 
 def read_config(spreadsheet, current_config):
-    worksheets, created = ensure_config_sheets(spreadsheet, current_config)
+    worksheets = _worksheet_map(spreadsheet)
     try:
         config = build_config(
             _sheet_values(worksheets[CLUBS_SHEET]),
@@ -666,7 +547,7 @@ def read_config(spreadsheet, current_config):
         except Exception:
             pass
         raise
-    return config, worksheets, created
+    return config, worksheets
 
 
 def write_validation(worksheet, message):

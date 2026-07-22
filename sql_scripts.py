@@ -12,7 +12,7 @@ WITH anki as ( -------времянка по анкетам
 				lower(sh.shift_second_name|| ' '|| sh.shift_first_name)
 			)) AS FLOAT) as rn
 	FROM shifts sh
-	LEFT JOIN users_new ns ON (
+	LEFT JOIN users ns ON (
 		sh.shift_login IS NOT NULL
 		AND lower(sh.shift_login) = lower(ns.login)
 	) OR (
@@ -32,7 +32,7 @@ WITH anki as ( -------времянка по анкетам
 
 		FROM shifts sh
         
-        JOIN users_new ns ON (
+        JOIN users ns ON (
             sh.shift_login IS NOT NULL
             AND lower(sh.shift_login) = lower(ns.login)
         ) OR (
@@ -187,7 +187,7 @@ SELECT
     SUM(ROUND(dur / 6, 3)) AS total_cnt_smen --к-во смен
 FROM 
     shifts sh
-JOIN users_new ns ON (
+JOIN users ns ON (
     sh.shift_login IS NOT NULL
     AND lower(sh.shift_login) = lower(ns.login)
 ) OR (
@@ -209,7 +209,7 @@ SELECT
     sh.dur
 FROM 
     shifts sh
-LEFT JOIN users_new ns ON (
+LEFT JOIN users ns ON (
     sh.shift_login IS NOT NULL
     AND lower(sh.shift_login) = lower(ns.login)
 ) OR (
@@ -234,7 +234,7 @@ WITH all_records AS (
 					lower(sh.shift_second_name|| ' '|| sh.shift_first_name)
 				)) AS FLOAT) as rn
 		FROM shifts sh
-		LEFT JOIN users_new ns ON (
+		LEFT JOIN users ns ON (
 			sh.shift_login IS NOT NULL
 			AND lower(sh.shift_login) = lower(ns.login)
 		) OR (
@@ -254,7 +254,7 @@ WITH all_records AS (
 	
 			FROM shifts sh
 	        
-	        JOIN users_new ns ON (
+	        JOIN users ns ON (
 	            sh.shift_login IS NOT NULL
 	            AND lower(sh.shift_login) = lower(ns.login)
 	        ) OR (
@@ -432,7 +432,7 @@ SELECT
     SUM(sh.dur) AS cnt_h,
     SUM(ROUND(sh.dur / 6, 3)) AS total_cnt_smen
 FROM shifts sh
-JOIN users_new ns ON (
+JOIN users ns ON (
     sh.shift_login IS NOT NULL
     AND lower(sh.shift_login) = lower(ns.login)
 ) OR (
