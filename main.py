@@ -110,6 +110,9 @@ def check_dynamic_events(bot):
             
         conf = info['schedule']
 
+        if current_time == conf['auto_close_time']:
+            close_club(club_name, bot)
+
         # --- ПРОВЕРКА НА ЗАКРЫТИЕ (status_close_time) ---
         if current_time == conf['status_close_time']:
             send_status_close(club_name, bot)
@@ -148,14 +151,6 @@ def schedule_func(bot): # Не забудь передать bot!
     start_shifton_chat_sync()
     schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)
     schedule.every(15).seconds.do(start_shifton_notifications_check, bot)
-    # --- СТАТИЧЕСКИЕ ЗАДАЧИ КЛУБОВ ---
-    # Например, принудительное закрытие в 05:00 (если оно всегда в 5 утра)
-    # Можно оставить так, пробежавшись один раз при старте
-    startup_clubs = get_clubs()
-    for club_name, info in startup_clubs.items():
-        if info.get('is_physical'):
-            schedule.every().day.at("05:00:00", 'Europe/Moscow').do(close_club, club_name, bot)
-
     # --- ДИНАМИЧЕСКИЕ ЗАДАЧИ (Из таблицы) ---
     # Запускаем проверку каждую минуту. 
     # Она внутри себя сама разберется, во сколько кого открывать.
@@ -543,7 +538,8 @@ def repair_list(message):
         cur.close()
         conn.close()  
             # Создаем словарь для группировки задач по клубам
-        tasks_by_club = {club: [] for club in clublist_task}
+        club_names = get_clublist_task()
+        tasks_by_club = {club: [] for club in club_names}
         for task_id, title, club in tasks:
             if club in tasks_by_club:
                 tasks_by_club[club].append((task_id, title))
@@ -552,7 +548,7 @@ def repair_list(message):
         task_counter = 1  # Общий счетчик задач
 
         # Формируем текст с группировкой по клубам
-        for club in clublist_task:
+        for club in club_names:
             club_tasks = tasks_by_club[club]
             if club_tasks:  # Если есть задачи для этого клуба
                 text_lines.append(f"\n<b>{club}:</b>")

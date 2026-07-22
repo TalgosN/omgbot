@@ -96,7 +96,7 @@ def add_task_type(message,bot):
 def club_task(message,task_type,bot):
      
      markup=types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-     markup.add(*clublist_task,"Вернуться")
+     markup.add(*get_clublist_task(),"Вернуться")
      bot.send_message(message.chat.id, f'К какому клубу относится твое обращение?',reply_markup=markup)
      bot.register_next_step_handler(message, add_title, task_type,bot)
 
@@ -105,7 +105,7 @@ def add_title(message,task_type,bot):
     if message.text=="Вернуться":
         returnback(message,bot)
 
-    elif message.text in clublist_task:
+    elif message.text in get_clublist_task():
 
         club_task=message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
@@ -117,7 +117,7 @@ def add_title(message,task_type,bot):
     else:
 
         markup=types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add(*clublist_task,"Вернуться")
+        markup.add(*get_clublist_task(),"Вернуться")
         bot.send_message(message.chat.id, f'К какому клубу относится твое обращение?',reply_markup=markup)
         bot.register_next_step_handler(message, add_title, task_type,bot)
 
@@ -292,7 +292,8 @@ def show_active_tasks(message, bot):
     cur.close()
     conn.close()
 
-    tasks_by_club = {club: [] for club in clublist_task}
+    club_names = get_clublist_task()
+    tasks_by_club = {club: [] for club in club_names}
     for task_id, title, club, status in tasks:
         if club in tasks_by_club:
             tasks_by_club[club].append((task_id, title, status))
@@ -300,7 +301,7 @@ def show_active_tasks(message, bot):
     list_buttons = []
     text_lines = []
 
-    for club in clublist_task:
+    for club in club_names:
         club_tasks = tasks_by_club[club]
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")
@@ -336,14 +337,15 @@ def show_review_tasks(message, bot):
     cur.close()
     conn.close()
 
-    tasks_by_club = {club: [] for club in clublist_task}
+    club_names = get_clublist_task()
+    tasks_by_club = {club: [] for club in club_names}
     for task_id, title, club in tasks:
         if club in tasks_by_club:
             tasks_by_club[club].append((task_id, title))
 
     list_buttons = []
     text_lines = []
-    for club in clublist_task:
+    for club in club_names:
         club_tasks = tasks_by_club[club]
         if club_tasks:
             text_lines.append(f"\n<b>{club}:</b>")
@@ -378,7 +380,8 @@ def show_active_type(message, bot, category):
     cur.close()
     conn.close()
 
-    tasks_by_club = {club: [] for club in clublist_task}
+    club_names = get_clublist_task()
+    tasks_by_club = {club: [] for club in club_names}
     for task_id, title, club, status in tasks:
         if club in tasks_by_club:
             tasks_by_club[club].append((task_id, title, status))
@@ -387,7 +390,7 @@ def show_active_type(message, bot, category):
     text_lines = []
     task_counter = 1 
 
-    for club in clublist_task:
+    for club in club_names:
         club_tasks = tasks_by_club[club]
         if club_tasks: 
             text_lines.append(f"\n<b>{club}:</b>")

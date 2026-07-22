@@ -15,7 +15,6 @@ from permissions import ROLE_EMPLOYEE, require_role
 
 locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
 
-clubs_color = {'Прокшино':'🔴', 'Каширка':'🟠', 'Марьино':'🟣', 'Коллцентр':'🔈', 'Ленинский':'🟢','Дмитровка':'🟡'}
 emojis = ['💀', '🤖', '🍓', '😎', '🤓', '🙄', '👽', '👻', '😈', '😇', '😅', '🤑', '😉', '🐯', '🌝', '🌚', '🥟']
 
 shifton_chat_sync_lock = threading.Lock()
@@ -284,11 +283,14 @@ def get_today_schedule(date_iso):
 
     locations = data.get("locations", [])
     
-    for i in clubs_color:
-        full_text += f'{clubs_color[i]} {i}\n'
+    for club in get_schedule_locations():
+        full_text += f'{club["emoji"]} {club["name"]}\n'
         
         # Ищем локацию в ответе API
-        loc_data = next((loc for loc in locations if loc.get("title") == i), None)
+        loc_data = next(
+            (loc for loc in locations if loc.get("title") == club['source_name']),
+            None,
+        )
         
         if loc_data and loc_data.get("shifts"):
             for shift in loc_data["shifts"]:
@@ -338,11 +340,14 @@ def get_week_by_club(date_user):
     
     full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
 
-    for i in clubs_color:
-        club_shifts = [s for s in week_shifts if s["location"] == i]
+    for club in get_schedule_locations():
+        club_shifts = [
+            shift for shift in week_shifts
+            if shift["location"] == club['source_name']
+        ]
         if not club_shifts: continue
             
-        full_text += f'{clubs_color[i]} <b>{i}</b>\n'
+        full_text += f'{club["emoji"]} <b>{club["name"]}</b>\n'
         
         shifts_by_day = {}
         for s in club_shifts:
@@ -375,12 +380,16 @@ def get_week_by_day(date_user):
         day_has_shifts = False
         day_text = f"📅 <b>{day_str}</b>\n"
         
-        for i in clubs_color:
-            club_shifts = [s for s in week_shifts if s["location"] == i and s["date_dt"].date() == current_dt.date()]
+        for club in get_schedule_locations():
+            club_shifts = [
+                shift for shift in week_shifts
+                if shift["location"] == club['source_name']
+                and shift["date_dt"].date() == current_dt.date()
+            ]
             if not club_shifts: continue
                 
             day_has_shifts = True
-            day_text += f' {clubs_color[i]} {i}:\n'
+            day_text += f' {club["emoji"]} {club["name"]}:\n'
             for s in club_shifts:
                 time_str = f'с {s["start"]} до {s["end"]}'
                 day_text += f'  └ {s["employee"]} {time_str}\n'
@@ -395,6 +404,9 @@ def get_week_by_employee(date_user):
     start_dt = last_monday(date_start_dt.strftime('%Y-%m-%d 00:00:00'))
     
     week_shifts = get_week_data(start_dt)
+    schedule_locations = {
+        club['source_name']: club for club in get_schedule_locations()
+    }
     
     full_text = f"🗓 <b>Расписание на неделю {start_dt.strftime('%d.%m')} - {(start_dt + timedelta(days=6)).strftime('%d.%m')}</b>\n\n"
 
@@ -406,13 +418,15 @@ def get_week_by_employee(date_user):
         
         day_str = s["day_str"]
         loc = s["location"]
-        loc_color = clubs_color.get(loc, "")
+        club = schedule_locations.get(loc)
+        loc_color = club['emoji'] if club else ''
+        loc_name = club['name'] if club else loc
         time_str = f'с {s["start"]} до {s["end"]}'
         
         if day_str not in shifts_by_emp[name]:
             shifts_by_emp[name][day_str] = []
             
-        shifts_by_emp[name][day_str].append(f'  └ {time_str} {loc_color} {loc}')
+        shifts_by_emp[name][day_str].append(f'  └ {time_str} {loc_color} {loc_name}')
 
     for emp, days_dict in shifts_by_emp.items():
         icon = "👤" if emp == "СВОБОДНАЯ СМЕНА" else random.choice(emojis)

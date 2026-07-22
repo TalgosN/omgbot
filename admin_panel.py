@@ -1,6 +1,5 @@
 import pygsheets
 import html
-import json
 import os
 from telebot import *
 import sqlite3
@@ -10,7 +9,15 @@ from datetime import datetime
 from statistics import median
 import requests
 import pytz
-from constants import CHATS, clublist_task, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
+from constants import CHATS, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
+from club_config import get_club_config_status, get_clubs, save_clubs
+from club_config_sync import (
+    ConfigValidationError,
+    config_diff,
+    count_config,
+    read_config,
+    write_validation,
+)
 from sender import safe_send
 from permissions import (
     ROLE_BLOCKED,
@@ -25,8 +32,10 @@ from permissions import (
 
 # Путь к ключу (как в твоем sheets.py)
 KEY_FILE = 'key/omgbot-430116-e9a4d9c69b7f.json'
+CONFIG_SPREADSHEET_ID = '1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q'
 temp_broadcasts = {}
 health_check_lock = threading.Lock()
+config_sync_lock = threading.Lock()
 
 def generate_days_keyboard(selected_days=""):
     markup = types.InlineKeyboardMarkup()
@@ -378,6 +387,11 @@ def collect_system_health(bot):
     try:
         validate_config()
         lines.append("✅ Конфигурация: обязательные параметры заданы")
+        club_status = get_club_config_status()
+        lines.append(
+            f"✅ Клубы: локальная версия {club_status['version']}, "
+            f"источник {club_status['source']}"
+        )
     except Exception as e:
         lines.append(f"❌ Конфигурация: {str(e)[:120]}")
 
@@ -399,7 +413,8 @@ def collect_system_health(bot):
     try:
         gc = pygsheets.authorize(service_file=KEY_FILE)
         gc.open('KPI OMG VR')
-        lines.append("✅ Google Sheets: доступен")
+        gc.open_by_key(CONFIG_SPREADSHEET_ID)
+        lines.append("✅ Google Sheets: KPI и Виарыч доступны")
     except Exception as e:
         lines.append(f"❌ Google Sheets: {str(e)[:120]}")
 
@@ -449,145 +464,91 @@ def handle_system_health(message, bot):
 def handle_update_config(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    # 1. Сообщение "Ждите"
+    if not config_sync_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, "⏳ Синхронизация настроек уже выполняется.")
+        return
+
     msg = bot.send_message(message.chat.id, "⏳ Подключаюсь к таблице 'Виарыч'...")
-    
-    # 2. Запуск функции
-    try:
-        report = sync_config() # Вызываем функцию из sync_clubs.py
-        
-        # 3. Редактируем сообщение с результатом
-        bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=report)
-        
-    except Exception as e:
-        # Если msg не успел создаться или другая ошибка
+
+    def worker():
         try:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"Ошибка скрипта: {e}")
-        except:
-            bot.send_message(message.chat.id, f"Ошибка скрипта: {e}")
-        
-    # Возвращаем меню
-    from menu import hello
-    hello(message.chat.id, bot)
+            report = sync_config()
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=msg.message_id,
+                text=report,
+            )
+        except Exception as error:
+            try:
+                bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=msg.message_id,
+                    text=f"❌ Ошибка синхронизации: {error}",
+                )
+            except Exception:
+                bot.send_message(message.chat.id, f"❌ Ошибка синхронизации: {error}")
+        finally:
+            config_sync_lock.release()
+            from menu import hello
+            hello(message.chat.id, bot)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def sync_config():
-    logs = []
-    logs.append("🔄 Начинаю синхронизацию (pygsheets)...")
-
     try:
-        # 1. Авторизация
+        client = pygsheets.authorize(service_file=KEY_FILE)
+        spreadsheet = client.open_by_key(CONFIG_SPREADSHEET_ID)
+        current_config = get_clubs()
+        new_config, worksheets, created = read_config(spreadsheet, current_config)
+        changes = config_diff(current_config, new_config)
+        clubs_count, questions_count, checklists_count = count_config(new_config)
+        save_clubs(new_config, source='google')
+        status = get_club_config_status()
+
+        validation_warning = None
         try:
-            gc = pygsheets.authorize(service_file=KEY_FILE)
-            sh = gc.open('Виарыч') # Открываем таблицу по имени
-        except Exception as e:
-            return f"❌ Ошибка подключения к Гуглу: {e}"
+            write_validation(
+                worksheets['Config Validation'],
+                f'OK, опубликована версия {status["version"]}',
+            )
+        except Exception as error:
+            validation_warning = str(error)
 
-        # 2. Загрузка текущего JSON с диска
-        try:
-            with open('data/clubs.json', 'r', encoding='utf-8') as f:
-                clubs_data = json.load(f)
-        except FileNotFoundError:
-            return "❌ Ошибка: Файл data/clubs.json не найден."
-
-        # --- ОБНОВЛЕНИЕ ТЕГОВ (Вкладка 'Tags') ---
-        try:
-            wks_tags = sh.worksheet_by_title('Tags')
-            # Получаем все записи как список словарей
-            tags_records = wks_tags.get_all_records()
-            
-            count_tags = 0
-            for row in tags_records:
-                club = row.get('Club')
-                if club == 'КЦ':
-                    club = 'Коллцентр'
-                tag = row.get('Tag')
-                
-                # Если такой клуб есть в JSON — обновляем тег
-                if club and club in clubs_data:
-                    clubs_data[club]['tag'] = tag
-                    count_tags += 1
-            
-            logs.append(f"✅ Теги обновлены: {count_tags} шт.")
-        except pygsheets.WorksheetNotFound:
-            logs.append("⚠️ Вкладка 'Tags' не найдена.")
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка в Tags: {e}")
-
-        # --- ОБНОВЛЕНИЕ ВОПРОСОВ (Вкладка 'Questions') ---
-        try:
-            wks_q = sh.worksheet_by_title('Questions')
-            q_records = wks_q.get_all_records()
-            
-            # Временная структура для сборки: temp_q[club][action][variant] = [список вопросов]
-            temp_q = {}
-            count_q = 0
-
-            for row in q_records:
-                club = row.get('Club')
-                if club == 'КЦ':
-                    club = 'Коллцентр'
-                action = row.get('Action')
-                q_text = row.get('Question')
-                q_type = row.get('Type')
-                
-                # Пропускаем пустые строки
-                if not club or not action or not q_text:
-                    continue
-                count_q += 1
-                # Обработка варианта (может прийти как строка "0" или число 0)
-                try:
-                    variant = int(row.get('Variant', 0))
-                except ValueError:
-                    variant = 0
-
-                # Строим структуру
-                if club not in temp_q: temp_q[club] = {}
-                if action not in temp_q[club]: temp_q[club][action] = {}
-                if variant not in temp_q[club][action]: temp_q[club][action][variant] = []
-
-                # Добавляем вопрос
-                temp_q[club][action][variant].append({
-                    "text": q_text,
-                    "type": q_type
-                })
-
-            # Записываем собранные данные обратно в clubs_data
-            for club, actions in temp_q.items():
-                if club in clubs_data:
-                    # Инициализируем секцию questions если её нет
-                    if 'questions' not in clubs_data[club]:
-                        clubs_data[club]['questions'] = {}
-                    
-                    for action, variants_dict in actions.items():
-                        # Превращаем словарь вариантов {0: [...], 2: [...]} в список списков [[...], [], [...]]
-                        if not variants_dict: continue
-                        
-                        max_v = max(variants_dict.keys())
-                        # Создаем список нужной длины, заполненный пустыми списками
-                        questions_list = [[] for _ in range(max_v + 1)]
-                        
-                        for v_idx, q_list in variants_dict.items():
-                            questions_list[v_idx] = q_list
-                        
-                        clubs_data[club]['questions'][action] = questions_list
-            
-            logs.append(f"✅ Вопросы успешно обновлены ({count_q} строк).")
-
-        except pygsheets.WorksheetNotFound:
-            logs.append("⚠️ Вкладка 'Questions' не найдена.")
-        except Exception as e:
-            logs.append(f"⚠️ Ошибка в Questions: {e}")
-
-        # 3. Сохранение файла
-        with open('data/clubs.json', 'w', encoding='utf-8') as f:
-            json.dump(clubs_data, f, ensure_ascii=False, indent=2)
-        
-        logs.append("💾 Конфиг сохранен на сервере!")
-        return "\n".join(logs)
-
-    except Exception as e:
-        return f"🔥 Критическая ошибка: {e}"
+        lines = [
+            '✅ Конфигурация применена',
+            '',
+            f'🏢 Клубов: {clubs_count}',
+            f'❓ Вопросов: {questions_count}',
+            f'📋 Пунктов чек-листов: {checklists_count}',
+            f'🔖 Версия: {status["version"]}',
+        ]
+        if created:
+            lines.extend(['', f'🆕 Созданы листы: {", ".join(created)}'])
+        if changes['added']:
+            lines.append(f'➕ Добавлены клубы: {", ".join(changes["added"])}')
+        if changes['removed']:
+            lines.append(f'➖ Удалены клубы: {", ".join(changes["removed"])}')
+        if changes['changed']:
+            lines.append(f'✏️ Изменены клубы: {", ".join(changes["changed"])}')
+        if not any(changes.values()):
+            lines.append('ℹ️ Изменений относительно локальной версии нет')
+        if validation_warning:
+            lines.append(f'⚠️ Не удалось обновить лист проверки: {validation_warning}')
+        lines.extend(['', '💾 clubs.json обновлён атомарно, резервная копия сохранена.'])
+        return '\n'.join(lines)
+    except ConfigValidationError as error:
+        return (
+            '❌ Конфигурация не применена\n\n'
+            f'{error}\n\n'
+            'Локальный clubs.json и работающий бот не изменены.'
+        )
+    except Exception as error:
+        return (
+            '❌ Не удалось синхронизировать конфигурацию\n\n'
+            f'{error}\n\n'
+            'Бот продолжает использовать последнюю локальную версию.'
+        )
 
 
 

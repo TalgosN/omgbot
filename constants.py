@@ -1,6 +1,7 @@
 import os
 import json
 from dotenv import load_dotenv
+from club_config import get_clubs, get_clublist, get_clublist_task, get_schedule_locations
 
 load_dotenv()
 
@@ -47,43 +48,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PHRASES_PATH = os.path.join(BASE_DIR, "data", "phrases.json")
 CLUBS_PATH = os.path.join(BASE_DIR, "data", "clubs.json")
 
-def migrate_callcenter_config():
-    """Один раз переименовывает клуб в локальном конфиге сервера."""
-    try:
-        with open(CLUBS_PATH, 'r', encoding='utf-8') as file:
-            clubs = json.load(file)
-        if 'КЦ' not in clubs or 'Коллцентр' in clubs:
-            return
-        callcenter = clubs.pop('КЦ')
-        if callcenter.get('acc_name') == 'КЦ':
-            callcenter['acc_name'] = 'Коллцентр'
-        clubs['Коллцентр'] = callcenter
-        with open(CLUBS_PATH, 'w', encoding='utf-8') as file:
-            json.dump(clubs, file, ensure_ascii=False, indent=2)
-    except (OSError, ValueError, TypeError) as error:
-        print(f'Ошибка переименования КЦ в clubs.json: {error}')
-
-
-migrate_callcenter_config()
-
 with open(PHRASES_PATH, "r", encoding="utf-8") as f:
     TEXTS = json.load(f)
 
-
-
-def get_clubs():
-    try:
-        # Проверяем, существует ли файл, чтобы не уронить бота
-        if not os.path.exists(CLUBS_PATH):
-            print(f"Ошибка: Файл {CLUBS_PATH} не найден!")
-            return {}
-            
-        with open(CLUBS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Критическая ошибка чтения JSON: {e}")
-        return {}
-    
 col=3 # Пока не знаю что это
 
 ### Кнопки
@@ -110,14 +77,6 @@ funclist_today=("✅ Открыть смену","🚫 Закрыть смену"
 
 ## Аккаунт
 funclist_acc=("👤 Мои данные", "🔄 Синхронизация с OMG Shift", "✏️ Изменить данные", "👤 Я сменил юзернейм", "📊 Статистика", "⬅️ Вернуться")
-
-## Клубы
-clublist = tuple(
-    name for name, info in get_clubs().items() 
-    if info.get('is_physical') is True
-)
-
-clublist_task = tuple(get_clubs().keys())
 
 ### Всячина
 emojis={"roll":("⚡️","🦄","👻"),

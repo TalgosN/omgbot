@@ -14,7 +14,6 @@ def load_admin_module():
     pygsheets = types.ModuleType("pygsheets")
     constants = types.ModuleType("constants")
     constants.CHATS = {}
-    constants.clublist_task = ()
     constants.SHIFTON_API_URL = "http://shifton.test"
     constants.SHIFTON_API_TOKEN = "test-token"
     constants.validate_config = lambda: None
@@ -78,6 +77,7 @@ class AdminHealthTest(unittest.TestCase):
         self.assertIn("последняя проверка 2026-07-21 12:00:00", report)
         self.assertEqual(request.call_args.kwargs["timeout"], 5)
         google.open.assert_called_once_with("KPI OMG VR")
+        google.open_by_key.assert_called_once_with(self.admin.CONFIG_SPREADSHEET_ID)
 
     def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
         def employee(name, shifts, weighted_shifts, total, weighted):

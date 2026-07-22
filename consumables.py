@@ -1,7 +1,7 @@
 import sqlite3
 import pygsheets
 from telebot import types
-from constants import CHATS, clublist_task
+from constants import CHATS, get_clublist_task
 from datetime import datetime, timedelta
 import pytz
 from permissions import ROLE_EMPLOYEE, require_role
@@ -36,7 +36,7 @@ def c_select_club(message, bot):
         return
 
     club = message.text
-    if club not in clublist_task:
+    if club not in get_clublist_task():
         consumables_menu(message, bot)
         return
 

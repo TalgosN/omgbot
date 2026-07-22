@@ -2,14 +2,12 @@ import sqlite3
 import pytz
 from telebot import *
 #from constants import *
-from constants import get_clubs, funclist_today, CHATS, TEXTS, tags_main, clublist
+from constants import get_clubs, get_clublist, funclist_today, CHATS, TEXTS, tags_main
 from sheets import *
 from datetime import datetime,timedelta
 import math
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 
-
-CLUBS=get_clubs()
 ############################# core openclose
 
 def func_today (message,bot):
@@ -156,7 +154,7 @@ def find_club_by_geo(message, a, tooearly, bot):
 # --- 4. РУЧНОЙ ВЫБОР (ТОТ САМЫЙ СКИП) ---
 def manual_club_selection(message, a, tooearly, bot):
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(*clublist, "Вернуться")
+    markup.add(*get_clublist(), "Вернуться")
     bot.send_message(message.chat.id, 'Выбери клуб из списка:', reply_markup=markup)
     bot.register_next_step_handler(message, manual_selection_handler, a, tooearly, bot)
 
@@ -165,7 +163,7 @@ def manual_selection_handler(message, a, tooearly, bot):
     if club in ["Вернуться", "⬅️ Вернуться"]:
         func_today(message, bot)
         return
-    if club not in clublist:
+    if club not in get_clublist():
         bot.send_message(message.chat.id, "Нет такого клуба.")
         manual_club_selection(message, a, tooearly, bot)
         return
@@ -212,7 +210,12 @@ def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
         is_early(message, a, club, is_geo_verified, bot)
 
 def is_early(message, a, club, is_geo_verified, bot):
-    conf = CLUBS[club]['schedule']
+    club_config = get_clubs().get(club)
+    if not club_config or 'schedule' not in club_config:
+        bot.send_message(message.chat.id, "Конфигурация клуба недоступна. Обратитесь к администратору.")
+        func_today(message, bot)
+        return
+    conf = club_config['schedule']
     now = datetime.now(pytz.timezone('Europe/Moscow'))
     
     limit_t = datetime.strptime(conf['early_check_time'], "%H:%M:%S").time()
@@ -245,7 +248,7 @@ def enter_club(message, a, club, tooearly, is_geo_verified, bot):
         return
 
     # 2. Проверка наличия
-    if club not in clublist:
+    if club not in get_clublist():
         bot.send_message(message.chat.id, "Извините, такого клуба у нас нет")
         check_club(message, a, bot)
         return
@@ -271,14 +274,19 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     conn.close()
     
     # 2. Подготовка данных
+    current_clubs = get_clubs()
+    club_config = current_clubs.get(club)
+    if not club_config:
+        bot.send_message(message.chat.id, "Конфигурация клуба недоступна. Обратитесь к администратору.")
+        return
     current_datetime = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%H:%M")
     
     # Чек-лист
-    checklist = CLUBS[club].get('checklists', {}).get(a, [])
+    checklist = club_config.get('checklists', {}).get(a, [])
     check_list_text = "\n– " + "\n– ".join(checklist) if checklist else " Отсутствует"
 
     # Выбор варианта вопросов
-    q_variants = CLUBS[club]['questions'].get(a, [[]])
+    q_variants = club_config.get('questions', {}).get(a, [[]])
     variant_index = datetime.now().weekday() % len(q_variants)
     questions = q_variants[variant_index]
     
@@ -302,7 +310,6 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     name = (user['nick_name'] or user['first_name']) if user else "Сотрудник"
     
     # Формируем приписку, если пропустили гео
-    current_clubs = get_clubs()
     req_geo = current_clubs[club].get('require_geo', False)
     geo_warning = ""
     if req_geo and not is_geo_verified:
@@ -398,7 +405,8 @@ def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
             start_dt = datetime.combine(current_date, start_t) # Получили полноценный datetime
             
             # 2. Определяем целевое время из JSON
-            sched = CLUBS[club]['schedule']['open_strict']
+            current_clubs = get_clubs()
+            sched = current_clubs[club]['schedule']['open_strict']
             
             # Проверяем день недели (0-4 будни, 5-6 выходные)
             is_weekend = start_dt.weekday() >= 5 
