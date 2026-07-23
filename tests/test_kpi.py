@@ -182,14 +182,15 @@ class KpiTest(unittest.TestCase):
             conn = real_connect(db_path)
             conn.execute(
                 "CREATE TABLE shifts (shift_second_name TEXT, shift_first_name TEXT, "
-                "dt_shift TEXT, club TEXT, dur REAL, source TEXT)"
+                "dt_shift TEXT, club TEXT, dur REAL, source TEXT, shift_login TEXT)"
             )
             conn.executemany(
-                "INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("Старый", "Сотрудник", "2026-07-01", "Клуб", 6.0, "omg_shift"),
-                    ("Архив", "Shifton", "2026-07-18", "Клуб", 6.0, "legacy_shifton"),
-                    ("Устаревшая", "Смена", "2026-07-20", "Клуб", 6.0, "omg_shift"),
+                    ("Старый", "Сотрудник", "2026-07-01", "Клуб", 6.0, "omg_shift", "@old"),
+                    ("Архив", "Shifton", "2026-07-18", "Клуб", 6.0, "legacy_shifton", "@archive"),
+                    ("Без", "Источника", "2026-07-20", "Клуб", 6.0, None, "@unknown"),
+                    ("Устаревшая", "Смена", "2026-07-20", "Клуб", 6.0, "omg_shift", "@stale"),
                 ],
             )
             conn.commit()
@@ -211,6 +212,7 @@ class KpiTest(unittest.TestCase):
             self.assertEqual(rows, [
                 ("Старый", "2026-07-01", "omg_shift"),
                 ("Архив", "2026-07-18", "legacy_shifton"),
+                ("Без", "2026-07-20", None),
                 ("Новая", "2026-07-20", "omg_shift"),
             ])
 

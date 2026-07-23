@@ -1047,18 +1047,13 @@ def _collect_payroll_report_data(date_start, date_end):
         rates = _load_payroll_rates(conn, start_dt, end_dt)
 
         users = {}
-        user_columns = {row[1] for row in conn.execute('PRAGMA table_info(users)')}
-        if {'second_name', 'first_name'} <= user_columns:
-            user_rows = conn.execute(
-                "SELECT login, second_name, first_name FROM users WHERE login IS NOT NULL"
-            )
-            for row in user_rows:
-                login = _canonical_login(row['login'])
-                full_name = ' '.join(filter(None, (row['second_name'], row['first_name']))).strip()
-                users[login] = full_name or row['login']
-        elif 'name' in user_columns:
-            for row in conn.execute("SELECT login, name FROM users WHERE login IS NOT NULL"):
-                users[_canonical_login(row['login'])] = row['name'] or row['login']
+        user_rows = conn.execute(
+            "SELECT login, second_name, first_name FROM users WHERE login IS NOT NULL"
+        )
+        for row in user_rows:
+            login = _canonical_login(row['login'])
+            full_name = ' '.join(filter(None, (row['second_name'], row['first_name']))).strip()
+            users[login] = full_name or row['login']
 
         data = {}
 

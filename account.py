@@ -67,24 +67,6 @@ def table_columns(conn, table):
     return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
 
 
-def ensure_shift_identity_column(conn):
-    columns = table_columns(conn, 'shifts')
-    if not columns:
-        return
-    if 'shift_login' not in columns:
-        conn.execute('ALTER TABLE shifts ADD COLUMN shift_login varchar(50)')
-    conn.execute(
-        """UPDATE shifts
-           SET shift_login = (
-               SELECT login FROM users
-               WHERE second_name = shifts.shift_second_name
-                 AND first_name = shifts.shift_first_name
-               LIMIT 1
-           )
-           WHERE shift_login IS NULL"""
-    )
-
-
 def get_user_by_chat_id(chat_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -137,7 +119,6 @@ def apply_omg_identity(chat_id, login, employee):
                 raise ValueError('Этот Telegram username уже принадлежит другому пользователю')
 
             old_login = user['login']
-            ensure_shift_identity_column(conn)
             if old_login:
                 for table, column in LOGIN_REFERENCES.items():
                     if column not in table_columns(conn, table):
@@ -153,7 +134,6 @@ def apply_omg_identity(chat_id, login, employee):
                    WHERE ID=?""",
                 (login, first_name, second_name, str(chat_id), user['ID']),
             )
-            ensure_shift_identity_column(conn)
 
         return {
             'old_login': old_login,
@@ -553,9 +533,6 @@ def get_main_kpi(login):
 def get_database_stats(login, start=None, end=None):
     conn = sqlite3.connect(DB_PATH)
     try:
-        with conn:
-            ensure_shift_identity_column(conn)
-
         date_filter = ''
         params = [login]
         if start and end:
@@ -572,19 +549,7 @@ def get_database_stats(login, start=None, end=None):
         ).fetchall()
         result = {name: value or 0 for name, value in rows}
 
-        user = conn.execute(
-            'SELECT first_name, second_name FROM users WHERE lower(login)=lower(?)',
-            (login,),
-        ).fetchone()
-        if user:
-            shift_identity = (
-                '((shift_login IS NOT NULL AND lower(shift_login)=lower(?)) '
-                'OR (shift_login IS NULL AND shift_second_name=? AND shift_first_name=?))'
-            )
-            shift_params = [login, user[1], user[0]]
-        else:
-            shift_identity = '(shift_login IS NOT NULL AND lower(shift_login)=lower(?))'
-            shift_params = [login]
+        shift_params = [login]
         shift_date_filter = ''
         if start and end:
             shift_date_filter = (
@@ -592,7 +557,9 @@ def get_database_stats(login, start=None, end=None):
             )
             shift_params.extend([start, end])
         shift_row = conn.execute(
-            f"SELECT COALESCE(SUM(dur),0), COALESCE(SUM(dur)/6.0,0) FROM shifts WHERE {shift_identity}{shift_date_filter}",
+            f"""SELECT COALESCE(SUM(dur),0), COALESCE(SUM(dur)/6.0,0)
+                FROM shifts
+                WHERE lower(shift_login)=lower(?) {shift_date_filter}""",
             shift_params,
         ).fetchone()
         result['Часы'] = shift_row[0]

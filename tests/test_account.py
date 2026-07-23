@@ -58,11 +58,14 @@ class AccountTest(unittest.TestCase):
             if table == 'shifts':
                 conn.execute(
                     'CREATE TABLE shifts (shift_second_name TEXT, shift_first_name TEXT, '
-                    'dt_shift TEXT, club TEXT, dur REAL)'
+                    'dt_shift TEXT, club TEXT, dur REAL, source TEXT, shift_login TEXT)'
                 )
                 conn.execute(
-                    'INSERT INTO shifts VALUES (?, ?, ?, ?, ?)',
-                    ('Бондаренко', 'Саша', '2026-07-20', 'Марьино', 6.0),
+                    'INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (
+                        'Бондаренко', 'Саша', '2026-07-20', 'Марьино', 6.0,
+                        'legacy_shifton', '@old_login',
+                    ),
                 )
             else:
                 conn.execute(f'CREATE TABLE "{table}" ("{column}" TEXT)')
@@ -120,8 +123,8 @@ class AccountTest(unittest.TestCase):
             ('@maxim', 'Максим', 'Песков'),
         )
         conn.execute(
-            "UPDATE shifts SET shift_second_name=?, shift_first_name=?",
-            ('Песков', 'Максим'),
+            "UPDATE shifts SET shift_second_name=?, shift_first_name=?, shift_login=?",
+            ('Песков', 'Максим', '@maxim'),
         )
         conn.commit()
         conn.close()
@@ -316,6 +319,7 @@ class AccountTest(unittest.TestCase):
         conn.execute(
             'CREATE TABLE anketi (ID INTEGER, id_ank INTEGER, dt_ank TEXT, club_ank TEXT)'
         )
+        conn.execute('DELETE FROM shifts')
         conn.execute(
             'INSERT INTO afterparty (who, ID, dt_rep) VALUES (?, ?, ?)',
             ('@old_login', 1, '2026-07-10'),
@@ -329,8 +333,11 @@ class AccountTest(unittest.TestCase):
             ('@old_login', '2026-07-12', 2.5),
         )
         conn.execute(
-            'INSERT INTO shifts VALUES (?, ?, ?, ?, ?)',
-            ('СтараяФамилия', 'СтароеИмя', '2026-07-13', 'Марьино', 6.0),
+            'INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (
+                'СтараяФамилия', 'СтароеИмя', '2026-07-13', 'Марьино', 6.0,
+                'legacy_shifton', '@old_login',
+            ),
         )
         conn.commit()
         conn.close()
