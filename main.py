@@ -151,6 +151,16 @@ def schedule_func(bot): # Не забудь передать bot!
     start_shifton_chat_sync()
     schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)
     schedule.every(15).seconds.do(start_shifton_notifications_check, bot)
+
+    from steamtracker.jobs import (
+        start_catalog_sync,
+        start_license_sync,
+        start_store_enrichment,
+    )
+    start_license_sync()
+    schedule.every(4).hours.do(start_license_sync)
+    schedule.every().day.at("05:30:00", 'Europe/Moscow').do(start_store_enrichment)
+    schedule.every(5).minutes.do(start_catalog_sync)
     # --- ДИНАМИЧЕСКИЕ ЗАДАЧИ (Из таблицы) ---
     # Запускаем проверку каждую минуту. 
     # Она внутри себя сама разберется, во сколько кого открывать.
@@ -774,6 +784,9 @@ from consumables import register_consumables_callbacks
 register_consumables_callbacks(bot)
 from admin_panel import register_admin_consumables_callbacks
 register_admin_consumables_callbacks(bot)
+
+from steamtracker.telegram import register_steamtracker_handlers
+register_steamtracker_handlers(bot)
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,), name="omgbot-scheduler", daemon=True).start()
