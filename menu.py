@@ -1,8 +1,37 @@
 from telebot import *
+from html import escape
+import os
 import sqlite3
 from constants import *
 from admin_panel import sync_config
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, ROLE_OWNER, require_role
+
+HELP_MENU_BUTTONS = (
+    '🚀 Быстрый старт',
+    '🏷 KPI и хештеги',
+    '🔗 Сервисы и таблицы',
+    '🛟 Если что-то не работает',
+    '⬅️ Вернуться',
+)
+OMG_SHIFT_URL = 'http://31.129.109.167/?page=settings'
+GOOGLE_SHEET_LINKS = (
+    ('📊 KPI OMG VR', 'https://docs.google.com/spreadsheets/d/1abZHTzME77-GHuU9L-32nANki671cSq3TPHIrWmXjZY/edit?gid=787957765#gid=787957765'),
+    ('🧮 KPI helper', 'https://docs.google.com/spreadsheets/d/1JHOLFykKPbQ0Ou2zqq4GMPTVHFst8iFJxHkpMVjFlYk/edit?gid=972562992#gid=972562992'),
+    ('👥 Сотрудники', 'https://docs.google.com/spreadsheets/d/1McS0h3TxnxA-QqIWfR37LHBTN3D7TDSvzz3nitAaq98/edit?gid=0#gid=0'),
+    ('📝 Клиентская база', 'https://docs.google.com/spreadsheets/d/1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI/edit?gid=44645110#gid=44645110'),
+    ('⚙️ Виарыч', 'https://docs.google.com/spreadsheets/d/1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q/edit?gid=1951407525#gid=1951407525'),
+    ('🚪 Открытия и закрытия', 'https://docs.google.com/spreadsheets/d/1Jsz9im2ss9NIGfDcSLuIv37op_5QzaB03m6Z_JjDE9U/edit?gid=270994446#gid=270994446'),
+    ('📦 Расходники', 'https://docs.google.com/spreadsheets/d/1KyApsY0L_TL_WhpJDagB2VSZuvyxs4vb1aicgAHtUPk/edit?gid=0#gid=0'),
+)
+
+
+def steamtracker_url():
+    spreadsheet_id = os.getenv(
+        'STEAMTRACKER_SPREADSHEET_ID',
+        '1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI',
+    )
+    return f'https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit'
+
 
 def chatid_to_users(chatid):
     conn = sqlite3.connect('db/omgbot.sql')
@@ -67,7 +96,6 @@ def func(message, bot):
 
     elif a == '🆘 Помощь':
         help(bot, message)
-        hello(message.chat.id, bot)
     else:
         # Если прислали что-то левое — возвращаем в меню
         hello(message.chat.id, bot)
@@ -86,51 +114,133 @@ def admin_menu(message, bot):
     bot.register_next_step_handler(msg, admin_func_handler, bot)
 
 def help(bot, message):
-    bot.send_message(message.chat.id,
-                     'Ну, так уж и быть, помогу! Смотри, какие у меня есть команды!\n\n*/start* - Начать работу со мной (только в ЛС!)\n*/weather* - Показать погоду\n*/today* - Показать расписание на сегодня\n*/repair* - Показать список проблем\n*/roll* - Разрешу любой спор', parse_mode="Markdown")
-    
-    bot.send_message(message.chat.id,
-                     'Хочешь отличиться? Пиши KPI-хештеги!\n\n*#продление*\n*#инициатива*\n\nДобавь чёткое описание. Клуб указывать не нужно - я определю его автоматически по твоей смене на сегодня. Сейчас покажу...', parse_mode="Markdown")
-    bot.send_message(message.chat.id,
-                     "```Правильно!\n#продление Татьяна 15:00-16:00```", parse_mode='MarkdownV2')
-    
-    bot.send_message(message.chat.id,
-                     'Продал сертификат или абонемент? Запиши, чтобы не забыть!\n\n*#серт* — номер от 3000\n*#абик* — номер меньше 1000\n\nНомер и сумма должны состоять только из цифр. Вот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#серт *номер* *сумма*\n#абик *номер* *сумма*```", parse_mode='MarkdownV2')
-    
-    bot.send_message(message.chat.id,
-                     'О тебе много пишут в интернете?\n\n*#отзывы* - команда для тебя!\n\nВот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#отзывы *количество* *описание* (2гис, яндекс)*```", parse_mode='MarkdownV2')
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(*HELP_MENU_BUTTONS)
+    sent = bot.send_message(
+        message.chat.id,
+        '<b>🆘 Помощь</b>\n\nВыбери нужный раздел — всё важное собрано здесь.',
+        parse_mode='HTML',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(sent, help_handler, bot)
 
+
+def kpi_help_text():
     try:
         from kpi import get_remote_hashtag_rules
         rules = get_remote_hashtag_rules()
     except Exception:
         rules = []
+
+    lines = [
+        '<b>🏷 KPI и хештеги</b>',
+        '',
+        '<b>#продление</b> — продление времени гостя',
+        '<code>#продление Татьяна 15:00-16:00</code>',
+        '',
+        '<b>#инициатива</b> — полезная инициатива с описанием',
+        '<code>#инициатива Помог настроить игру</code>',
+        '',
+        '<b>#серт</b> — номер от 3000 и сумма',
+        '<b>#абик</b> — номер меньше 1000 и сумма',
+        '<code>#серт 3123 5000</code>',
+        '<code>#абик 512 3000</code>',
+        '',
+        '<b>#отзывы</b> — количество и источник',
+        '<code>#отзывы 2 2ГИС</code>',
+    ]
+
     if rules:
-        lines = []
+        lines.extend(['', '<b>Начисления OMG Shift</b>'])
         for rule in rules:
-            hashtag = rule.get('hashtag', '')
+            hashtag = escape(str(rule.get('hashtag', '')))
             if rule.get('type') == 'double_hours':
                 hint = 'количество часов и описание'
             elif rule.get('type') == 'message_bonus':
                 hint = 'сумма и комментарий'
             else:
                 hint = 'комментарий'
-            lines.append(f"*{hashtag}* - {hint}")
-        bot.send_message(
-            message.chat.id,
-            'Начисления OMG Shift:\n\n' + '\n'.join(lines),
-            parse_mode="Markdown",
-        )
+            lines.append(f'<b>{hashtag}</b> — {hint}')
     else:
-        bot.send_message(
-            message.chat.id,
-            'Список начислений OMG Shift сейчас недоступен. Попробуй открыть /help позже.',
+        lines.extend([
+            '',
+            '<i>Список начислений OMG Shift сейчас недоступен.</i>',
+        ])
+
+    lines.extend([
+        '',
+        '<b>#штраф</b> доступен только руководству:',
+        '<code>#штраф @логин причина</code>',
+        '',
+        'Клуб указывать не нужно — бот определит его по смене.',
+    ])
+    return '\n'.join(lines)
+
+
+def resource_links_markup():
+    markup = telebot.types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        telebot.types.InlineKeyboardButton('🌐 Открыть OMG Shift', url=OMG_SHIFT_URL)
+    )
+    links = [
+        *GOOGLE_SHEET_LINKS,
+        ('🎮 Steam Tracker', steamtracker_url()),
+    ]
+    for index in range(0, len(links), 2):
+        markup.row(*[
+            telebot.types.InlineKeyboardButton(title, url=url)
+            for title, url in links[index:index + 2]
+        ])
+    return markup
+
+
+def help_handler(message, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+
+    if message.text == '⬅️ Вернуться':
+        hello(message.chat.id, bot)
+        return
+
+    if message.text == '🚀 Быстрый старт':
+        text = (
+            '<b>🚀 Быстрый старт</b>\n\n'
+            '👨🏻‍💻 <b>Смена</b> — открыть или закрыть смену, отправить репорт.\n'
+            '🗓 <b>Расписание</b> — посмотреть смены из OMG Shift.\n'
+            '🚩 <b>Доска проблем</b> — сообщить о проблеме или проверить задачи.\n'
+            '👤 <b>Аккаунт</b> — профиль, синхронизация и статистика.\n'
+            '📦 <b>Расходники</b> — проверить или изменить остатки.\n\n'
+            'Команды: /start, /weather, /today, /repair и /roll.'
         )
+        reply_markup = None
+    elif message.text == '🏷 KPI и хештеги':
+        text = kpi_help_text()
+        reply_markup = None
+    elif message.text == '🔗 Сервисы и таблицы':
+        text = (
+            '<b>🔗 Сервисы и таблицы</b>\n\n'
+            'OMG Shift и рабочие Google-таблицы открываются кнопками ниже. '
+            'Доступ к таблицам определяется правами Google-аккаунта.'
+        )
+        reply_markup = resource_links_markup()
+    elif message.text == '🛟 Если что-то не работает':
+        text = (
+            '<b>🛟 Если что-то не работает</b>\n\n'
+            '• Перезапусти нужный раздел через главное меню.\n'
+            '• Проверь Telegram username и синхронизацию в разделе «Аккаунт».\n'
+            '• Для Google-таблиц проверь, что открыт нужный Google-аккаунт.\n'
+            '• Ошибку расписания или профиля передай руководителю вместе со скриншотом.\n'
+            '• Проблему клуба добавь через «Доска проблем».'
+        )
+        reply_markup = None
+    else:
+        help(bot, message)
+        return
 
-    bot.send_message(message.chat.id,
-                     '*#штраф* доступен только руководству. Укажи Telegram-логин сотрудника из базы и причину.', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#штраф *@логин* *причина*```", parse_mode='MarkdownV2')
-
-    bot.send_message(message.chat.id, "Надеюсь помог тебе! До встречи 🌍")
+    sent = bot.send_message(
+        message.chat.id,
+        text,
+        parse_mode='HTML',
+        reply_markup=reply_markup,
+    )
+    bot.register_next_step_handler(sent, help_handler, bot)
