@@ -186,6 +186,11 @@ class AdminHealthTest(unittest.TestCase):
                     {'login': '@first', 'field': 'forms'},
                     {'login': '@second', 'field': 'rank'},
                 ],
+                'sheet_health': {
+                    'data_rows': 548,
+                    'data_unique_rows': 300,
+                    'data_duplicate_rows': 248,
+                },
             },
             {
                 'penalty_sources': {
@@ -201,6 +206,11 @@ class AdminHealthTest(unittest.TestCase):
         self.assertIn('Затронуто сотрудников: <b>2</b>', report)
         self.assertIn('Анкеты: <b>2</b>', report)
         self.assertIn('Рейтинг: <b>1</b>', report)
+        self.assertIn('лишних дублей: <b>248</b>', report)
+        self.assertIn('548', report)
+        self.assertIn('300', report)
+        self.assertIn('@first', report)
+        self.assertIn('сервер → Google', report)
         self.assertIn('Google Sheets: <b>14</b>', report)
         self.assertIn('старой БД: <b>10</b>', report)
         self.assertIn('Трансляции месяца: <b>7</b>', report)

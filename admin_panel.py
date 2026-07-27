@@ -233,6 +233,7 @@ KPI_SHADOW_FIELD_LABELS = {
 
 def build_kpi_shadow_report(comparison, controls):
     differences = comparison.get('differences', [])
+    sheet_health = comparison.get('sheet_health', {})
     field_counts = {}
     affected_employees = set()
     for difference in differences:
@@ -251,15 +252,71 @@ def build_kpi_shadow_report(comparison, controls):
         lines.extend([
             f'⚠️ Расхождений: <b>{len(differences)}</b>',
             f'👤 Затронуто сотрудников: <b>{len(affected_employees)}</b>',
-            '',
-            '<b>По показателям:</b>',
         ])
+        duplicate_rows = sheet_health.get('data_duplicate_rows', 0)
+        if duplicate_rows:
+            lines.extend([
+                '',
+                '<b>Обнаруженная причина:</b>',
+                f'❌ В листе data найдено лишних дублей: <b>{duplicate_rows}</b>',
+                (
+                    f"Строк месяца: {sheet_health.get('data_rows', 0)}, "
+                    f"уникальных: {sheet_health.get('data_unique_rows', 0)}."
+                ),
+            ])
+        if field_counts.get('shifts') or field_counts.get('weighted_shifts'):
+            lines.append(
+                '⚠️ Срез смен в Google отличается от текущего состояния SQLite.'
+            )
+        derived_fields = {
+            'reviews_pct', 'forms_pct', 'extensions_pct',
+            'certificates_pct', 'subscriptions_pct', 'bs_pct',
+            'initiatives_pct', 'total_pct', 'weighted_pct', 'amount', 'rank',
+        }
+        if any(field in field_counts for field in derived_fields):
+            lines.append(
+                'ℹ️ Проценты, сумма, итоговый KPI и рейтинг расходятся '
+                'как следствие исходных фактов и смен.'
+            )
+
+        lines.extend(['', '<b>По показателям:</b>'])
         for field, count in sorted(
             field_counts.items(),
             key=lambda item: (-item[1], item[0]),
         ):
             label = KPI_SHADOW_FIELD_LABELS.get(field, field)
             lines.append(f'• {html.escape(label)}: <b>{count}</b>')
+
+        source_fields = {
+            'shifts', 'weighted_shifts', 'reviews', 'forms', 'extensions',
+            'certificates', 'subscriptions', 'bs', 'initiatives', 'penalties',
+        }
+        examples = [
+            difference
+            for difference in differences
+            if difference.get('field') in source_fields
+        ][:6]
+        if examples:
+            lines.extend(['', '<b>Примеры: сервер → Google</b>'])
+
+            def format_example_value(value):
+                try:
+                    return f'{float(value):.4g}'
+                except (TypeError, ValueError):
+                    return str(value if value is not None else '—')
+
+            for difference in examples:
+                label = KPI_SHADOW_FIELD_LABELS.get(
+                    difference['field'],
+                    difference['field'],
+                )
+                server_value = format_example_value(difference.get('server'))
+                sheet_value = format_example_value(difference.get('sheet'))
+                lines.append(
+                    f"• {html.escape(str(difference.get('login', '—')))}, "
+                    f"{html.escape(label)}: "
+                    f"<b>{server_value} → {sheet_value}</b>"
+                )
     else:
         lines.append('✅ Серверный расчёт совпадает с Google Sheets.')
 

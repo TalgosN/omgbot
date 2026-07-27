@@ -14,6 +14,7 @@ import random
 import os
 import re
 import time
+from collections import Counter
 from kpi_calculator import (
     calculate_monthly_kpi,
     compare_with_sheet,
@@ -669,13 +670,13 @@ def hash_handle(message):
 
 
 def _sheet_number(value, percent=False):
-    raw = str(value or '').replace(' ', '').replace(',', '.').strip()
+    raw = re.sub(r'\s+', '', str(value or '')).replace(',', '.').strip()
     is_percent = raw.endswith('%')
     raw = raw.rstrip('%')
-    try:
-        number = float(raw)
-    except ValueError:
+    match = re.search(r'-?[0-9]+(?:\.[0-9]+)?', raw)
+    if not match:
         return 0.0
+    number = float(match.group(0))
     if percent or is_percent:
         return number / 100.0 if is_percent else number
     return number
@@ -683,6 +684,21 @@ def _sheet_number(value, percent=False):
 
 def _sheet_truthy(value):
     return str(value or '').strip().lower() in ('true', 'истина', '1', 'да')
+
+
+def _sheet_month(value):
+    raw = str(value or '').strip()
+    for date_format in ('%d.%m.%Y', '%Y-%m-%d', '%d.%m.%Y %H:%M:%S'):
+        try:
+            parsed = datetime.strptime(raw, date_format)
+            return parsed.year, parsed.month
+        except ValueError:
+            continue
+    try:
+        parsed = datetime(1899, 12, 30) + timedelta(days=float(raw))
+        return parsed.year, parsed.month
+    except (TypeError, ValueError):
+        return None
 
 
 def _kpi_sheet_context(spreadsheet):
@@ -874,10 +890,32 @@ def compare_server_kpi_with_sheet(spreadsheet=None):
         ensure_schema=False,
     )
     sheet_rows = _sheet_shadow_rows(main_values, nickname_to_login)
+    selected_date = _sheet_month(selected_month)
+    data_worksheet = spreadsheet.worksheet_by_title('data')
+    data_values = data_worksheet.get_values(
+        start='A2',
+        end=f'D{data_worksheet.rows}',
+        returnas='matrix',
+    )
+    selected_data_rows = [
+        tuple(str(value).strip() for value in row[:4])
+        for row in data_values
+        if len(row) >= 4 and _sheet_month(row[0]) == selected_date
+    ]
+    data_counts = Counter(selected_data_rows)
     return {
         'period_month': str(selected_month),
         'employees': len(sheet_rows),
         'differences': compare_with_sheet(server_rows, sheet_rows),
+        'sheet_health': {
+            'data_rows': len(selected_data_rows),
+            'data_unique_rows': len(data_counts),
+            'data_duplicate_rows': sum(
+                count - 1
+                for count in data_counts.values()
+                if count > 1
+            ),
+        },
     }
 
 

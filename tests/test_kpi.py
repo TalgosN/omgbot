@@ -92,6 +92,10 @@ class KpiTest(unittest.TestCase):
 
         authorize.assert_not_called()
 
+    def test_sheet_number_parses_currency_nonbreaking_space_and_percent(self):
+        self.assertEqual(self.kpi._sheet_number("1\u00a0403,3 ₽"), 1403.3)
+        self.assertEqual(self.kpi._sheet_number("47,8%", percent=True), 0.478)
+
     def test_router_is_case_insensitive_and_preserves_arguments(self):
         received = []
 
