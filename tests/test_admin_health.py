@@ -65,6 +65,11 @@ class AdminHealthTest(unittest.TestCase):
         with patch.object(self.admin.sqlite3, "connect", return_value=connection), \
                 patch.object(self.admin.requests, "get", return_value=response) as request, \
                 patch.object(self.admin.threading, "enumerate", return_value=[scheduler]), \
+                patch.object(
+                    self.admin,
+                    "collect_steamtracker_health",
+                    return_value=["", "🎮 Steam Tracker", "✅ База: тест"],
+                ), \
                 patch.dict(sys.modules, {"rasp": rasp}):
             report = self.admin.collect_system_health(bot)
 
@@ -74,6 +79,7 @@ class AdminHealthTest(unittest.TestCase):
         self.assertIn("✅ OMG Shift API", report)
         self.assertIn("✅ Google Sheets", report)
         self.assertIn("✅ Планировщик", report)
+        self.assertIn("🎮 Steam Tracker", report)
         self.assertIn("последняя проверка 2026-07-21 12:00:00", report)
         self.assertEqual(request.call_args.kwargs["timeout"], 5)
         google.open.assert_called_once_with("KPI OMG VR")

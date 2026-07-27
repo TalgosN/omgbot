@@ -296,6 +296,21 @@ class GoogleDataSyncTests(unittest.TestCase):
         promo_sheet = self.spreadsheet.worksheets["Промо-план"]
         self.assertTrue(result.applied)
         self.assertEqual(promo_sheet.records[0]["Тестовый"], "Да")
+        self.storage.claim_promotion(
+            promotion_id,
+            claimed_by="manager-1",
+            claimed_name="Менеджер",
+        )
+        self.manager.sync_promotion(
+            self.storage,
+            promotion_id,
+            apply=True,
+        )
+        self.assertEqual(
+            promo_sheet.records[0]["Ответственный"],
+            "Менеджер",
+        )
+        self.assertTrue(promo_sheet.records[0]["Взято_в_работу"])
 
         removed = self.manager.remove_promotion(promotion_id)
         self.assertTrue(removed)

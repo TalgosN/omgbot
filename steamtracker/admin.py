@@ -1,5 +1,6 @@
 """Административное управление промо внутри Виарыча."""
 
+import threading
 from datetime import datetime
 from html import escape, unescape
 
@@ -17,6 +18,10 @@ from .weekly import MOSCOW, WeeklyPromotionService, week_period
 
 CALLBACK_PREFIX = "stpa"
 PAGE_SIZE = 8
+_context_messages: dict[int, set[int]] = {}
+_context_lock = threading.Lock()
+_promotion_action_locks: dict[int, threading.Lock] = {}
+_promotion_action_registry_lock = threading.Lock()
 
 STATUS_LABELS = {
     "draft": "⚪ Черновик",
@@ -93,106 +98,371 @@ def _sync_promotion_best_effort(
     return None
 
 
-def _admin_reply_keyboard():
-    types = _telegram_types()
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(
-        "⭐ Текущее промо",
-        "➕ Создать промо",
-        "📋 Все промо",
-        "🧪 Тестовые варианты",
-        "📦 Очередь отправки",
-        "🎮 Каталог игр",
-        "⚙️ Настройки промо",
-        "⬅️ Назад в админку",
-    )
-    return markup
+def _message_id(message) -> int | None:
+    value = getattr(message, "message_id", None)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _remove_reply_keyboard(chat_id: int, bot, text: str) -> None:
-    types = _telegram_types()
-    bot.send_message(
+def _remember_context_message(chat_id: int, message) -> None:
+    message_id = _message_id(message)
+    if message_id is None:
+        return
+    with _context_lock:
+        _context_messages.setdefault(int(chat_id), set()).add(message_id)
+
+
+def _delete_message(chat_id: int, message_id: int, bot) -> None:
+    try:
+        bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
+def _promotion_action_lock(promotion_id: int) -> threading.Lock:
+    with _promotion_action_registry_lock:
+        return _promotion_action_locks.setdefault(
+            promotion_id,
+            threading.Lock(),
+        )
+
+
+def _clear_context(
+    chat_id: int,
+    bot,
+    *,
+    source_message=None,
+) -> None:
+    with _context_lock:
+        message_ids = _context_messages.pop(int(chat_id), set())
+    source_id = _message_id(source_message)
+    if source_id is not None:
+        message_ids.add(source_id)
+    for message_id in message_ids:
+        _delete_message(chat_id, message_id, bot)
+
+
+def _send_context_message(
+    chat_id: int,
+    bot,
+    text: str,
+    *,
+    reply_markup=None,
+    parse_mode: str | None = None,
+    source_message=None,
+):
+    _clear_context(chat_id, bot, source_message=source_message)
+    message = bot.send_message(
         chat_id,
         text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+    )
+    _remember_context_message(chat_id, message)
+    return message
+
+
+def _send_context_photo(
+    chat_id: int,
+    bot,
+    photo: str,
+    *,
+    caption: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+    source_message=None,
+):
+    _clear_context(chat_id, bot, source_message=source_message)
+    message = bot.send_photo(
+        chat_id,
+        photo=photo,
+        caption=caption,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+    )
+    _remember_context_message(chat_id, message)
+    return message
+
+
+def _hide_reply_keyboard(chat_id: int, bot) -> None:
+    types = _telegram_types()
+    message = bot.send_message(
+        chat_id,
+        "Открываю раздел промо…",
         reply_markup=types.ReplyKeyboardRemove(),
     )
+    message_id = _message_id(message)
+    if message_id is not None:
+        _delete_message(chat_id, message_id, bot)
 
 
 def promotion_admin_menu(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    msg = bot.send_message(
-        message.chat.id,
-        "📣 <b>Управление промо</b>\n\nВыберите раздел.",
-        parse_mode="HTML",
-        reply_markup=_admin_reply_keyboard(),
-    )
-    bot.register_next_step_handler(msg, promotion_admin_handler, bot)
+    _hide_reply_keyboard(message.chat.id, bot)
+    show_promo_plane_selector(message, bot)
 
 
-def promotion_admin_handler(message, bot):
+def show_promo_plane_selector(message, bot, *, source_message=None):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    action = message.text
-    if action == "⭐ Текущее промо":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Управление — кнопками под карточкой 👇",
-        )
-        show_current_promotion(message, bot)
-    elif action == "➕ Создать промо":
-        show_create_menu(message, bot)
-    elif action == "📋 Все промо":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Выберите промо в списке 👇",
-        )
-        show_promotion_list(message, bot, scope="all", page=0)
-    elif action == "🧪 Тестовые варианты":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Выберите тестовый вариант 👇",
-        )
-        show_promotion_list(message, bot, scope="test", page=0)
-    elif action == "📦 Очередь отправки":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Открываю состояние очереди.",
-        )
-        show_outbox(message, bot)
-    elif action == "🎮 Каталог игр":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Открываю управление каталогом.",
-        )
-        show_catalog(message, bot)
-    elif action == "⚙️ Настройки промо":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Открываю настройки промо.",
-        )
-        show_promo_settings(message, bot)
-    elif action == "⬅️ Назад в админку":
-        from menu import admin_menu
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🟢 Рабочие промо",
+            callback_data=f"{CALLBACK_PREFIX}:plane:real",
+        ),
+        types.InlineKeyboardButton(
+            "🧪 Тестовая зона",
+            callback_data=f"{CALLBACK_PREFIX}:plane:test",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Админ-панель",
+            callback_data=f"{CALLBACK_PREFIX}:admin:0",
+        ),
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        (
+            "📣 <b>Управление промо</b>\n\n"
+            "Выберите пространство работы. Рабочие и тестовые "
+            "промо полностью разделены."
+        ),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
-        admin_menu(message, bot)
+
+def _actor_id(update) -> str:
+    if isinstance(update, (int, str)) and str(update).lstrip("-").isdigit():
+        return str(update)
+    user = getattr(update, "from_user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is None or getattr(user, "is_bot", False):
+        message = getattr(update, "message", update)
+        chat = getattr(message, "chat", None)
+        user_id = getattr(chat, "id", None)
+    return str(user_id or "")
+
+
+def _actor_name(update, user) -> str:
+    keys = set(user.keys()) if hasattr(user, "keys") else set()
+    for field in ("login", "nick_name", "first_name"):
+        if field in keys and user[field]:
+            return str(user[field])
+    telegram_user = getattr(update, "from_user", None)
+    username = getattr(telegram_user, "username", None)
+    if username:
+        return f"@{username}"
+    return _actor_id(update)
+
+
+def _is_owner(user) -> bool:
+    return int(user["status"]) >= ROLE_OWNER
+
+
+def _claim_required(storage, promotion_id: int, update, user) -> dict:
+    row = dict(storage.promotion_admin_row(promotion_id))
+    current_actor = _actor_id(update)
+    if not row.get("claimed_by"):
+        raise ValueError("Сначала нажмите «Взять в работу»")
+    if str(row["claimed_by"]) != current_actor:
+        if _is_owner(user):
+            raise ValueError(
+                "Промо занято другим сотрудником. "
+                "Сначала нажмите «Перехватить»."
+            )
+        raise ValueError(
+            f"Промо уже в работе у "
+            f"{row.get('claimed_name') or row['claimed_by']}"
+        )
+    return row
+
+
+def show_real_dashboard(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    today = datetime.now(MOSCOW).date().isoformat()
+    current = storage.current_promotion(today)
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    lines = ["🟢 <b>Рабочие промо</b>", ""]
+    if current is None:
+        lines.append("Игра недели ещё не создана.")
     else:
-        promotion_admin_menu(message, bot)
+        lines.extend(
+            [
+                f"Текущее промо: <b>#{current['id']}</b>",
+                f"Игра: <b>{escape(str(current['steam_name']))}</b>",
+                (
+                    "Статус: "
+                    f"{STATUS_LABELS.get(current['status'], current['status'])}"
+                ),
+            ]
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                "⭐ Открыть игру недели",
+                callback_data=f"{CALLBACK_PREFIX}:open:{current['id']}",
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "➕ Создать рабочее промо",
+            callback_data=f"{CALLBACK_PREFIX}:create:real",
+        )
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            "📚 История",
+            callback_data=f"{CALLBACK_PREFIX}:history:real",
+        ),
+        types.InlineKeyboardButton(
+            "⚙️ Настройки",
+            callback_data=f"{CALLBACK_PREFIX}:settings:0",
+        ),
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Выбор пространства",
+            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
 
-def _card_markup(row: dict):
+def show_test_dashboard(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    tests = storage.list_promotions(is_test=True, limit=1)
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🧪 Создать тестовый вариант",
+            callback_data=f"{CALLBACK_PREFIX}:createtest:0",
+        ),
+        types.InlineKeyboardButton(
+            "📚 Тестовые варианты",
+            callback_data=f"{CALLBACK_PREFIX}:list:test:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Выбор пространства",
+            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+        ),
+    )
+    text = (
+        "🧪 <b>Тестовая зона</b>\n\n"
+        "Тестовые промо не участвуют в рабочей ротации и их нельзя "
+        "согласовать.\n"
+        f"Записи: {'есть' if tests else 'пока нет'}."
+    )
+    if notice:
+        text = f"{escape(notice)}\n\n{text}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        text,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_history_menu(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton(
+            "🟡 В работе",
+            callback_data=f"{CALLBACK_PREFIX}:list:review:0",
+        ),
+        types.InlineKeyboardButton(
+            "🟢 Согласованные",
+            callback_data=f"{CALLBACK_PREFIX}:list:approved:0",
+        ),
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "🗄 Архив",
+            callback_data=f"{CALLBACK_PREFIX}:list:archive:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Рабочие промо",
+            callback_data=f"{CALLBACK_PREFIX}:plane:real",
+        ),
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "📚 <b>История рабочих промо</b>\n\nВыберите состояние.",
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_create_real_menu(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🎲 Случайная игра недели",
+            callback_data=f"{CALLBACK_PREFIX}:createweekly:0",
+        ),
+        types.InlineKeyboardButton(
+            "🎮 Выбрать игру по AppID",
+            callback_data=f"{CALLBACK_PREFIX}:requestappid:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Рабочие промо",
+            callback_data=f"{CALLBACK_PREFIX}:plane:real",
+        ),
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "➕ <b>Создание рабочего промо</b>\n\nВыберите способ.",
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def _card_markup(row: dict, *, actor_id: str, is_owner: bool):
     types = _telegram_types()
     promotion_id = int(row["id"])
     status = row["status"]
     is_test = bool(row["is_test"])
     prefix = CALLBACK_PREFIX
     markup = types.InlineKeyboardMarkup(row_width=2)
+    claimed_by = str(row.get("claimed_by") or "")
+    is_claimant = claimed_by == actor_id
+    mutable = status in {"draft", "review"}
 
     if any(
         row.get(field)
@@ -205,15 +475,38 @@ def _card_markup(row: dict):
             )
         )
 
-    if status == "draft":
+    if mutable and not claimed_by:
         markup.add(
             types.InlineKeyboardButton(
-                "✨ Сгенерировать",
-                callback_data=f"{prefix}:generate:{promotion_id}",
+                "🙋 Взять в работу",
+                callback_data=f"{prefix}:claim:{promotion_id}",
             )
         )
-    elif status == "review":
-        if not is_test:
+    elif mutable and not is_claimant:
+        if is_owner:
+            markup.add(
+                types.InlineKeyboardButton(
+                    "🛡 Перехватить",
+                    callback_data=f"{prefix}:takeover:{promotion_id}",
+                )
+            )
+        else:
+            markup.add(
+                types.InlineKeyboardButton(
+                    "👤 Уже в работе",
+                    callback_data=f"{prefix}:noop:{promotion_id}",
+                )
+            )
+
+    if mutable and is_claimant:
+        if status == "draft":
+            markup.add(
+                types.InlineKeyboardButton(
+                    "✨ Сгенерировать",
+                    callback_data=f"{prefix}:generate:{promotion_id}",
+                )
+            )
+        elif not is_test:
             markup.add(
                 types.InlineKeyboardButton(
                     "✅ Согласовать",
@@ -222,77 +515,30 @@ def _card_markup(row: dict):
             )
         markup.add(
             types.InlineKeyboardButton(
-                "✏️ Редактировать",
+                "✏️ Изменить",
                 callback_data=f"{prefix}:edit:{promotion_id}",
             ),
             types.InlineKeyboardButton(
-                "🔄 Переделать всё",
-                callback_data=f"{prefix}:regenall:{promotion_id}",
+                "⋯ Ещё",
+                callback_data=f"{prefix}:more:{promotion_id}",
             ),
         )
+    elif row.get("outbox_total"):
         markup.add(
             types.InlineKeyboardButton(
-                "👥 Переделать сотрудникам",
-                callback_data=f"{prefix}:regenemployee:{promotion_id}",
-            ),
-            types.InlineKeyboardButton(
-                "📣 Переделать анонсы",
-                callback_data=f"{prefix}:regensocial:{promotion_id}",
-            ),
-        )
-        if not is_test and row.get("cycle_number"):
-            markup.add(
-                types.InlineKeyboardButton(
-                    "🎲 Другая игра",
-                    callback_data=f"{prefix}:replace:{promotion_id}",
-                )
-            )
-
-    if status in {"draft", "review"} and not is_test:
-        markup.add(
-            types.InlineKeyboardButton(
-                "⏸ Отложить",
-                callback_data=f"{prefix}:confirmpostpone:{promotion_id}",
-            ),
-            types.InlineKeyboardButton(
-                "🗑 Отменить",
-                callback_data=f"{prefix}:confirmcancel:{promotion_id}",
-            ),
-        )
-    if (
-        not is_test
-        and status in {"draft", "review", "postponed", "cancelled"}
-        and not row.get("outbox_total")
-    ):
-        markup.add(
-            types.InlineKeyboardButton(
-                "🧪 Пометить тестовым",
-                callback_data=f"{prefix}:confirmmarktest:{promotion_id}",
-            )
-        )
-    if is_test:
-        markup.add(
-            types.InlineKeyboardButton(
-                "🗑 Удалить тест",
-                callback_data=f"{prefix}:confirmdelete:{promotion_id}",
+                "⋯ Подробнее",
+                callback_data=f"{prefix}:more:{promotion_id}",
             )
         )
 
-    if row.get("outbox_total"):
-        markup.add(
-            types.InlineKeyboardButton(
-                "📦 Очередь отправки",
-                callback_data=f"{prefix}:outbox:{promotion_id}",
-            )
-        )
     markup.add(
         types.InlineKeyboardButton(
-            "⬅️ К списку",
-            callback_data=f"{prefix}:list:all:0",
-        ),
-        types.InlineKeyboardButton(
-            "🏠 Меню промо",
-            callback_data=f"{prefix}:menu:0",
+            "⬅️ Тестовая зона" if is_test else "⬅️ Рабочие промо",
+            callback_data=(
+                f"{prefix}:plane:test"
+                if is_test
+                else f"{prefix}:plane:real"
+            ),
         ),
     )
     return markup
@@ -319,6 +565,11 @@ def _promotion_caption(row: dict) -> str:
     period = (
         f"{row['valid_from'] or '—'} — {row['valid_to'] or '—'}"
     )
+    claimant = (
+        escape(str(row.get("claimed_name") or row.get("claimed_by")))
+        if row.get("claimed_by")
+        else "не назначен"
+    )
     return (
         f"📣 <b>Промо #{row['id']}</b>{test_label}\n\n"
         f"🎮 <b>{escape(str(row['steam_name']))}</b>\n"
@@ -326,59 +577,81 @@ def _promotion_caption(row: dict) -> str:
         f"Статус: {STATUS_LABELS.get(row['status'], row['status'])}\n"
         f"Период: {escape(period)}\n"
         f"Акция: {escape(str(row['discount_text']))}\n"
+        f"Ответственный: {claimant}\n"
         f"Изображение: {image_source}\n"
         f"Отправка: {delivery}"
     )
 
 
-def send_promotion_card(chat_id, promotion_id: int, bot):
+def send_promotion_card(
+    chat_id,
+    promotion_id: int,
+    bot,
+    *,
+    update=None,
+    user=None,
+    notice: str | None = None,
+    source_message=None,
+):
     _, storage = _runtime()
     row = dict(storage.promotion_admin_row(promotion_id))
     caption = _promotion_caption(row)
-    markup = _card_markup(row)
+    if notice:
+        caption = f"{escape(notice)}\n\n{caption}"
+    actor = update if update is not None else chat_id
+    user = user or require_role(actor, bot, ROLE_MANAGER)
+    if not user:
+        return
+    markup = _card_markup(
+        row,
+        actor_id=_actor_id(actor),
+        is_owner=_is_owner(user),
+    )
     image_url = row.get("publish_image_url")
     if image_url:
         try:
-            bot.send_photo(
+            _send_context_photo(
                 chat_id,
+                bot,
                 photo=image_url,
                 caption=caption,
                 parse_mode="HTML",
                 reply_markup=markup,
+                source_message=source_message,
             )
             return
         except Exception:
             pass
-    bot.send_message(
+    _send_context_message(
         chat_id,
+        bot,
         caption,
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=source_message,
     )
 
 
-def show_current_promotion(message, bot):
+def show_current_promotion(message, bot, *, source_message=None):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     _, storage = _runtime()
     today = datetime.now(MOSCOW).date().isoformat()
     row = storage.current_promotion(today)
     if row is None:
-        types = _telegram_types()
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton(
-                "🎲 Сформировать игру недели",
-                callback_data=f"{CALLBACK_PREFIX}:createweekly:0",
-            )
-        )
-        bot.send_message(
-            message.chat.id,
-            "На текущую неделю активного промо нет.",
-            reply_markup=markup,
+        show_real_dashboard(
+            message,
+            bot,
+            source_message=source_message,
         )
         return
-    send_promotion_card(message.chat.id, int(row["id"]), bot)
+    send_promotion_card(
+        message.chat.id,
+        int(row["id"]),
+        bot,
+        update=message,
+        source_message=source_message,
+    )
 
 
 def _list_scope(scope: str):
@@ -393,7 +666,14 @@ def _list_scope(scope: str):
     return False, None, "Все промо"
 
 
-def show_promotion_list(message, bot, *, scope: str, page: int):
+def show_promotion_list(
+    message,
+    bot,
+    *,
+    scope: str,
+    page: int,
+    source_message=None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     _, storage = _runtime()
@@ -422,17 +702,6 @@ def show_promotion_list(message, bot, *, scope: str, page: int):
             )
         )
     filters = types.InlineKeyboardButton
-    markup.row(
-        filters("🟡 В работе", callback_data=f"{CALLBACK_PREFIX}:list:review:0"),
-        filters(
-            "🟢 Согласованные",
-            callback_data=f"{CALLBACK_PREFIX}:list:approved:0",
-        ),
-    )
-    markup.row(
-        filters("🗄 Архив", callback_data=f"{CALLBACK_PREFIX}:list:archive:0"),
-        filters("🧪 Тесты", callback_data=f"{CALLBACK_PREFIX}:list:test:0"),
-    )
     navigation = []
     if page > 0:
         navigation.append(
@@ -450,93 +719,98 @@ def show_promotion_list(message, bot, *, scope: str, page: int):
         )
     if navigation:
         markup.row(*navigation)
-    markup.add(
-        filters(
-            "🏠 Меню промо",
-            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+    if is_test:
+        markup.add(
+            filters(
+                "🧪 Создать тестовый вариант",
+                callback_data=f"{CALLBACK_PREFIX}:createtest:0",
+            ),
+            filters(
+                "⬅️ Тестовая зона",
+                callback_data=f"{CALLBACK_PREFIX}:plane:test",
+            ),
         )
-    )
+    else:
+        markup.row(
+            filters(
+                "🟡 В работе",
+                callback_data=f"{CALLBACK_PREFIX}:list:review:0",
+            ),
+            filters(
+                "🟢 Согласованные",
+                callback_data=f"{CALLBACK_PREFIX}:list:approved:0",
+            ),
+        )
+        markup.add(
+            filters(
+                "🗄 Архив",
+                callback_data=f"{CALLBACK_PREFIX}:list:archive:0",
+            ),
+            filters(
+                "⬅️ История",
+                callback_data=f"{CALLBACK_PREFIX}:history:real",
+            ),
+        )
     text = (
         f"📋 <b>{escape(title)}</b>\n"
         f"Страница {page + 1}."
     )
     if not rows:
         text += "\n\nЗаписей нет."
-    bot.send_message(
+    _send_context_message(
         message.chat.id,
+        bot,
         text,
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=source_message,
     )
 
 
-def show_create_menu(message, bot):
+def create_weekly_promotion(
+    message,
+    bot,
+    *,
+    update=None,
+    user=None,
+    source_message=None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    types = _telegram_types()
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(
-        "🎲 Случайная игра недели",
-        "🎮 Выбрать по AppID",
-        "🧪 Тестовый вариант",
-        "⬅️ Назад в промо",
-    )
-    msg = bot.send_message(
+    wait = _send_context_message(
         message.chat.id,
-        "Какое промо создать?",
-        reply_markup=markup,
-    )
-    bot.register_next_step_handler(msg, create_menu_handler, bot)
-
-
-def create_menu_handler(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
-        return
-    if message.text == "🎲 Случайная игра недели":
-        create_weekly_promotion(message, bot)
-    elif message.text == "🎮 Выбрать по AppID":
-        types = _telegram_types()
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("Отмена")
-        msg = bot.send_message(
-            message.chat.id,
-            "Введите Steam AppID игры:",
-            reply_markup=markup,
-        )
-        bot.register_next_step_handler(msg, create_manual_promotion, bot)
-    elif message.text == "🧪 Тестовый вариант":
-        create_test_promotion(message, bot)
-    elif message.text == "⬅️ Назад в промо":
-        promotion_admin_menu(message, bot)
-    else:
-        show_create_menu(message, bot)
-
-
-def create_weekly_promotion(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
-        return
-    types = _telegram_types()
-    wait = bot.send_message(
-        message.chat.id,
+        bot,
         "⏳ Формирую игру недели...",
-        reply_markup=types.ReplyKeyboardRemove(),
+        source_message=source_message,
     )
     try:
         settings, storage = _runtime()
         result = _weekly_service(settings, storage).run(force=True)
-        bot.edit_message_text(
-            f"✅ Промо #{result.promotion_id} готово.",
+        send_promotion_card(
             message.chat.id,
-            wait.message_id,
+            result.promotion_id,
+            bot,
+            update=update or message,
+            user=user,
+            notice=f"✅ Промо #{result.promotion_id} готово.",
+            source_message=wait,
         )
-        send_promotion_card(message.chat.id, result.promotion_id, bot)
     except Exception as error:
-        bot.edit_message_text(
-            f"❌ Не удалось создать промо: {error}",
-            message.chat.id,
-            wait.message_id,
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ К созданию",
+                callback_data=f"{CALLBACK_PREFIX}:create:real",
+            )
         )
-        promotion_admin_menu(message, bot)
+        _send_context_message(
+            message.chat.id,
+            bot,
+            f"❌ Не удалось создать промо: {error}",
+            reply_markup=markup,
+            source_message=wait,
+        )
 
 
 def _promotion_defaults(settings: Settings) -> tuple[str, str, str]:
@@ -548,23 +822,63 @@ def _promotion_defaults(settings: Settings) -> tuple[str, str, str]:
     return discount, start.isoformat(), end.isoformat()
 
 
+def request_manual_promotion_app_id(
+    message,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "Отмена",
+            callback_data=f"{CALLBACK_PREFIX}:create:real",
+        )
+    )
+    prompt = _send_context_message(
+        message.chat.id,
+        bot,
+        "Введите Steam AppID игры одним сообщением.",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+    bot.register_next_step_handler(prompt, create_manual_promotion, bot)
+
+
 def create_manual_promotion(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
+    message_id = _message_id(message)
+    if message_id is not None:
+        _delete_message(message.chat.id, message_id, bot)
     if message.text == "Отмена":
-        show_create_menu(message, bot)
+        show_create_real_menu(message, bot)
         return
     try:
         app_id = int(str(message.text).strip())
     except (TypeError, ValueError):
-        bot.send_message(message.chat.id, "AppID должен состоять из цифр.")
-        show_create_menu(message, bot)
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ К созданию",
+                callback_data=f"{CALLBACK_PREFIX}:create:real",
+            )
+        )
+        _send_context_message(
+            message.chat.id,
+            bot,
+            "❌ AppID должен состоять из цифр.",
+            reply_markup=markup,
+        )
         return
-    types = _telegram_types()
-    wait = bot.send_message(
+    wait = _send_context_message(
         message.chat.id,
+        bot,
         "⏳ Создаю промо...",
-        reply_markup=types.ReplyKeyboardRemove(),
     )
     try:
         settings, storage = _runtime()
@@ -586,29 +900,47 @@ def create_manual_promotion(message, bot):
         text = f"✅ Промо #{promotion_id} готово."
         if warning:
             text += f"\n⚠️ {warning}"
-        bot.edit_message_text(
-            text,
+        send_promotion_card(
             message.chat.id,
-            wait.message_id,
+            promotion_id,
+            bot,
+            update=message,
+            notice=text,
+            source_message=wait,
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
     except Exception as error:
-        bot.edit_message_text(
-            f"❌ Не удалось создать промо: {error}",
-            message.chat.id,
-            wait.message_id,
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ К созданию",
+                callback_data=f"{CALLBACK_PREFIX}:create:real",
+            )
         )
-        promotion_admin_menu(message, bot)
+        _send_context_message(
+            message.chat.id,
+            bot,
+            f"❌ Не удалось создать промо: {error}",
+            reply_markup=markup,
+            source_message=wait,
+        )
 
 
-def create_test_promotion(message, bot):
+def create_test_promotion(
+    message,
+    bot,
+    *,
+    update=None,
+    user=None,
+    source_message=None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    types = _telegram_types()
-    wait = bot.send_message(
+    wait = _send_context_message(
         message.chat.id,
+        bot,
         "⏳ Создаю тестовый вариант...",
-        reply_markup=types.ReplyKeyboardRemove(),
+        source_message=source_message,
     )
     try:
         settings, storage = _runtime()
@@ -631,37 +963,113 @@ def create_test_promotion(message, bot):
         text = f"✅ Тестовое промо #{promotion_id} готово."
         if warning:
             text += f"\n⚠️ {warning}"
-        bot.edit_message_text(
-            text,
+        send_promotion_card(
             message.chat.id,
-            wait.message_id,
+            promotion_id,
+            bot,
+            update=update or message,
+            user=user,
+            notice=text,
+            source_message=wait,
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
     except Exception as error:
-        bot.edit_message_text(
-            f"❌ Не удалось создать тест: {error}",
-            message.chat.id,
-            wait.message_id,
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ В тестовую зону",
+                callback_data=f"{CALLBACK_PREFIX}:plane:test",
+            )
         )
-        promotion_admin_menu(message, bot)
+        _send_context_message(
+            message.chat.id,
+            bot,
+            f"❌ Не удалось создать тест: {error}",
+            reply_markup=markup,
+            source_message=wait,
+        )
 
 
-def _send_promotion_texts(chat_id: int, promotion_id: int, bot) -> None:
+def show_text_menu(
+    message,
+    promotion_id: int,
+    bot,
+    *,
+    source_message=None,
+) -> None:
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "👥 Сотрудникам",
+            callback_data=f"{CALLBACK_PREFIX}:viewemployee:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "✈️ Telegram",
+            callback_data=f"{CALLBACK_PREFIX}:viewtelegram:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "🔵 VK",
+            callback_data=f"{CALLBACK_PREFIX}:viewvk:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ К карточке",
+            callback_data=f"{CALLBACK_PREFIX}:open:{promotion_id}",
+        ),
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        f"👁 <b>Тексты промо #{promotion_id}</b>\n\nВыберите текст.",
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_promotion_text(
+    message,
+    promotion_id: int,
+    channel: str,
+    bot,
+    *,
+    source_message=None,
+) -> None:
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
     _, storage = _runtime()
     row = dict(storage.promotion_admin_row(promotion_id))
-    messages = (
-        ("👥 <b>СОТРУДНИКАМ</b>", row.get("employee_text"), "HTML"),
-        ("✈️ <b>TELEGRAM</b>", row.get("telegram_text"), "HTML"),
-        ("🔵 VK", row.get("vk_text"), None),
+    config = {
+        "employee": ("👥 <b>СОТРУДНИКАМ</b>", "employee_text", "HTML"),
+        "telegram": ("✈️ <b>TELEGRAM</b>", "telegram_text", "HTML"),
+        "vk": ("🔵 VK", "vk_text", None),
+    }
+    title, field, parse_mode = config[channel]
+    body = str(row.get(field) or "Текст пока не создан.")
+    if len(body) > 3800:
+        body = body[:3800] + "\n\n[Текст сокращён для просмотра в Telegram]"
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ К текстам",
+            callback_data=f"{CALLBACK_PREFIX}:texts:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "📣 К карточке",
+            callback_data=f"{CALLBACK_PREFIX}:open:{promotion_id}",
+        ),
     )
-    for title, text, parse_mode in messages:
-        if not text:
-            continue
-        bot.send_message(
-            chat_id,
-            f"{title}\n\n{text}",
-            parse_mode=parse_mode,
-        )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        f"{title}\n\n{body}",
+        parse_mode=parse_mode,
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
 
 def _edit_markup(promotion_id: int):
@@ -681,11 +1089,132 @@ def _edit_markup(promotion_id: int):
             callback_data=f"{CALLBACK_PREFIX}:edvk:{promotion_id}",
         ),
         types.InlineKeyboardButton(
+            "👥 Переделать сотрудникам",
+            callback_data=f"{CALLBACK_PREFIX}:regenemployee:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "📣 Переделать анонсы",
+            callback_data=f"{CALLBACK_PREFIX}:regensocial:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
+            "🔄 Переделать всё",
+            callback_data=f"{CALLBACK_PREFIX}:regenall:{promotion_id}",
+        ),
+        types.InlineKeyboardButton(
             "⬅️ К карточке",
             callback_data=f"{CALLBACK_PREFIX}:open:{promotion_id}",
         ),
     )
     return markup
+
+
+def show_edit_menu(
+    message,
+    promotion_id: int,
+    bot,
+    *,
+    source_message=None,
+) -> None:
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _send_context_message(
+        message.chat.id,
+        bot,
+        f"✏️ <b>Изменение промо #{promotion_id}</b>\n\nВыберите действие.",
+        parse_mode="HTML",
+        reply_markup=_edit_markup(promotion_id),
+        source_message=source_message,
+    )
+
+
+def show_more_menu(
+    message,
+    promotion_id: int,
+    bot,
+    *,
+    update=None,
+    user=None,
+    source_message=None,
+) -> None:
+    user = user or require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    _, storage = _runtime()
+    row = dict(storage.promotion_admin_row(promotion_id))
+    actor = _actor_id(update or message)
+    is_claimant = str(row.get("claimed_by") or "") == actor
+    is_test = bool(row["is_test"])
+    mutable = row["status"] in {"draft", "review"}
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if mutable and is_claimant:
+        if not is_test and row.get("cycle_number"):
+            markup.add(
+                types.InlineKeyboardButton(
+                    "🎲 Другая игра",
+                    callback_data=f"{CALLBACK_PREFIX}:replace:{promotion_id}",
+                )
+            )
+        if not is_test:
+            markup.row(
+                types.InlineKeyboardButton(
+                    "⏸ Отложить",
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:confirmpostpone:{promotion_id}"
+                    ),
+                ),
+                types.InlineKeyboardButton(
+                    "🗑 Отменить",
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:confirmcancel:{promotion_id}"
+                    ),
+                ),
+            )
+            if _is_owner(user) and not row.get("outbox_total"):
+                markup.add(
+                    types.InlineKeyboardButton(
+                        "🧪 Пометить тестовым",
+                        callback_data=(
+                            f"{CALLBACK_PREFIX}:confirmmarktest:{promotion_id}"
+                        ),
+                    )
+                )
+        elif _is_owner(user):
+            markup.add(
+                types.InlineKeyboardButton(
+                    "🗑 Удалить тест",
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:confirmdelete:{promotion_id}"
+                    ),
+                )
+            )
+        markup.add(
+            types.InlineKeyboardButton(
+                "🔓 Освободить",
+                callback_data=f"{CALLBACK_PREFIX}:release:{promotion_id}",
+            )
+        )
+    if row.get("outbox_total"):
+        markup.add(
+            types.InlineKeyboardButton(
+                "📦 Техническая очередь",
+                callback_data=f"{CALLBACK_PREFIX}:outbox:{promotion_id}",
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ К карточке",
+            callback_data=f"{CALLBACK_PREFIX}:open:{promotion_id}",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        f"⋯ <b>Дополнительные действия промо #{promotion_id}</b>",
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
 
 def _request_manual_text(call, channel: str, bot) -> None:
@@ -695,80 +1224,114 @@ def _request_manual_text(call, channel: str, bot) -> None:
         "vk": "текст VK",
     }
     types = _telegram_types()
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("Отмена")
-    msg = bot.send_message(
+    markup = types.InlineKeyboardMarkup()
+    promotion_id = int(call.data.rsplit(":", 1)[1])
+    markup.add(
+        types.InlineKeyboardButton(
+            "Отмена",
+            callback_data=f"{CALLBACK_PREFIX}:open:{promotion_id}",
+        )
+    )
+    msg = _send_context_message(
         call.message.chat.id,
+        bot,
         f"Отправьте новый {labels[channel]}. Название игры и скидка "
         "должны остаться без изменений.",
         reply_markup=markup,
+        source_message=call.message,
     )
     bot.register_next_step_handler(
         msg,
         save_manual_text,
-        int(call.data.rsplit(":", 1)[1]),
+        promotion_id,
         channel,
         bot,
     )
 
 
 def save_manual_text(message, promotion_id: int, channel: str, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
         return
+    message_id = _message_id(message)
+    if message_id is not None:
+        _delete_message(message.chat.id, message_id, bot)
     if message.text == "Отмена":
-        _remove_reply_keyboard(
+        send_promotion_card(
             message.chat.id,
+            promotion_id,
             bot,
-            "Редактирование отменено.",
+            update=message,
+            user=user,
+            notice="Редактирование отменено.",
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
         return
     text = str(message.text or "").strip()
     limits = {"employee": 3500, "telegram": 3500, "vk": 6000}
     if not text or len(text) > limits[channel]:
-        bot.send_message(
+        send_promotion_card(
             message.chat.id,
-            f"Текст должен содержать от 1 до {limits[channel]} символов.",
-        )
-        _remove_reply_keyboard(
-            message.chat.id,
+            promotion_id,
             bot,
-            "Возвращаюсь к карточке промо.",
+            update=message,
+            user=user,
+            notice=(
+                f"❌ Текст должен содержать от 1 до "
+                f"{limits[channel]} символов."
+            ),
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
         return
     settings, storage = _runtime()
+    try:
+        _claim_required(storage, promotion_id, message, user)
+    except Exception as error:
+        send_promotion_card(
+            message.chat.id,
+            promotion_id,
+            bot,
+            update=message,
+            user=user,
+            notice=f"❌ {error}",
+        )
+        return
     promotion = dict(storage.promotion_admin_row(promotion_id))
     plain_text = unescape(text)
     if promotion["steam_name"] not in plain_text:
-        bot.send_message(
+        send_promotion_card(
             message.chat.id,
-            "Название игры должно присутствовать без изменений.",
-        )
-        _remove_reply_keyboard(
-            message.chat.id,
+            promotion_id,
             bot,
-            "Возвращаюсь к карточке промо.",
+            update=message,
+            user=user,
+            notice="❌ Название игры должно присутствовать без изменений.",
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
         return
     if promotion["discount_text"] not in plain_text:
-        bot.send_message(
+        send_promotion_card(
             message.chat.id,
-            "Точное значение скидки должно присутствовать в тексте.",
-        )
-        _remove_reply_keyboard(
-            message.chat.id,
+            promotion_id,
             bot,
-            "Возвращаюсь к карточке промо.",
+            update=message,
+            user=user,
+            notice="❌ Точное значение скидки должно присутствовать в тексте.",
         )
-        send_promotion_card(message.chat.id, promotion_id, bot)
         return
     values = {
         "employee_text": text if channel == "employee" else None,
         "telegram_text": text if channel == "telegram" else None,
         "vk_text": text if channel == "vk" else None,
     }
+    action_lock = _promotion_action_lock(promotion_id)
+    if not action_lock.acquire(blocking=False):
+        send_promotion_card(
+            message.chat.id,
+            promotion_id,
+            bot,
+            update=message,
+            user=user,
+            notice="❌ Действие с этим промо уже выполняется.",
+        )
+        return
     try:
         storage.save_partial_generated_texts(
             promotion_id,
@@ -793,18 +1356,27 @@ def save_manual_text(message, promotion_id: int, channel: str, bot):
         response = "✅ Текст сохранён."
         if warning:
             response += f"\n⚠️ {warning}"
-        bot.send_message(message.chat.id, response)
     except Exception as error:
-        bot.send_message(message.chat.id, f"❌ {error}")
-    _remove_reply_keyboard(
+        response = f"❌ {error}"
+    finally:
+        action_lock.release()
+    send_promotion_card(
         message.chat.id,
+        promotion_id,
         bot,
-        "Возвращаюсь к карточке промо.",
+        update=message,
+        user=user,
+        notice=response,
     )
-    send_promotion_card(message.chat.id, promotion_id, bot)
 
 
-def show_outbox(message, bot, *, promotion_id: int | None = None):
+def show_outbox(
+    message,
+    bot,
+    *,
+    promotion_id: int | None = None,
+    source_message=None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     _, storage = _runtime()
@@ -840,19 +1412,31 @@ def show_outbox(message, bot, *, promotion_id: int | None = None):
             ),
         ),
         types.InlineKeyboardButton(
-            "🏠 Меню промо",
-            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+            "⬅️ К карточке" if promotion_id else "⬅️ Настройки",
+            callback_data=(
+                f"{CALLBACK_PREFIX}:open:{promotion_id}"
+                if promotion_id
+                else f"{CALLBACK_PREFIX}:settings:0"
+            ),
         ),
     )
-    bot.send_message(
+    _send_context_message(
         message.chat.id,
+        bot,
         text,
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=source_message,
     )
 
 
-def show_catalog(message, bot):
+def show_catalog(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     settings, storage = _runtime()
@@ -877,37 +1461,58 @@ def show_catalog(message, bot):
     )
     markup.add(
         types.InlineKeyboardButton(
-            "🏠 Меню промо",
-            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+            "⬅️ Настройки",
+            callback_data=f"{CALLBACK_PREFIX}:settings:0",
         )
     )
-    bot.send_message(
+    body = (
+        "🎮 <b>Каталог игр</b>\n\n"
+        f"Согласовано: {summary['approved_games']}\n"
+        f"Обогащено Steam: {summary['enriched_games']}\n"
+        f"Цикл ротации: {rotation['cycle_number']}\n"
+        f"Уже использовано: {rotation['used_games']}\n"
+        f"Доступно: {rotation['available_games']}"
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
         message.chat.id,
-        (
-            "🎮 <b>Каталог игр</b>\n\n"
-            f"Согласовано: {summary['approved_games']}\n"
-            f"Обогащено Steam: {summary['enriched_games']}\n"
-            f"Цикл ротации: {rotation['cycle_number']}\n"
-            f"Уже использовано: {rotation['used_games']}\n"
-            f"Доступно: {rotation['available_games']}"
-        ),
+        bot,
+        body,
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=source_message,
     )
 
 
-def show_promo_settings(message, bot):
+def show_promo_settings(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     settings, _ = _runtime()
     try:
         values = GoogleSheetsManager(settings).read_tracker_settings()
     except Exception as error:
-        bot.send_message(
-            message.chat.id,
-            f"❌ Не удалось прочитать настройки: {error}",
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ Рабочие промо",
+                callback_data=f"{CALLBACK_PREFIX}:plane:real",
+            )
         )
-        promotion_admin_menu(message, bot)
+        _send_context_message(
+            message.chat.id,
+            bot,
+            f"❌ Не удалось прочитать настройки: {error}",
+            reply_markup=markup,
+            source_message=source_message,
+        )
         return
     sheet_enabled = str(
         values.get("weekly_promo_enabled") or ""
@@ -929,27 +1534,40 @@ def show_promo_settings(message, bot):
             callback_data=f"{CALLBACK_PREFIX}:toggleweekly:0",
         ),
         types.InlineKeyboardButton(
-            "🏠 Меню промо",
-            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+            "🎮 Каталог игр",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:0",
+        ),
+        types.InlineKeyboardButton(
+            "📦 Техническая очередь",
+            callback_data=f"{CALLBACK_PREFIX}:outbox:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Рабочие промо",
+            callback_data=f"{CALLBACK_PREFIX}:plane:real",
         ),
     )
-    bot.send_message(
+    body = (
+        "⚙️ <b>Настройки промо</b>\n\n"
+        f"Скидка: {escape(values.get('weekly_discount', 'не задана'))}\n"
+        "Расписание сервера: понедельник, 10:30 МСК\n"
+        f"Разрешено на сервере: "
+        f"{'да' if settings.weekly_promo_enabled else 'нет'}\n"
+        f"Включено менеджером: {'да' if sheet_enabled else 'нет'}\n"
+        f"Итог: {'🟢 включено' if fully_enabled else '⏸ выключено'}\n"
+        f"Режим: "
+        f"{'автоматический' if fully_enabled else 'ручной'}\n"
+        f"Генератор: {escape(settings.generator_provider)}\n"
+        "Публикация: dry-run"
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
         message.chat.id,
-        (
-            "⚙️ <b>Настройки промо</b>\n\n"
-            f"Скидка: {escape(values.get('weekly_discount', 'не задана'))}\n"
-            "Расписание сервера: понедельник, 10:30 МСК\n"
-            f"Разрешено на сервере: "
-            f"{'да' if settings.weekly_promo_enabled else 'нет'}\n"
-            f"Включено менеджером: {'да' if sheet_enabled else 'нет'}\n"
-            f"Итог: {'🟢 включено' if fully_enabled else '⏸ выключено'}\n"
-            f"Режим: "
-            f"{'автоматический' if fully_enabled else 'ручной'}\n"
-            f"Генератор: {escape(settings.generator_provider)}\n"
-            "Публикация: dry-run"
-        ),
+        bot,
+        body,
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=source_message,
     )
 
 
@@ -975,12 +1593,19 @@ def _confirmation_markup(
 
 def _request_discount(call, bot):
     types = _telegram_types()
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("Отмена")
-    msg = bot.send_message(
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "Отмена",
+            callback_data=f"{CALLBACK_PREFIX}:settings:0",
+        )
+    )
+    msg = _send_context_message(
         call.message.chat.id,
+        bot,
         "Введите точный текст скидки, например: 100 рублей",
         reply_markup=markup,
+        source_message=call.message,
     )
     bot.register_next_step_handler(msg, save_discount, bot)
 
@@ -988,26 +1613,28 @@ def _request_discount(call, bot):
 def save_discount(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
+    message_id = _message_id(message)
+    if message_id is not None:
+        _delete_message(message.chat.id, message_id, bot)
     if message.text == "Отмена":
-        _remove_reply_keyboard(
-            message.chat.id,
-            bot,
-            "Изменение скидки отменено.",
-        )
         show_promo_settings(message, bot)
         return
     value = str(message.text or "").strip()
     if not value or len(value) > 80:
-        bot.send_message(
-            message.chat.id,
-            "Скидка должна содержать от 1 до 80 символов.",
+        types = _telegram_types()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "⬅️ К настройкам",
+                callback_data=f"{CALLBACK_PREFIX}:settings:0",
+            )
         )
-        _remove_reply_keyboard(
+        _send_context_message(
             message.chat.id,
             bot,
-            "Возвращаюсь к настройкам.",
+            "Скидка должна содержать от 1 до 80 символов.",
+            reply_markup=markup,
         )
-        show_promo_settings(message, bot)
         return
     try:
         settings, _ = _runtime()
@@ -1015,15 +1642,10 @@ def save_discount(message, bot):
             "weekly_discount",
             value,
         )
-        bot.send_message(message.chat.id, "✅ Скидка обновлена.")
+        notice = "✅ Скидка обновлена."
     except Exception as error:
-        bot.send_message(message.chat.id, f"❌ {error}")
-    _remove_reply_keyboard(
-        message.chat.id,
-        bot,
-        "Возвращаюсь к настройкам.",
-    )
-    show_promo_settings(message, bot)
+        notice = f"❌ {error}"
+    show_promo_settings(message, bot, notice=notice)
 
 
 def _regenerate(
@@ -1031,8 +1653,16 @@ def _regenerate(
     bot,
     promotion_id: int,
     section: str,
+    user,
 ) -> None:
     settings, storage = _runtime()
+    _claim_required(storage, promotion_id, call, user)
+    wait = _send_context_message(
+        call.message.chat.id,
+        bot,
+        "⏳ Генерирую новый вариант…",
+        source_message=call.message,
+    )
     _workflow(settings, storage).regenerate(
         promotion_id,
         section=section,
@@ -1045,8 +1675,50 @@ def _regenerate(
     text = "✅ Новый вариант готов."
     if warning:
         text += f"\n⚠️ {warning}"
-    bot.send_message(call.message.chat.id, text)
-    send_promotion_card(call.message.chat.id, promotion_id, bot)
+    send_promotion_card(
+        call.message.chat.id,
+        promotion_id,
+        bot,
+        update=call,
+        user=user,
+        notice=text,
+        source_message=wait,
+    )
+
+
+def _clear_next_step_handler(chat_id: int, bot) -> None:
+    try:
+        bot.clear_step_handler_by_chat_id(chat_id)
+    except Exception:
+        pass
+
+
+def _show_callback_error(call, bot, error: Exception) -> None:
+    parts = str(call.data or "").split(":")
+    promotion_id = (
+        int(parts[2])
+        if len(parts) > 2 and parts[2].isdigit()
+        else None
+    )
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ К карточке" if promotion_id else "⬅️ В меню промо",
+            callback_data=(
+                f"{CALLBACK_PREFIX}:open:{promotion_id}"
+                if promotion_id
+                else f"{CALLBACK_PREFIX}:menu:0"
+            ),
+        )
+    )
+    _send_context_message(
+        call.message.chat.id,
+        bot,
+        f"❌ Ошибка промо: {error}",
+        reply_markup=markup,
+        source_message=call.message,
+    )
 
 
 def register_promo_admin_callbacks(bot) -> None:
@@ -1062,10 +1734,97 @@ def register_promo_admin_callbacks(bot) -> None:
             return
         parts = call.data.split(":")
         action = parts[1]
+        chat_id = call.message.chat.id
+        action_lock = None
         try:
             bot.answer_callback_query(call.id)
+            if action in {
+                "admin",
+                "menu",
+                "plane",
+                "history",
+                "create",
+                "settings",
+                "catalog",
+                "list",
+                "open",
+            }:
+                _clear_next_step_handler(chat_id, bot)
+
+            if action == "admin":
+                _clear_context(
+                    chat_id,
+                    bot,
+                    source_message=call.message,
+                )
+                from menu import admin_menu
+
+                admin_menu(call.message, bot)
+                return
             if action == "menu":
-                promotion_admin_menu(call.message, bot)
+                show_promo_plane_selector(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "plane":
+                if parts[2] == "test":
+                    show_test_dashboard(
+                        call.message,
+                        bot,
+                        source_message=call.message,
+                    )
+                else:
+                    show_real_dashboard(
+                        call.message,
+                        bot,
+                        source_message=call.message,
+                    )
+                return
+            if action == "history":
+                show_history_menu(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "create":
+                show_create_real_menu(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "createtest":
+                create_test_promotion(
+                    call.message,
+                    bot,
+                    update=call,
+                    user=user,
+                    source_message=call.message,
+                )
+                return
+            if action == "requestappid":
+                request_manual_promotion_app_id(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "settings":
+                show_promo_settings(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "catalog":
+                show_catalog(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
                 return
             if action == "list":
                 show_promotion_list(
@@ -1073,217 +1832,365 @@ def register_promo_admin_callbacks(bot) -> None:
                     bot,
                     scope=parts[2],
                     page=int(parts[3]),
+                    source_message=call.message,
                 )
                 return
+
             promotion_id = int(parts[2])
+            if action in {
+                "claim",
+                "takeover",
+                "release",
+                "generate",
+                "approve",
+                "regenall",
+                "regenemployee",
+                "regensocial",
+                "replace",
+                "postpone",
+                "cancel",
+                "marktest",
+                "delete",
+            }:
+                action_lock = _promotion_action_lock(promotion_id)
+                if not action_lock.acquire(blocking=False):
+                    action_lock = None
+                    raise ValueError(
+                        "Действие с этим промо уже выполняется"
+                    )
             if action == "open":
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     promotion_id,
                     bot,
+                    update=call,
+                    user=user,
+                    source_message=call.message,
+                )
+            elif action == "noop":
+                send_promotion_card(
+                    chat_id,
+                    promotion_id,
+                    bot,
+                    update=call,
+                    user=user,
+                    notice="Промо уже взято в работу другим сотрудником.",
+                    source_message=call.message,
+                )
+            elif action == "claim":
+                settings, storage = _runtime()
+                storage.claim_promotion(
+                    promotion_id,
+                    claimed_by=_actor_id(call),
+                    claimed_name=_actor_name(call, user),
+                )
+                warning = _sync_promotion_best_effort(
+                    settings,
+                    storage,
+                    promotion_id,
+                )
+                notice = "✅ Промо взято в работу."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                send_promotion_card(
+                    chat_id,
+                    promotion_id,
+                    bot,
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
+                )
+            elif action == "takeover":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Перехват доступен только руководству"
+                    )
+                settings, storage = _runtime()
+                storage.claim_promotion(
+                    promotion_id,
+                    claimed_by=_actor_id(call),
+                    claimed_name=_actor_name(call, user),
+                    force=True,
+                )
+                warning = _sync_promotion_best_effort(
+                    settings,
+                    storage,
+                    promotion_id,
+                )
+                notice = "🛡 Промо передано вам."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                send_promotion_card(
+                    chat_id,
+                    promotion_id,
+                    bot,
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
+                )
+            elif action == "release":
+                settings, storage = _runtime()
+                storage.release_promotion_claim(
+                    promotion_id,
+                    actor_id=_actor_id(call),
+                    force=_is_owner(user),
+                )
+                warning = _sync_promotion_best_effort(
+                    settings,
+                    storage,
+                    promotion_id,
+                )
+                notice = "🔓 Промо освобождено."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                send_promotion_card(
+                    chat_id,
+                    promotion_id,
+                    bot,
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
                 )
             elif action == "texts":
-                _send_promotion_texts(
-                    call.message.chat.id,
+                show_text_menu(
+                    call.message,
                     promotion_id,
                     bot,
+                    source_message=call.message,
+                )
+            elif action in {"viewemployee", "viewtelegram", "viewvk"}:
+                channel = {
+                    "viewemployee": "employee",
+                    "viewtelegram": "telegram",
+                    "viewvk": "vk",
+                }[action]
+                show_promotion_text(
+                    call.message,
+                    promotion_id,
+                    channel,
+                    bot,
+                    source_message=call.message,
                 )
             elif action == "generate":
                 settings, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
+                wait = _send_context_message(
+                    chat_id,
+                    bot,
+                    "⏳ Генерирую тексты…",
+                    source_message=call.message,
+                )
                 _workflow(settings, storage).generate(promotion_id)
                 warning = _sync_promotion_best_effort(
                     settings,
                     storage,
                     promotion_id,
                 )
-                text = "✅ Тексты готовы."
+                notice = "✅ Тексты готовы."
                 if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
+                    notice += f"\n⚠️ {warning}"
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     promotion_id,
                     bot,
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=wait,
                 )
             elif action == "approve":
                 settings, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
                 _workflow(settings, storage).approve_and_dispatch(
                     promotion_id,
-                    approved_by=str(call.from_user.id),
+                    approved_by=_actor_id(call),
                 )
                 warning = _sync_promotion_best_effort(
                     settings,
                     storage,
                     promotion_id,
                 )
-                text = (
-                    "✅ Промо согласовано. Создана только "
-                    "dry-run очередь."
+                notice = (
+                    "✅ Промо согласовано. Создана только dry-run очередь."
                 )
                 if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
+                    notice += f"\n⚠️ {warning}"
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     promotion_id,
                     bot,
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
                 )
             elif action == "edit":
-                bot.send_message(
-                    call.message.chat.id,
-                    "Какой текст изменить?",
-                    reply_markup=_edit_markup(promotion_id),
+                _, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
+                show_edit_menu(
+                    call.message,
+                    promotion_id,
+                    bot,
+                    source_message=call.message,
                 )
-            elif action == "edemployee":
-                _request_manual_text(call, "employee", bot)
-            elif action == "edtelegram":
-                _request_manual_text(call, "telegram", bot)
-            elif action == "edvk":
-                _request_manual_text(call, "vk", bot)
+            elif action in {"edemployee", "edtelegram", "edvk"}:
+                _, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
+                channel = {
+                    "edemployee": "employee",
+                    "edtelegram": "telegram",
+                    "edvk": "vk",
+                }[action]
+                _request_manual_text(call, channel, bot)
             elif action == "regenall":
-                _regenerate(call, bot, promotion_id, "all")
+                _regenerate(call, bot, promotion_id, "all", user)
             elif action == "regenemployee":
-                _regenerate(call, bot, promotion_id, "employee")
+                _regenerate(call, bot, promotion_id, "employee", user)
             elif action == "regensocial":
-                _regenerate(call, bot, promotion_id, "social")
+                _regenerate(call, bot, promotion_id, "social", user)
+            elif action == "more":
+                show_more_menu(
+                    call.message,
+                    promotion_id,
+                    bot,
+                    update=call,
+                    user=user,
+                    source_message=call.message,
+                )
             elif action == "replace":
                 settings, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
                 replacement = _weekly_service(
                     settings,
                     storage,
                 ).replace(promotion_id)
-                bot.send_message(
-                    call.message.chat.id,
-                    f"✅ Выбрано новое промо #{replacement.promotion_id}.",
+                storage.claim_promotion(
+                    replacement.promotion_id,
+                    claimed_by=_actor_id(call),
+                    claimed_name=_actor_name(call, user),
                 )
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     replacement.promotion_id,
                     bot,
+                    update=call,
+                    user=user,
+                    notice=(
+                        "✅ Выбрано новое промо "
+                        f"#{replacement.promotion_id}."
+                    ),
+                    source_message=call.message,
                 )
-            elif action == "confirmpostpone":
-                bot.send_message(
-                    call.message.chat.id,
-                    f"Отложить промо #{promotion_id}?",
-                    reply_markup=_confirmation_markup(
-                        promotion_id,
+            elif action in {
+                "confirmpostpone",
+                "confirmcancel",
+                "confirmmarktest",
+                "confirmdelete",
+            }:
+                _, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
+                if action in {"confirmmarktest", "confirmdelete"}:
+                    if not _is_owner(user):
+                        raise PermissionError(
+                            "Это действие доступно только руководству"
+                        )
+                configs = {
+                    "confirmpostpone": (
+                        "Отложить",
                         "postpone",
                         "Да, отложить",
                     ),
-                )
-            elif action == "postpone":
-                settings, storage = _runtime()
-                storage.set_promotion_status(
-                    promotion_id,
-                    "postponed",
-                )
-                warning = _sync_promotion_best_effort(
-                    settings,
-                    storage,
-                    promotion_id,
-                )
-                text = "⏸ Промо отложено."
-                if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
-                send_promotion_card(
-                    call.message.chat.id,
-                    promotion_id,
-                    bot,
-                )
-            elif action == "confirmcancel":
-                bot.send_message(
-                    call.message.chat.id,
-                    f"Отменить промо #{promotion_id}?",
-                    reply_markup=_confirmation_markup(
-                        promotion_id,
+                    "confirmcancel": (
+                        "Отменить",
                         "cancel",
                         "Да, отменить",
                     ),
+                    "confirmmarktest": (
+                        "Пометить тестовым",
+                        "marktest",
+                        "Да, это тест",
+                    ),
+                    "confirmdelete": (
+                        "Полностью удалить тестовое",
+                        "delete",
+                        "Удалить навсегда",
+                    ),
+                }
+                title, confirm_action, button_text = configs[action]
+                _send_context_message(
+                    chat_id,
+                    bot,
+                    f"{title} промо #{promotion_id}?",
+                    reply_markup=_confirmation_markup(
+                        promotion_id,
+                        confirm_action,
+                        button_text,
+                    ),
+                    source_message=call.message,
                 )
-            elif action == "cancel":
+            elif action in {"postpone", "cancel"}:
                 settings, storage = _runtime()
-                storage.set_promotion_status(
-                    promotion_id,
-                    "cancelled",
+                _claim_required(storage, promotion_id, call, user)
+                target_status = (
+                    "postponed" if action == "postpone" else "cancelled"
                 )
+                storage.set_promotion_status(promotion_id, target_status)
                 warning = _sync_promotion_best_effort(
                     settings,
                     storage,
                     promotion_id,
                 )
-                text = "🗄 Промо отменено и сохранено в истории."
+                notice = (
+                    "⏸ Промо отложено."
+                    if action == "postpone"
+                    else "🗄 Промо отменено и сохранено в истории."
+                )
                 if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
+                    notice += f"\n⚠️ {warning}"
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     promotion_id,
                     bot,
-                )
-            elif action == "confirmmarktest":
-                if int(user["status"]) < ROLE_OWNER:
-                    bot.send_message(
-                        call.message.chat.id,
-                        "Это действие доступно только руководству.",
-                    )
-                    return
-                bot.send_message(
-                    call.message.chat.id,
-                    f"Пометить промо #{promotion_id} тестовым?",
-                    reply_markup=_confirmation_markup(
-                        promotion_id,
-                        "marktest",
-                        "Да, это тест",
-                    ),
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
                 )
             elif action == "marktest":
-                if int(user["status"]) < ROLE_OWNER:
-                    bot.send_message(
-                        call.message.chat.id,
-                        "Это действие доступно только руководству.",
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только руководству"
                     )
-                    return
                 settings, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
                 storage.mark_promotion_as_test(promotion_id)
                 warning = _sync_promotion_best_effort(
                     settings,
                     storage,
                     promotion_id,
                 )
-                text = "🧪 Промо помечено тестовым."
+                notice = "🧪 Промо помечено тестовым."
                 if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
+                    notice += f"\n⚠️ {warning}"
                 send_promotion_card(
-                    call.message.chat.id,
+                    chat_id,
                     promotion_id,
                     bot,
-                )
-            elif action == "confirmdelete":
-                if int(user["status"]) < ROLE_OWNER:
-                    bot.send_message(
-                        call.message.chat.id,
-                        "Это действие доступно только руководству.",
-                    )
-                    return
-                bot.send_message(
-                    call.message.chat.id,
-                    f"Полностью удалить тестовое промо #{promotion_id}?",
-                    reply_markup=_confirmation_markup(
-                        promotion_id,
-                        "delete",
-                        "Удалить навсегда",
-                    ),
+                    update=call,
+                    user=user,
+                    notice=notice,
+                    source_message=call.message,
                 )
             elif action == "delete":
-                if int(user["status"]) < ROLE_OWNER:
-                    bot.send_message(
-                        call.message.chat.id,
-                        "Это действие доступно только руководству.",
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только руководству"
                     )
-                    return
                 settings, storage = _runtime()
+                _claim_required(storage, promotion_id, call, user)
                 storage.delete_test_promotion(promotion_id)
                 warning = None
                 try:
@@ -1292,26 +2199,38 @@ def register_promo_admin_callbacks(bot) -> None:
                     )
                 except Exception as error:
                     warning = f"строка Google не удалена: {error}"
-                text = f"🗑 Тестовое промо #{promotion_id} удалено."
+                notice = f"🗑 Тестовое промо #{promotion_id} удалено."
                 if warning:
-                    text += f"\n⚠️ {warning}"
-                bot.send_message(call.message.chat.id, text)
-                show_promotion_list(
+                    notice += f"\n⚠️ {warning}"
+                show_test_dashboard(
                     call.message,
                     bot,
-                    scope="test",
-                    page=0,
+                    source_message=call.message,
+                    notice=notice,
                 )
             elif action == "outbox":
                 show_outbox(
                     call.message,
                     bot,
                     promotion_id=promotion_id or None,
+                    source_message=call.message,
                 )
             elif action == "createweekly":
-                create_weekly_promotion(call.message, bot)
+                create_weekly_promotion(
+                    call.message,
+                    bot,
+                    update=call,
+                    user=user,
+                    source_message=call.message,
+                )
             elif action == "synccatalog":
                 settings, storage = _runtime()
+                wait = _send_context_message(
+                    chat_id,
+                    bot,
+                    "⏳ Применяю изменения каталога…",
+                    source_message=call.message,
+                )
                 manager = GoogleSheetsManager(settings)
                 result = CatalogManagementService(
                     storage,
@@ -1322,24 +2241,23 @@ def register_promo_admin_callbacks(bot) -> None:
                 )
                 if result.errors:
                     raise ValueError("; ".join(result.errors))
-                bot.send_message(
-                    call.message.chat.id,
-                    (
+                show_catalog(
+                    call.message,
+                    bot,
+                    source_message=wait,
+                    notice=(
                         "✅ Каталог применён: "
                         f"{result.active_games} активных, "
                         f"{result.excluded_games} исключено."
                     ),
                 )
-                show_catalog(call.message, bot)
             elif action == "editdiscount":
                 _request_discount(call, bot)
             elif action == "toggleweekly":
-                if int(user["status"]) < ROLE_OWNER:
-                    bot.send_message(
-                        call.message.chat.id,
-                        "Это действие доступно только руководству.",
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только руководству"
                     )
-                    return
                 settings, _ = _runtime()
                 manager = GoogleSheetsManager(settings)
                 values = manager.read_tracker_settings()
@@ -1363,18 +2281,16 @@ def register_promo_admin_callbacks(bot) -> None:
                     "weekly_promo_enabled",
                     "false" if enabled else "true",
                 )
-                bot.send_message(
-                    call.message.chat.id,
-                    "✅ Настройка автогенерации обновлена.",
+                show_promo_settings(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                    notice="✅ Настройка автогенерации обновлена.",
                 )
-                show_promo_settings(call.message, bot)
             else:
-                bot.send_message(
-                    call.message.chat.id,
-                    "Неизвестное действие промо.",
-                )
+                raise ValueError("Неизвестное действие промо")
         except Exception as error:
-            bot.send_message(
-                call.message.chat.id,
-                f"❌ Ошибка промо: {error}",
-            )
+            _show_callback_error(call, bot, error)
+        finally:
+            if action_lock is not None:
+                action_lock.release()

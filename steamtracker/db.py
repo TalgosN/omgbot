@@ -157,6 +157,9 @@ class TrackerStorage:
                     image_url TEXT,
                     approved_by TEXT,
                     approved_at TEXT,
+                    claimed_by TEXT,
+                    claimed_name TEXT,
+                    claimed_at TEXT,
                     is_test INTEGER NOT NULL DEFAULT 0 CHECK(
                         is_test IN (0, 1)
                     ),
@@ -221,7 +224,7 @@ class TrackerStorage:
                     ON game_rotation(cycle_number, app_id)
                     WHERE status IN ('reserved', 'used');
 
-                PRAGMA user_version = 4;
+                PRAGMA user_version = 5;
                 """
             )
             game_columns = {
@@ -244,6 +247,11 @@ class TrackerStorage:
                     CHECK(is_test IN (0, 1))
                     """
                 )
+            for column_name in ("claimed_by", "claimed_name", "claimed_at"):
+                if column_name not in promotion_columns:
+                    conn.execute(
+                        f"ALTER TABLE promotions ADD COLUMN {column_name} TEXT"
+                    )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_promotions_period_status
@@ -956,6 +964,13 @@ class TrackerStorage:
                     "Согласовать можно только промо со статусом "
                     "«На согласовании»"
                 )
+            if (
+                promo["claimed_by"]
+                and str(promo["claimed_by"]) != str(approved_by)
+            ):
+                raise ValueError(
+                    "Промо уже взято в работу другим сотрудником"
+                )
             if not promo["is_approved"]:
                 raise ValueError("Нельзя согласовать промо исключённой игры")
             if not all(
@@ -1016,6 +1031,98 @@ class TrackerStorage:
                     """,
                     (promotion_id, channel, payload, timestamp, timestamp),
                 )
+
+    def claim_promotion(
+        self,
+        promotion_id: int,
+        *,
+        claimed_by: str,
+        claimed_name: str,
+        force: bool = False,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                """
+                SELECT status, claimed_by, claimed_name
+                FROM promotions
+                WHERE id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if promotion["status"] not in {"draft", "review"}:
+                raise ValueError(
+                    "Взять в работу можно только черновик "
+                    "или промо на согласовании"
+                )
+            current_claimant = promotion["claimed_by"]
+            if current_claimant and str(current_claimant) != str(claimed_by):
+                if not force:
+                    current_name = (
+                        promotion["claimed_name"] or current_claimant
+                    )
+                    raise ValueError(
+                        f"Промо уже в работе у {current_name}"
+                    )
+            conn.execute(
+                """
+                UPDATE promotions
+                SET claimed_by = ?,
+                    claimed_name = ?,
+                    claimed_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(claimed_by),
+                    claimed_name,
+                    utc_now(),
+                    utc_now(),
+                    promotion_id,
+                ),
+            )
+
+    def release_promotion_claim(
+        self,
+        promotion_id: int,
+        *,
+        actor_id: str,
+        force: bool = False,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                """
+                SELECT status, claimed_by, claimed_name
+                FROM promotions
+                WHERE id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if not promotion["claimed_by"]:
+                return
+            if str(promotion["claimed_by"]) != str(actor_id) and not force:
+                current_name = (
+                    promotion["claimed_name"] or promotion["claimed_by"]
+                )
+                raise ValueError(
+                    f"Освободить промо может только {current_name}"
+                )
+            conn.execute(
+                """
+                UPDATE promotions
+                SET claimed_by = NULL,
+                    claimed_name = NULL,
+                    claimed_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now(), promotion_id),
+            )
 
     def pending_outbox(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
@@ -1329,6 +1436,9 @@ class TrackerStorage:
                         p.is_test,
                         p.approved_by,
                         p.approved_at,
+                        p.claimed_by,
+                        p.claimed_name,
+                        p.claimed_at,
                         p.created_at,
                         g.steam_name,
                         gr.cycle_number,

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -122,6 +123,90 @@ class PromotionWorkflowTests(unittest.TestCase):
                 promotion_id,
                 "cancelled",
             )
+
+    def test_only_claimant_can_take_and_approve_promotion(self):
+        promotion_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="100 рублей",
+            valid_from="2026-08-01",
+            valid_to="2026-08-07",
+            manager_comment=None,
+            image_url=None,
+        )
+        self.workflow.generate(promotion_id)
+
+        self.storage.claim_promotion(
+            promotion_id,
+            claimed_by="manager-1",
+            claimed_name="Первый",
+        )
+        with self.assertRaisesRegex(ValueError, "у Первый"):
+            self.storage.claim_promotion(
+                promotion_id,
+                claimed_by="manager-2",
+                claimed_name="Второй",
+            )
+        with self.assertRaisesRegex(ValueError, "другим сотрудником"):
+            self.workflow.approve_and_dispatch(
+                promotion_id,
+                approved_by="manager-2",
+            )
+
+        self.storage.claim_promotion(
+            promotion_id,
+            claimed_by="manager-2",
+            claimed_name="Второй",
+            force=True,
+        )
+        self.workflow.approve_and_dispatch(
+            promotion_id,
+            approved_by="manager-2",
+        )
+        promotion = dict(self.storage.promotion_admin_row(promotion_id))
+        self.assertEqual(promotion["status"], "approved")
+        self.assertEqual(promotion["claimed_name"], "Второй")
+
+    def test_existing_database_gets_claim_columns(self):
+        legacy_path = Path(self.temp_dir.name) / "legacy-v4.db"
+        conn = sqlite3.connect(legacy_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE promotions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    app_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    discount_text TEXT NOT NULL,
+                    valid_from TEXT,
+                    valid_to TEXT,
+                    manager_comment TEXT,
+                    employee_text TEXT,
+                    telegram_text TEXT,
+                    vk_text TEXT,
+                    image_url TEXT,
+                    approved_by TEXT,
+                    approved_at TEXT,
+                    is_test INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        storage = TrackerStorage(legacy_path)
+        storage.initialize()
+
+        with storage.connect() as conn:
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(promotions)")
+            }
+        self.assertTrue(
+            {"claimed_by", "claimed_name", "claimed_at"} <= columns
+        )
 
 
 if __name__ == "__main__":

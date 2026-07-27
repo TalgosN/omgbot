@@ -478,7 +478,106 @@ def collect_system_health(bot):
     except Exception as e:
         lines.append(f"⚠️ Состояние уведомлений недоступно: {str(e)[:120]}")
 
+    lines.extend(collect_steamtracker_health())
     return "\n".join(lines)
+
+
+def collect_steamtracker_health():
+    lines = ["", "🎮 Steam Tracker"]
+    try:
+        from steamtracker.config import Settings
+        from steamtracker.db import TrackerStorage
+        from steamtracker.sheets import GoogleSheetsManager
+        from steamtracker.weekly import setting_enabled
+
+        settings = Settings.from_env()
+        storage = TrackerStorage(settings.db_path)
+        storage.initialize()
+        summary = storage.summary()
+        with storage.connect() as conn:
+            last_license_sync = conn.execute(
+                "SELECT MAX(updated_at) FROM accounts"
+            ).fetchone()[0]
+            last_enrichment = conn.execute(
+                "SELECT MAX(updated_at) FROM game_metadata"
+            ).fetchone()[0]
+            last_promotion = conn.execute(
+                "SELECT MAX(updated_at) FROM promotions"
+            ).fetchone()[0]
+            outbox_errors = conn.execute(
+                "SELECT COUNT(*) FROM outbox WHERE status = 'error'"
+            ).fetchone()[0]
+
+        lines.append(
+            "✅ База: "
+            f"{summary['accounts']} аккаунтов, "
+            f"{summary['approved_games']} игр, "
+            f"{summary['owned_licenses']} лицензий"
+        )
+        lines.append(
+            "ℹ️ Последняя проверка лицензий: "
+            f"{last_license_sync or 'ещё не выполнялась'}"
+        )
+        lines.append(
+            "ℹ️ Обновление описаний: "
+            f"{last_enrichment or 'ещё не выполнялось'}"
+        )
+        lines.append(
+            "ℹ️ Последнее изменение промо: "
+            f"{last_promotion or 'промо пока нет'}"
+        )
+        if outbox_errors:
+            lines.append(f"⚠️ Ошибок технической очереди: {outbox_errors}")
+        else:
+            lines.append("✅ Техническая очередь: без ошибок")
+
+        try:
+            tracker_settings = GoogleSheetsManager(
+                settings
+            ).read_tracker_settings()
+            sheet_enabled = setting_enabled(
+                tracker_settings.get("weekly_promo_enabled")
+            )
+            fully_enabled = settings.weekly_promo_enabled and sheet_enabled
+            lines.append(
+                "✅ Google Steam Tracker: доступен; "
+                f"режим {'автоматический' if fully_enabled else 'ручной'}"
+            )
+        except Exception as error:
+            lines.append(
+                f"❌ Google Steam Tracker: {str(error)[:120]}"
+            )
+
+        if settings.generator_provider == "openrouter":
+            if not settings.openrouter_api_key:
+                lines.append("❌ OpenRouter: API-ключ не задан")
+            else:
+                try:
+                    response = requests.get(
+                        "https://openrouter.ai/api/v1/key",
+                        headers={
+                            "Authorization": (
+                                f"Bearer {settings.openrouter_api_key}"
+                            )
+                        },
+                        timeout=5,
+                    )
+                    response.raise_for_status()
+                    lines.append(
+                        "✅ OpenRouter: ключ доступен, "
+                        f"модель {settings.openrouter_model or 'по умолчанию'}"
+                    )
+                except Exception as error:
+                    lines.append(f"❌ OpenRouter: {str(error)[:120]}")
+        else:
+            lines.append(
+                f"ℹ️ Генератор: {settings.generator_provider} "
+                "(проверка OpenRouter не требуется)"
+            )
+    except Exception as error:
+        lines.append(f"❌ Steam Tracker: {str(error)[:120]}")
+    return lines
+
 
 def handle_system_health(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):

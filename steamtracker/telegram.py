@@ -9,7 +9,6 @@ from .db import TrackerStorage
 from .llm import build_generator
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
-from .weekly import WeeklyPromotionService
 
 
 CALLBACK_PREFIX = "stp"
@@ -144,17 +143,15 @@ def send_promotion_to_approvers(
     settings: Settings,
     promotion_id: int,
 ) -> None:
-    storage = TrackerStorage(settings.db_path)
-    storage.initialize()
-    workflow = _workflow(settings, storage)
+    from .admin import send_promotion_card
+
     for user_id in sorted(settings.telegram_approver_ids):
         try:
-            send_promotion_preview(
-                bot,
-                storage,
-                workflow,
+            send_promotion_card(
                 user_id,
                 promotion_id,
+                bot,
+                update=user_id,
             )
         except Exception as error:
             print(
@@ -172,10 +169,6 @@ def register_steamtracker_handlers(bot) -> bool:
             "Для Telegram-согласования задайте STEAMTRACKER_APPROVER_IDS"
         )
 
-    storage = TrackerStorage(settings.db_path)
-    storage.initialize()
-    workflow = _workflow(settings, storage)
-
     def is_allowed(user_id: int) -> bool:
         return user_id in settings.telegram_approver_ids
 
@@ -190,17 +183,14 @@ def register_steamtracker_handlers(bot) -> bool:
             return
         promotion_id = int(parts[1])
         try:
-            send_promotion_preview(
-                bot,
-                storage,
-                workflow,
+            from .admin import send_promotion_card
+
+            send_promotion_card(
                 message.chat.id,
                 promotion_id,
-            )
-            _sync_promotion_best_effort(
-                settings,
-                storage,
-                promotion_id,
+                bot,
+                update=message,
+                source_message=message,
             )
         except Exception as error:
             bot.reply_to(message, f"Ошибка промо: {error}")
@@ -215,82 +205,21 @@ def register_steamtracker_handlers(bot) -> bool:
             bot.answer_callback_query(call.id, "Нет доступа.")
             return
         try:
-            _, action, promotion_id_text = call.data.split(":", 2)
+            _, _action, promotion_id_text = call.data.split(":", 2)
             promotion_id = int(promotion_id_text)
-            if action == "approve":
-                workflow.approve_and_dispatch(
-                    promotion_id,
-                    approved_by=str(call.from_user.id),
-                )
-                _sync_promotion_best_effort(
-                    settings,
-                    storage,
-                    promotion_id,
-                )
-                bot.edit_message_reply_markup(
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=None,
-                )
-                bot.answer_callback_query(
-                    call.id,
-                    "Согласовано. Создан только dry-run outbox.",
-                )
-            elif action in {"all", "employee", "social"}:
-                workflow.regenerate(promotion_id, section=action)
-                _sync_promotion_best_effort(
-                    settings,
-                    storage,
-                    promotion_id,
-                )
-                bot.answer_callback_query(call.id, "Новый вариант готов.")
-                bot.edit_message_reply_markup(
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=None,
-                )
-                send_promotion_preview(
-                    bot,
-                    storage,
-                    workflow,
-                    call.message.chat.id,
-                    promotion_id,
-                )
-            elif action == "replace":
-                service = WeeklyPromotionService(
-                    storage,
-                    workflow,
-                    GoogleSheetsManager(settings),
-                )
-                replacement = service.replace(promotion_id)
-                bot.edit_message_reply_markup(
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=None,
-                )
-                bot.answer_callback_query(call.id, "Выбрана другая игра.")
-                send_promotion_preview(
-                    bot,
-                    storage,
-                    workflow,
-                    call.message.chat.id,
-                    replacement.promotion_id,
-                )
-            elif action == "postpone":
-                storage.set_promotion_status(promotion_id, "postponed")
-                _sync_promotion_best_effort(
-                    settings,
-                    storage,
-                    promotion_id,
-                )
-                bot.edit_message_reply_markup(
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=None,
-                )
-                bot.answer_callback_query(call.id, "Промо отложено.")
-            else:
-                bot.answer_callback_query(call.id, "Неизвестное действие.")
+            from .admin import send_promotion_card
+
+            bot.answer_callback_query(
+                call.id,
+                "Открываю новый интерфейс промо.",
+            )
+            send_promotion_card(
+                call.message.chat.id,
+                promotion_id,
+                bot,
+                update=call,
+                source_message=call.message,
+            )
         except Exception as error:
             bot.answer_callback_query(call.id, f"Ошибка: {error}"[:180])
 

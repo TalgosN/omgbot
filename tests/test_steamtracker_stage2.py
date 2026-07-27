@@ -1,9 +1,11 @@
 import json
 import os
+import types
 import unittest
 from unittest.mock import Mock, patch
 
 from steamtracker.llm import OpenRouterGenerator
+from steamtracker import admin as promo_admin
 from steamtracker.admin import register_promo_admin_callbacks
 from steamtracker.jobs import (
     start_catalog_sync,
@@ -150,6 +152,76 @@ class StageTwoTests(unittest.TestCase):
         register_promo_admin_callbacks(bot)
 
         bot.callback_query_handler.assert_called_once()
+
+    def test_promo_entry_uses_inline_plane_selector(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+            ReplyKeyboardRemove=lambda: object(),
+        )
+        promo_admin._context_messages.clear()
+        bot = Mock()
+        bot.send_message.side_effect = [
+            types.SimpleNamespace(message_id=11),
+            types.SimpleNamespace(message_id=12),
+        ]
+        message = types.SimpleNamespace(
+            chat=types.SimpleNamespace(id=100),
+        )
+        user = {"status": promo_admin.ROLE_MANAGER}
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value=user,
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ):
+            promo_admin.promotion_admin_menu(message, bot)
+
+        selector = bot.send_message.call_args_list[-1].kwargs[
+            "reply_markup"
+        ]
+        callbacks = [
+            button.callback_data
+            for row in selector.keyboard
+            for button in row
+        ]
+        self.assertIn("stpa:plane:real", callbacks)
+        self.assertIn("stpa:plane:test", callbacks)
+        bot.register_next_step_handler.assert_not_called()
+        bot.delete_message.assert_any_call(100, 11)
+        promo_admin._context_messages.clear()
+
+    def test_context_navigation_deletes_previous_bot_message(self):
+        bot = Mock()
+        bot.send_message.side_effect = [
+            types.SimpleNamespace(message_id=21),
+            types.SimpleNamespace(message_id=22),
+        ]
+        promo_admin._context_messages.clear()
+
+        promo_admin._send_context_message(100, bot, "Первый экран")
+        promo_admin._send_context_message(100, bot, "Второй экран")
+
+        bot.delete_message.assert_called_with(100, 21)
+        self.assertEqual(promo_admin._context_messages[100], {22})
+        promo_admin._context_messages.clear()
 
 
 if __name__ == "__main__":
