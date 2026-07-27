@@ -33,6 +33,7 @@ def _sync_google_data(
         print(
             "Steam Tracker Google: "
             f"Current_State={result.current_state_rows}, "
+            f"динамика={result.dynamics_rows}, "
             f"игр={result.game_rows}"
         )
     except Exception as error:

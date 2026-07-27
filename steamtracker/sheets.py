@@ -133,6 +133,7 @@ class SheetSetupResult:
 class SheetDataSyncResult:
     applied: bool
     current_state_rows: int
+    dynamics_rows: int
     game_rows: int
     settings_rows: int
     unmatched_game_rows: int
@@ -395,6 +396,7 @@ class GoogleSheetsManager:
         spreadsheet = self.open()
         games_sheet = spreadsheet.worksheet_by_title("Игры")
         current_sheet = spreadsheet.worksheet_by_title("Current_State")
+        dynamics_sheet = spreadsheet.worksheet_by_title("Steam Динамика")
         settings_sheet = spreadsheet.worksheet_by_title(
             "Настройки Steam Tracker"
         )
@@ -419,6 +421,17 @@ class GoogleSheetsManager:
             }
             for row in storage.current_state_matrix()
         ]
+        dynamics_records = [
+            {
+                "Дата": row["snapshot_date"],
+                "steam_app_id": row["app_id"],
+                "Клуб": row["club_name"] or "",
+                "SteamID": str(row["steam_id"]),
+                "Игровое_время_минут": int(row["playtime_minutes"]),
+                "Изменение_минут": int(row["playtime_delta"]),
+            }
+            for row in storage.playtime_dynamics()
+        ]
         settings_records = self._merge_settings_records(
             settings_sheet.get_all_records()
         )
@@ -435,6 +448,11 @@ class GoogleSheetsManager:
                 current_records,
             )
             self._replace_table(
+                dynamics_sheet,
+                SHEET_SCHEMAS["Steam Динамика"],
+                dynamics_records,
+            )
+            self._replace_table(
                 settings_sheet,
                 SHEET_SCHEMAS["Настройки Steam Tracker"],
                 settings_records,
@@ -443,6 +461,7 @@ class GoogleSheetsManager:
         return SheetDataSyncResult(
             applied=apply,
             current_state_rows=len(current_records),
+            dynamics_rows=len(dynamics_records),
             game_rows=len(game_records),
             settings_rows=len(settings_records),
             unmatched_game_rows=unmatched,

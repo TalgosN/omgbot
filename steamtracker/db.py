@@ -1651,6 +1651,53 @@ class TrackerStorage:
                 )
             )
 
+    def playtime_dynamics(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    WITH snapshots AS (
+                        SELECT
+                            pt.snapshot_date,
+                            pt.app_id,
+                            pt.steam_id,
+                            pt.playtime_minutes,
+                            LAG(pt.playtime_minutes) OVER (
+                                PARTITION BY pt.steam_id, pt.app_id
+                                ORDER BY pt.snapshot_date
+                            ) AS previous_playtime_minutes
+                        FROM playtime_daily pt
+                    )
+                    SELECT
+                        snapshots.snapshot_date,
+                        snapshots.app_id,
+                        a.club_name,
+                        snapshots.steam_id,
+                        snapshots.playtime_minutes,
+                        (
+                            snapshots.playtime_minutes
+                            - snapshots.previous_playtime_minutes
+                        ) AS playtime_delta
+                    FROM snapshots
+                    JOIN games g ON g.app_id = snapshots.app_id
+                    JOIN accounts a
+                        ON a.steam_id = snapshots.steam_id
+                    WHERE g.is_approved = 1
+                        AND a.active = 1
+                        AND snapshots.previous_playtime_minutes IS NOT NULL
+                        AND (
+                            snapshots.playtime_minutes
+                            - snapshots.previous_playtime_minutes
+                        ) > 0
+                    ORDER BY
+                        snapshots.snapshot_date,
+                        snapshots.app_id,
+                        a.club_name,
+                        snapshots.steam_id
+                    """
+                )
+            )
+
     def approved_game_sheet_rows(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return list(

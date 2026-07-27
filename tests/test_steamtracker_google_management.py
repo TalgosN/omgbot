@@ -10,7 +10,11 @@ from steamtracker.management import (
     CatalogManagementService,
     parse_app_id,
 )
-from steamtracker.sheets import CURRENT_STATE_HEADERS, GoogleSheetsManager
+from steamtracker.sheets import (
+    CURRENT_STATE_HEADERS,
+    SHEET_SCHEMAS,
+    GoogleSheetsManager,
+)
 from steamtracker.store import StoreMetadata
 
 
@@ -152,7 +156,18 @@ class GoogleDataSyncTests(unittest.TestCase):
 
         self.storage.record_account_scan(
             "76561198000000001",
-            [OwnedGame(10, "Steam Game One", 50)],
+            [
+                OwnedGame(10, "Steam Game One", 30),
+                OwnedGame(30, "Unapproved Game", 10),
+            ],
+            scanned_at="2026-08-02T10:00:00+00:00",
+        )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Steam Game One", 50),
+                OwnedGame(30, "Unapproved Game", 40),
+            ],
             scanned_at="2026-08-03T10:00:00+00:00",
         )
         self.storage.record_account_scan(
@@ -189,6 +204,7 @@ class GoogleDataSyncTests(unittest.TestCase):
         self.current = FakeWorksheet(
             ["club_name", "nickname", "game_name"]
         )
+        self.dynamics = FakeWorksheet()
         self.settings_sheet = FakeWorksheet(
             ["Параметр", "Значение", "Комментарий"]
         )
@@ -197,7 +213,7 @@ class GoogleDataSyncTests(unittest.TestCase):
                 "Игры": self.games,
                 "Промо-план": FakeWorksheet(["Игра", "Статус"]),
                 "Current_State": self.current,
-                "Steam Динамика": FakeWorksheet(),
+                "Steam Динамика": self.dynamics,
                 "Ошибки Steam Tracker": FakeWorksheet(),
                 "Настройки Steam Tracker": self.settings_sheet,
             }
@@ -215,7 +231,9 @@ class GoogleDataSyncTests(unittest.TestCase):
         preview = self.manager.sync_tracker_data(self.storage)
         self.assertFalse(preview.applied)
         self.assertEqual(preview.current_state_rows, 4)
+        self.assertEqual(preview.dynamics_rows, 1)
         self.assertEqual(self.current.records, [])
+        self.assertEqual(self.dynamics.records, [])
 
         result = self.manager.sync_tracker_data(self.storage, apply=True)
 
@@ -251,6 +269,7 @@ class GoogleDataSyncTests(unittest.TestCase):
         for worksheet in (
             self.games,
             self.current,
+            self.dynamics,
             self.settings_sheet,
         ):
             self.assertTrue(
@@ -267,6 +286,49 @@ class GoogleDataSyncTests(unittest.TestCase):
         }
         self.assertEqual(settings["weekly_discount"], "100 рублей")
         self.assertEqual(settings["weekly_promo_enabled"], "false")
+
+    def test_sync_writes_only_positive_approved_playtime_dynamics(self):
+        from steamtracker.db import OwnedGame
+
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Steam Game One", 65),
+                OwnedGame(30, "Unapproved Game", 55),
+            ],
+            scanned_at="2026-08-03T14:00:00+00:00",
+        )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Steam Game One", 65),
+                OwnedGame(30, "Unapproved Game", 55),
+            ],
+            scanned_at="2026-08-04T10:00:00+00:00",
+        )
+
+        first = self.manager.sync_tracker_data(self.storage, apply=True)
+        second = self.manager.sync_tracker_data(self.storage, apply=True)
+
+        self.assertEqual(first.dynamics_rows, 1)
+        self.assertEqual(second.dynamics_rows, 1)
+        self.assertEqual(
+            self.dynamics.headers,
+            SHEET_SCHEMAS["Steam Динамика"],
+        )
+        self.assertEqual(
+            self.dynamics.records,
+            [
+                {
+                    "Дата": "2026-08-03",
+                    "steam_app_id": 10,
+                    "Клуб": "Клуб",
+                    "SteamID": "76561198000000001",
+                    "Игровое_время_минут": 65,
+                    "Изменение_минут": 35,
+                }
+            ],
+        )
 
     def test_settings_and_test_promotions_can_be_managed(self):
         self.manager.update_tracker_setting(
