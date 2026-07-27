@@ -146,6 +146,49 @@ class WeeklyPromotionTests(unittest.TestCase):
                 image_url=None,
             )
 
+    def test_test_promo_does_not_block_week_or_enter_rotation(self):
+        test_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="100 рублей",
+            valid_from="2026-08-03",
+            valid_to="2026-08-09",
+            manager_comment="Тест",
+            image_url=None,
+            is_test=True,
+        )
+        self.workflow.generate(test_id)
+
+        with self.assertRaisesRegex(ValueError, "Тестовое промо"):
+            self.workflow.approve_and_dispatch(
+                test_id,
+                approved_by="manager",
+            )
+
+        real = self.service.run(reference_date=date(2026, 8, 3))
+        self.assertTrue(real.created)
+        self.assertNotEqual(real.promotion_id, test_id)
+        current = self.storage.current_promotion("2026-08-03")
+        self.assertEqual(current["id"], real.promotion_id)
+
+        self.storage.delete_test_promotion(test_id)
+        with self.assertRaisesRegex(ValueError, "не найдено"):
+            self.storage.promotion_context(test_id)
+
+    def test_existing_draft_can_be_marked_and_deleted_as_test(self):
+        selection = self.service.run(reference_date=date(2026, 8, 3))
+
+        self.storage.mark_promotion_as_test(selection.promotion_id)
+
+        row = dict(
+            self.storage.promotion_admin_row(selection.promotion_id)
+        )
+        self.assertEqual(row["is_test"], 1)
+        self.assertEqual(row["rotation_status"], "released")
+        self.assertIsNone(
+            self.storage.current_promotion("2026-08-03")
+        )
+        self.storage.delete_test_promotion(selection.promotion_id)
+
 
 if __name__ == "__main__":
     unittest.main()

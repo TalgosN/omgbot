@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from steamtracker.llm import OpenRouterGenerator
+from steamtracker.admin import register_promo_admin_callbacks
 from steamtracker.jobs import (
     start_catalog_sync,
     start_license_sync,
@@ -142,6 +143,13 @@ class StageTwoTests(unittest.TestCase):
             self.assertFalse(start_store_enrichment())
             self.assertFalse(start_catalog_sync())
             self.assertFalse(start_weekly_promo())
+
+    def test_promo_admin_callbacks_are_registered_independently(self):
+        bot = Mock()
+
+        register_promo_admin_callbacks(bot)
+
+        bot.callback_query_handler.assert_called_once()
 
 
 if __name__ == "__main__":

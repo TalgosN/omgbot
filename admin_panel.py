@@ -97,6 +97,10 @@ def admin_func_handler(message, bot):
     if a == '📢 Рассылки':
         from admin_panel import broadcast_menu
         broadcast_menu(message, bot)
+
+    elif a == '📣 Промо':
+        from steamtracker.admin import promotion_admin_menu
+        promotion_admin_menu(message, bot)
         
     elif a == '⚙️ Обновить настройки':
         handle_update_config(message, bot)

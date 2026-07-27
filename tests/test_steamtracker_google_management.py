@@ -268,6 +268,39 @@ class GoogleDataSyncTests(unittest.TestCase):
         self.assertEqual(settings["weekly_discount"], "100 рублей")
         self.assertEqual(settings["weekly_promo_enabled"], "false")
 
+    def test_settings_and_test_promotions_can_be_managed(self):
+        self.manager.update_tracker_setting(
+            "weekly_discount",
+            "150 рублей",
+        )
+        settings = {
+            row["Параметр"]: row["Значение"]
+            for row in self.settings_sheet.records
+        }
+        self.assertEqual(settings["weekly_discount"], "150 рублей")
+
+        promotion_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="150 рублей",
+            valid_from="2026-08-03",
+            valid_to="2026-08-09",
+            manager_comment="Тест",
+            image_url=None,
+            is_test=True,
+        )
+        result = self.manager.sync_promotion(
+            self.storage,
+            promotion_id,
+            apply=True,
+        )
+        promo_sheet = self.spreadsheet.worksheets["Промо-план"]
+        self.assertTrue(result.applied)
+        self.assertEqual(promo_sheet.records[0]["Тестовый"], "Да")
+
+        removed = self.manager.remove_promotion(promotion_id)
+        self.assertTrue(removed)
+        self.assertEqual(promo_sheet.records, [])
+
 
 class CatalogManagementTests(unittest.TestCase):
     def setUp(self):

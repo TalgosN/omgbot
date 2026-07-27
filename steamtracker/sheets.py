@@ -75,6 +75,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "Статус",
         "Текст_сотрудникам",
         "ID",
+        "Тестовый",
         "steam_app_id",
         "Скидка",
         "Акция_с",
@@ -353,6 +354,36 @@ class GoogleSheetsManager:
                 ).strip()
         return result
 
+    def update_tracker_setting(self, key: str, value: str) -> None:
+        allowed = {
+            row["Параметр"]
+            for row in DEFAULT_TRACKER_SETTINGS
+        }
+        if key not in allowed:
+            raise ValueError(f"Неизвестная настройка Steam Tracker: {key}")
+        value = str(value).strip()
+        if not value:
+            raise ValueError("Значение настройки не может быть пустым")
+
+        spreadsheet = self.open()
+        worksheet = spreadsheet.worksheet_by_title(
+            "Настройки Steam Tracker"
+        )
+        records = self._merge_settings_records(
+            worksheet.get_all_records()
+        )
+        for record in records:
+            if str(
+                _sheet_value(record.get("Параметр")) or ""
+            ).strip() == key:
+                record["Значение"] = value
+                break
+        self._replace_table(
+            worksheet,
+            SHEET_SCHEMAS["Настройки Steam Tracker"],
+            records,
+        )
+
     def sync_tracker_data(
         self,
         storage: TrackerStorage,
@@ -546,6 +577,7 @@ class GoogleSheetsManager:
                 "postponed": "Отложено",
                 "cancelled": "Отменено",
             }.get(row["status"], row["status"]),
+            "Тестовый": "Да" if row["is_test"] else "",
             "Текст_сотрудникам": row["employee_text"] or "",
             "ID": row["id"],
             "steam_app_id": row["app_id"],
@@ -583,3 +615,21 @@ class GoogleSheetsManager:
             promotion_id=promotion_id,
             action=action,
         )
+
+    def remove_promotion(self, promotion_id: int) -> bool:
+        spreadsheet = self.open()
+        worksheet = spreadsheet.worksheet_by_title("Промо-план")
+        headers, _ = self._current_headers(worksheet, "Промо-план")
+        for header in SHEET_SCHEMAS["Промо-план"]:
+            if header not in headers:
+                headers.append(header)
+        records = [dict(row) for row in worksheet.get_all_records()]
+        filtered = [
+            row
+            for row in records
+            if _parse_app_id(row.get("ID")) != promotion_id
+        ]
+        if len(filtered) == len(records):
+            return False
+        self._replace_table(worksheet, headers, filtered)
+        return True

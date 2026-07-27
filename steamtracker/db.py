@@ -10,6 +10,22 @@ from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
 
+PROMOTION_STATUSES = {
+    "draft",
+    "review",
+    "approved",
+    "postponed",
+    "cancelled",
+}
+PROMOTION_STATUS_TRANSITIONS = {
+    "draft": {"postponed", "cancelled"},
+    "review": {"postponed", "cancelled"},
+    "approved": set(),
+    "postponed": {"cancelled"},
+    "cancelled": set(),
+}
+
+
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -141,6 +157,9 @@ class TrackerStorage:
                     image_url TEXT,
                     approved_by TEXT,
                     approved_at TEXT,
+                    is_test INTEGER NOT NULL DEFAULT 0 CHECK(
+                        is_test IN (0, 1)
+                    ),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (app_id) REFERENCES games(app_id)
@@ -202,7 +221,7 @@ class TrackerStorage:
                     ON game_rotation(cycle_number, app_id)
                     WHERE status IN ('reserved', 'used');
 
-                PRAGMA user_version = 3;
+                PRAGMA user_version = 4;
                 """
             )
             game_columns = {
@@ -213,6 +232,24 @@ class TrackerStorage:
                 conn.execute(
                     "ALTER TABLE games ADD COLUMN manager_description TEXT"
                 )
+            promotion_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(promotions)")
+            }
+            if "is_test" not in promotion_columns:
+                conn.execute(
+                    """
+                    ALTER TABLE promotions
+                    ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0
+                    CHECK(is_test IN (0, 1))
+                    """
+                )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_promotions_period_status
+                ON promotions(is_test, status, valid_from, valid_to)
+                """
+            )
 
     def import_legacy_accounts(self, legacy_db_path: str | Path) -> int:
         legacy_path = Path(legacy_db_path)
@@ -541,6 +578,7 @@ class TrackerStorage:
         valid_to: str | None,
         manager_comment: str | None,
         image_url: str | None,
+        is_test: bool = False,
     ) -> int:
         discount_text = discount_text.strip()
         if not discount_text:
@@ -559,12 +597,13 @@ class TrackerStorage:
             ).fetchone()
             if game is None or not game["is_approved"]:
                 raise ValueError("Промо можно создать только для согласованной игры")
-            if parsed_from and parsed_to:
+            if not is_test and parsed_from and parsed_to:
                 overlap = conn.execute(
                     """
                     SELECT id
                     FROM promotions
-                    WHERE status NOT IN ('postponed', 'cancelled')
+                    WHERE is_test = 0
+                        AND status NOT IN ('postponed', 'cancelled')
                         AND valid_from IS NOT NULL
                         AND valid_to IS NOT NULL
                         AND valid_from <= ?
@@ -581,8 +620,9 @@ class TrackerStorage:
                 """
                 INSERT INTO promotions (
                     app_id, discount_text, valid_from, valid_to,
-                    manager_comment, image_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    manager_comment, image_url, is_test,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     app_id,
@@ -591,6 +631,7 @@ class TrackerStorage:
                     valid_to,
                     manager_comment,
                     image_url,
+                    int(is_test),
                     timestamp,
                     timestamp,
                 ),
@@ -624,7 +665,8 @@ class TrackerStorage:
                 SELECT p.id, p.app_id, gr.cycle_number
                 FROM promotions p
                 LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
-                WHERE p.status NOT IN ('postponed', 'cancelled')
+                WHERE p.is_test = 0
+                    AND p.status NOT IN ('postponed', 'cancelled')
                     AND p.valid_from = ?
                     AND p.valid_to = ?
                 ORDER BY p.id
@@ -644,7 +686,8 @@ class TrackerStorage:
                 """
                 SELECT id
                 FROM promotions
-                WHERE status NOT IN ('postponed', 'cancelled')
+                WHERE is_test = 0
+                    AND status NOT IN ('postponed', 'cancelled')
                     AND valid_from IS NOT NULL
                     AND valid_to IS NOT NULL
                     AND valid_from <= ?
@@ -783,6 +826,18 @@ class TrackerStorage:
         vk_text: str,
     ) -> None:
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                "SELECT status FROM promotions WHERE id = ?",
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if promotion["status"] not in {"draft", "review"}:
+                raise ValueError(
+                    "Тексты можно менять только у черновика "
+                    "или промо на согласовании"
+                )
             conn.execute(
                 """
                 UPDATE promotions
@@ -813,6 +868,18 @@ class TrackerStorage:
         if all(value is None for value in (employee_text, telegram_text, vk_text)):
             raise ValueError("Не передан ни один текст для обновления")
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                "SELECT status FROM promotions WHERE id = ?",
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if promotion["status"] not in {"draft", "review"}:
+                raise ValueError(
+                    "Тексты можно менять только у черновика "
+                    "или промо на согласовании"
+                )
             conn.execute(
                 """
                 UPDATE promotions
@@ -864,6 +931,7 @@ class TrackerStorage:
     def approve_promotion(self, promotion_id: int, approved_by: str) -> None:
         timestamp = utc_now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             promo = conn.execute(
                 """
                 SELECT
@@ -879,6 +947,15 @@ class TrackerStorage:
             ).fetchone()
             if promo is None:
                 raise ValueError(f"Промо #{promotion_id} не найдено")
+            if promo["status"] == "approved":
+                return
+            if promo["is_test"]:
+                raise ValueError("Тестовое промо нельзя согласовать")
+            if promo["status"] != "review":
+                raise ValueError(
+                    "Согласовать можно только промо со статусом "
+                    "«На согласовании»"
+                )
             if not promo["is_approved"]:
                 raise ValueError("Нельзя согласовать промо исключённой игры")
             if not all(
@@ -971,8 +1048,31 @@ class TrackerStorage:
             )
 
     def set_promotion_status(self, promotion_id: int, status: str) -> None:
+        if status not in PROMOTION_STATUSES:
+            raise ValueError(f"Неизвестный статус промо: {status}")
         with self.connect() as conn:
-            cursor = conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                "SELECT status FROM promotions WHERE id = ?",
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            current_status = promotion["status"]
+            if current_status == status:
+                return
+            allowed = PROMOTION_STATUS_TRANSITIONS.get(current_status)
+            if allowed is None:
+                raise ValueError(
+                    f"У промо #{promotion_id} неизвестный текущий статус "
+                    f"«{current_status}»"
+                )
+            if status not in allowed:
+                raise ValueError(
+                    f"Нельзя изменить статус промо с "
+                    f"«{current_status}» на «{status}»"
+                )
+            conn.execute(
                 """
                 UPDATE promotions
                 SET status = ?, updated_at = ?
@@ -980,8 +1080,6 @@ class TrackerStorage:
                 """,
                 (status, utc_now(), promotion_id),
             )
-            if cursor.rowcount == 0:
-                raise ValueError(f"Промо #{promotion_id} не найдено")
             if status in {"postponed", "cancelled"}:
                 conn.execute(
                     """
@@ -992,6 +1090,289 @@ class TrackerStorage:
                     """,
                     (promotion_id,),
                 )
+
+    def mark_promotion_as_test(self, promotion_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                """
+                SELECT p.status, p.is_test,
+                    EXISTS(
+                        SELECT 1 FROM outbox o
+                        WHERE o.promotion_id = p.id
+                    ) AS has_outbox,
+                    EXISTS(
+                        SELECT 1 FROM game_rotation gr
+                        WHERE gr.promotion_id = p.id
+                            AND gr.status = 'used'
+                    ) AS rotation_used
+                FROM promotions p
+                WHERE p.id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if promotion["is_test"]:
+                return
+            if promotion["status"] == "approved":
+                raise ValueError("Согласованное промо нельзя пометить тестовым")
+            if promotion["has_outbox"] or promotion["rotation_used"]:
+                raise ValueError(
+                    "Промо с историей отправки или использованной ротацией "
+                    "нельзя пометить тестовым"
+                )
+            conn.execute(
+                """
+                UPDATE promotions
+                SET is_test = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now(), promotion_id),
+            )
+            conn.execute(
+                """
+                UPDATE game_rotation
+                SET status = 'released'
+                WHERE promotion_id = ?
+                    AND status = 'reserved'
+                """,
+                (promotion_id,),
+            )
+
+    def delete_test_promotion(self, promotion_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            promotion = conn.execute(
+                """
+                SELECT p.is_test,
+                    EXISTS(
+                        SELECT 1 FROM outbox o
+                        WHERE o.promotion_id = p.id
+                    ) AS has_outbox,
+                    EXISTS(
+                        SELECT 1 FROM game_rotation gr
+                        WHERE gr.promotion_id = p.id
+                            AND gr.status = 'used'
+                    ) AS rotation_used
+                FROM promotions p
+                WHERE p.id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if promotion is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            if not promotion["is_test"]:
+                raise ValueError(
+                    "Полностью удалить можно только тестовое промо"
+                )
+            if promotion["has_outbox"] or promotion["rotation_used"]:
+                raise ValueError(
+                    "Нельзя удалить промо с историей отправки "
+                    "или использованной ротацией"
+                )
+            conn.execute(
+                "DELETE FROM content_generations WHERE promotion_id = ?",
+                (promotion_id,),
+            )
+            conn.execute(
+                "DELETE FROM game_rotation WHERE promotion_id = ?",
+                (promotion_id,),
+            )
+            conn.execute(
+                "DELETE FROM promotions WHERE id = ?",
+                (promotion_id,),
+            )
+
+    def random_approved_game_id(self, *, rng=None) -> int:
+        with self.connect() as conn:
+            app_ids = [
+                int(row["app_id"])
+                for row in conn.execute(
+                    """
+                    SELECT app_id
+                    FROM games
+                    WHERE is_approved = 1
+                    ORDER BY app_id
+                    """
+                )
+            ]
+        if not app_ids:
+            raise ValueError("Нет согласованных игр")
+        return int((rng or random.SystemRandom()).choice(app_ids))
+
+    def current_promotion(
+        self,
+        reference_date: str,
+    ) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                """
+                SELECT
+                    p.*,
+                    g.steam_name,
+                    COALESCE(p.image_url, gm.header_image)
+                        AS publish_image_url,
+                    gr.cycle_number,
+                    gr.status AS rotation_status,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                    ) AS outbox_total,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                            AND o.status IN ('sent', 'ready_dry_run')
+                    ) AS outbox_ready,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                            AND o.status = 'error'
+                    ) AS outbox_errors
+                FROM promotions p
+                JOIN games g ON g.app_id = p.app_id
+                LEFT JOIN game_metadata gm ON gm.app_id = p.app_id
+                LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
+                WHERE p.is_test = 0
+                    AND p.status NOT IN ('postponed', 'cancelled')
+                    AND p.valid_from IS NOT NULL
+                    AND p.valid_to IS NOT NULL
+                    AND p.valid_from <= ?
+                    AND p.valid_to >= ?
+                ORDER BY p.id DESC
+                LIMIT 1
+                """,
+                (reference_date, reference_date),
+            ).fetchone()
+
+    def promotion_admin_row(self, promotion_id: int) -> sqlite3.Row:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    p.*,
+                    g.steam_name,
+                    COALESCE(p.image_url, gm.header_image)
+                        AS publish_image_url,
+                    CASE
+                        WHEN p.image_url IS NOT NULL
+                            AND TRIM(p.image_url) <> ''
+                        THEN 'manager'
+                        WHEN gm.header_image IS NOT NULL
+                            AND TRIM(gm.header_image) <> ''
+                        THEN 'steam'
+                        ELSE 'none'
+                    END AS image_source,
+                    gr.cycle_number,
+                    gr.status AS rotation_status,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                    ) AS outbox_total,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                            AND o.status IN ('sent', 'ready_dry_run')
+                    ) AS outbox_ready,
+                    (
+                        SELECT COUNT(*) FROM outbox o
+                        WHERE o.promotion_id = p.id
+                            AND o.status = 'error'
+                    ) AS outbox_errors
+                FROM promotions p
+                JOIN games g ON g.app_id = p.app_id
+                LEFT JOIN game_metadata gm ON gm.app_id = p.app_id
+                LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
+                WHERE p.id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            return row
+
+    def list_promotions(
+        self,
+        *,
+        is_test: bool | None = None,
+        statuses: Sequence[str] | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        conditions: list[str] = []
+        parameters: list[object] = []
+        if is_test is not None:
+            conditions.append("p.is_test = ?")
+            parameters.append(int(is_test))
+        if statuses:
+            unknown = set(statuses) - PROMOTION_STATUSES
+            if unknown:
+                raise ValueError(
+                    "Неизвестные статусы: " + ", ".join(sorted(unknown))
+                )
+            placeholders = ", ".join("?" for _ in statuses)
+            conditions.append(f"p.status IN ({placeholders})")
+            parameters.extend(statuses)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        parameters.extend((limit, offset))
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT
+                        p.id,
+                        p.app_id,
+                        p.status,
+                        p.discount_text,
+                        p.valid_from,
+                        p.valid_to,
+                        p.is_test,
+                        p.approved_by,
+                        p.approved_at,
+                        p.created_at,
+                        g.steam_name,
+                        gr.cycle_number,
+                        (
+                            SELECT COUNT(*) FROM outbox o
+                            WHERE o.promotion_id = p.id
+                                AND o.status = 'error'
+                        ) AS outbox_errors
+                    FROM promotions p
+                    JOIN games g ON g.app_id = p.app_id
+                    LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
+                    {where}
+                    ORDER BY
+                        COALESCE(p.valid_from, p.created_at) DESC,
+                        p.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    parameters,
+                )
+            )
+
+    def outbox_admin_rows(self, *, limit: int = 30) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        o.id,
+                        o.promotion_id,
+                        o.channel,
+                        o.status,
+                        o.external_id,
+                        o.error,
+                        o.updated_at,
+                        g.steam_name
+                    FROM outbox o
+                    JOIN promotions p ON p.id = o.promotion_id
+                    JOIN games g ON g.app_id = p.app_id
+                    ORDER BY o.id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            )
 
     def approved_games_for_enrichment(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
@@ -1158,6 +1539,7 @@ class TrackerStorage:
                             SELECT MAX(p.valid_to)
                             FROM promotions p
                             WHERE p.app_id = g.app_id
+                                AND p.is_test = 0
                                 AND p.status = 'approved'
                         ) AS last_promotion,
                         (

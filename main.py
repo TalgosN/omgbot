@@ -793,6 +793,9 @@ register_admin_consumables_callbacks(bot)
 from steamtracker.telegram import register_steamtracker_handlers
 register_steamtracker_handlers(bot)
 
+from steamtracker.admin import register_promo_admin_callbacks
+register_promo_admin_callbacks(bot)
+
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,), name="omgbot-scheduler", daemon=True).start()
 

@@ -26,41 +26,52 @@ def _workflow(
     )
 
 
-def _controls(promotion_id: int):
+def _controls(
+    promotion_id: int,
+    *,
+    status: str,
+    is_test: bool,
+):
     from telebot import types
 
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(
-            "✅ Согласовать",
-            callback_data=f"{CALLBACK_PREFIX}:approve:{promotion_id}",
-        ),
-        types.InlineKeyboardButton(
-            "🎲 Другая игра",
-            callback_data=f"{CALLBACK_PREFIX}:replace:{promotion_id}",
-        ),
-    )
-    markup.add(
-        types.InlineKeyboardButton(
-            "🔄 Переделать всё",
-            callback_data=f"{CALLBACK_PREFIX}:all:{promotion_id}",
-        ),
-        types.InlineKeyboardButton(
-            "👥 Текст сотрудникам",
-            callback_data=f"{CALLBACK_PREFIX}:employee:{promotion_id}",
-        ),
-    )
-    markup.add(
-        types.InlineKeyboardButton(
-            "📣 Анонсы",
-            callback_data=f"{CALLBACK_PREFIX}:social:{promotion_id}",
-        ),
-        types.InlineKeyboardButton(
-            "⏸ Отложить",
-            callback_data=f"{CALLBACK_PREFIX}:postpone:{promotion_id}",
-        ),
-    )
-    return markup
+    if status == "review":
+        if not is_test:
+            markup.add(
+                types.InlineKeyboardButton(
+                    "✅ Согласовать",
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:approve:{promotion_id}"
+                    ),
+                ),
+                types.InlineKeyboardButton(
+                    "🎲 Другая игра",
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:replace:{promotion_id}"
+                    ),
+                ),
+            )
+        markup.add(
+            types.InlineKeyboardButton(
+                "🔄 Переделать всё",
+                callback_data=f"{CALLBACK_PREFIX}:all:{promotion_id}",
+            ),
+            types.InlineKeyboardButton(
+                "👥 Текст сотрудникам",
+                callback_data=f"{CALLBACK_PREFIX}:employee:{promotion_id}",
+            ),
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                "📣 Анонсы",
+                callback_data=f"{CALLBACK_PREFIX}:social:{promotion_id}",
+            ),
+            types.InlineKeyboardButton(
+                "⏸ Отложить",
+                callback_data=f"{CALLBACK_PREFIX}:postpone:{promotion_id}",
+            ),
+        )
+    return markup if status == "review" else None
 
 
 def _sync_promotion_best_effort(
@@ -120,7 +131,11 @@ def send_promotion_preview(
             "Публикация выключена: после согласования задания останутся "
             "в dry-run outbox."
         ),
-        reply_markup=_controls(promotion_id),
+        reply_markup=_controls(
+            promotion_id,
+            status=promo["status"],
+            is_test=bool(promo["is_test"]),
+        ),
     )
 
 
@@ -229,6 +244,11 @@ def register_steamtracker_handlers(bot) -> bool:
                     promotion_id,
                 )
                 bot.answer_callback_query(call.id, "Новый вариант готов.")
+                bot.edit_message_reply_markup(
+                    call.message.chat.id,
+                    call.message.message_id,
+                    reply_markup=None,
+                )
                 send_promotion_preview(
                     bot,
                     storage,

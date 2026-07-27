@@ -100,6 +100,29 @@ class PromotionWorkflowTests(unittest.TestCase):
         self.assertEqual(count, 3)
         self.assertEqual(generations, 1)
 
+    def test_approved_promotion_cannot_be_changed_or_cancelled(self):
+        promotion_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="100 рублей",
+            valid_from="2026-08-01",
+            valid_to="2026-08-07",
+            manager_comment=None,
+            image_url=None,
+        )
+        self.workflow.generate(promotion_id)
+        self.workflow.approve_and_dispatch(
+            promotion_id,
+            approved_by="manager",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Тексты можно менять"):
+            self.workflow.regenerate(promotion_id, section="all")
+        with self.assertRaisesRegex(ValueError, "Нельзя изменить статус"):
+            self.storage.set_promotion_status(
+                promotion_id,
+                "cancelled",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
