@@ -1,3 +1,4 @@
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,7 +182,7 @@ class GoogleDataSyncTests(unittest.TestCase):
                 {
                     "name": "Old Game Two",
                     "player_count": "1",
-                    "description": "Старое описание 2",
+                    "description": float("nan"),
                 },
             ],
         )
@@ -241,6 +242,25 @@ class GoogleDataSyncTests(unittest.TestCase):
             "Новое описание Steam",
         )
         self.assertEqual(game_one["description"], "Старое описание")
+        game_two = next(
+            row
+            for row in self.games.records
+            if row["steam_app_id"] == 20
+        )
+        self.assertEqual(game_two["description"], "")
+        for worksheet in (
+            self.games,
+            self.current,
+            self.settings_sheet,
+        ):
+            self.assertTrue(
+                all(
+                    not isinstance(value, float)
+                    or math.isfinite(value)
+                    for row in worksheet.records
+                    for value in row.values()
+                )
+            )
         settings = {
             row["Параметр"]: row["Значение"]
             for row in self.settings_sheet.records
@@ -364,6 +384,34 @@ class CatalogManagementTests(unittest.TestCase):
         self.assertFalse(result.applied)
         self.assertTrue(result.errors)
         self.assertEqual(self.approved_count(), 2)
+
+    def test_blank_google_cells_are_not_treated_as_nan_text(self):
+        result = self.service.sync(
+            [
+                {
+                    "steam_app_id": 10,
+                    "name": "Game One",
+                    "player_count": "2",
+                    "description": float("nan"),
+                    "Описание_менеджера": float("nan"),
+                    "Статус": float("nan"),
+                }
+            ],
+            apply=True,
+        )
+
+        self.assertTrue(result.applied)
+        self.assertEqual(result.errors, [])
+        with self.storage.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT base_description, manager_description
+                FROM games
+                WHERE app_id = 10
+                """
+            ).fetchone()
+        self.assertEqual(row["base_description"], "Описание 1")
+        self.assertIsNone(row["manager_description"])
 
     def test_app_id_parser_accepts_id_and_steam_url(self):
         self.assertEqual(parse_app_id("620980"), 620980)

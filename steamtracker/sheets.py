@@ -1,6 +1,7 @@
 """Безопасная подготовка, чтение и обновление листов Steam Tracker."""
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -162,8 +163,16 @@ def _json_text(value: object) -> str:
     return ", ".join(str(item) for item in items)
 
 
+def _sheet_value(value: object):
+    if value is None:
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    return value
+
+
 def _parse_app_id(value: object) -> int | None:
-    text = str(value or "").strip()
+    text = str(_sheet_value(value) or "").strip()
     if not text:
         return None
     try:
@@ -228,7 +237,10 @@ class GoogleSheetsManager:
             include_tailing_empty_rows=False,
         )
         values = [headers] + [
-            [record.get(header, "") for header in headers]
+            [
+                _sheet_value(record.get(header, ""))
+                for header in headers
+            ]
             for record in records
         ]
         worksheet.update_values(
@@ -332,9 +344,13 @@ class GoogleSheetsManager:
         )
         result: dict[str, str] = {}
         for row in worksheet.get_all_records():
-            key = str(row.get("Параметр") or "").strip()
+            key = str(
+                _sheet_value(row.get("Параметр")) or ""
+            ).strip()
             if key:
-                result[key] = str(row.get("Значение") or "").strip()
+                result[key] = str(
+                    _sheet_value(row.get("Значение")) or ""
+                ).strip()
         return result
 
     def sync_tracker_data(
@@ -403,9 +419,13 @@ class GoogleSheetsManager:
     def _merge_settings_records(existing: list[dict]) -> list[dict]:
         records = [dict(row) for row in existing]
         positions = {
-            str(row.get("Параметр") or "").strip(): index
+            str(
+                _sheet_value(row.get("Параметр")) or ""
+            ).strip(): index
             for index, row in enumerate(records)
-            if str(row.get("Параметр") or "").strip()
+            if str(
+                _sheet_value(row.get("Параметр")) or ""
+            ).strip()
         }
         for default in DEFAULT_TRACKER_SETTINGS:
             key = default["Параметр"]
@@ -414,9 +434,13 @@ class GoogleSheetsManager:
                 positions[key] = len(records)
                 records.append(dict(default))
                 continue
-            if not str(records[index].get("Значение") or "").strip():
+            if not str(
+                _sheet_value(records[index].get("Значение")) or ""
+            ).strip():
                 records[index]["Значение"] = default["Значение"]
-            if not str(records[index].get("Комментарий") or "").strip():
+            if not str(
+                _sheet_value(records[index].get("Комментарий")) or ""
+            ).strip():
                 records[index]["Комментарий"] = default["Комментарий"]
         return records
 
@@ -438,8 +462,8 @@ class GoogleSheetsManager:
         for source in existing:
             record = dict(source)
             source_name = str(
-                record.get("Название_Steam")
-                or record.get("name")
+                _sheet_value(record.get("Название_Steam"))
+                or _sheet_value(record.get("name"))
                 or ""
             ).strip()
             if normalize_name(source_name) in EXCLUDED_GAMES:

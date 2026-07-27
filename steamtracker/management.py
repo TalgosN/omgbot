@@ -1,5 +1,6 @@
 """Транзакционное управление согласованным каталогом из Google Sheets."""
 
+import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -19,8 +20,24 @@ EXCLUDED_STATUSES = {
 DRAFT_STATUSES = {"черновик", "draft"}
 
 
+def _cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    return str(value).strip()
+
+
+def _first_cell(row: dict, *keys: str) -> str:
+    for key in keys:
+        value = _cell_text(row.get(key))
+        if value:
+            return value
+    return ""
+
+
 def parse_app_id(value: object) -> int | None:
-    text = str(value or "").strip()
+    text = _cell_text(value)
     if not text:
         return None
     if text.isdigit():
@@ -30,7 +47,7 @@ def parse_app_id(value: object) -> int | None:
 
 
 def parse_player_count(value: object) -> int:
-    text = str(value or "").strip()
+    text = _cell_text(value)
     if not text:
         raise ValueError("не заполнено количество игроков")
     try:
@@ -79,21 +96,23 @@ class CatalogManagementService:
         seen_app_ids: set[int] = set()
 
         for index, row in enumerate(rows, start=2):
-            name = str(
-                row.get("name")
-                or row.get("Игра")
-                or row.get("Название")
-                or ""
-            ).strip()
-            app_id_value = (
-                row.get("steam_app_id")
-                or row.get("Steam AppID")
-                or row.get("Ссылка Steam")
+            name = _first_cell(
+                row,
+                "name",
+                "Игра",
+                "Название",
+                "Название_Steam",
+            )
+            app_id_value = _first_cell(
+                row,
+                "steam_app_id",
+                "Steam AppID",
+                "Ссылка Steam",
             )
             if not name and not app_id_value:
                 continue
 
-            status = str(row.get("Статус") or "").strip().casefold()
+            status = _cell_text(row.get("Статус")).casefold()
             normalized_name = normalize_name(name)
             if normalized_name in EXCLUDED_GAMES:
                 excluded += 1
@@ -126,8 +145,11 @@ class CatalogManagementService:
             metadata = None
             try:
                 player_count = parse_player_count(
-                    row.get("player_count")
-                    or row.get("Количество_игроков")
+                    _first_cell(
+                        row,
+                        "player_count",
+                        "Количество_игроков",
+                    )
                 )
                 if known_app is None:
                     metadata = self.store_client.get_metadata(app_id)
@@ -143,12 +165,12 @@ class CatalogManagementService:
                 or (metadata.name if metadata else None)
                 or f"Steam App {app_id}"
             )
-            manager_description = str(
-                row.get("Описание_менеджера")
-                or row.get("Ручное_описание")
-                or ""
-            ).strip()
-            legacy_description = str(row.get("description") or "").strip()
+            manager_description = _first_cell(
+                row,
+                "Описание_менеджера",
+                "Ручное_описание",
+            )
+            legacy_description = _cell_text(row.get("description"))
             active_games.append(
                 {
                     "app_id": app_id,
