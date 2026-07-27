@@ -377,3 +377,33 @@ docker compose logs -f bot
 ---
 
 Владелец и production-оператор должны иметь актуальную копию `.env`, `db`, `data` и `key` в защищённом хранилище. Git не заменяет backup.
+## KPI Telegram Mini App
+
+The first-stage KPI Mini App runs as two additional Docker Compose services:
+
+- `kpi_web` serves the authenticated KPI interface on the internal port `8080`;
+- `kpi_tunnel` publishes it through a temporary `trycloudflare.com` HTTPS URL.
+
+Start or update the bot, app, and test tunnel:
+
+```bash
+bash scripts/deploy_kpi_quick_tunnel.sh
+```
+
+The script builds the services, waits for the generated HTTPS URL, and assigns
+it to the default Telegram menu button. To inspect the URL manually:
+
+```bash
+docker compose logs kpi_tunnel --tail=50
+```
+
+To register a URL manually:
+
+```bash
+docker compose exec bot python scripts/set_kpi_menu_button.py https://example.trycloudflare.com
+```
+
+The helper also saves the current URL in `data/kpi_webapp_url.txt`, so the
+`/kpi` bot command starts using it without another bot restart. Quick Tunnel
+URLs can change after a tunnel restart; rerun the last two commands when that
+happens.

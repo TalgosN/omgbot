@@ -9,3 +9,38 @@ services:
       - ./data:/app/data
       - ./key:/app/key
       - ./Reports:/app/Reports
+  kpi_web:
+    build: .
+    command:
+      - "gunicorn"
+      - "--bind=0.0.0.0:8080"
+      - "--workers=2"
+      - "--threads=4"
+      - "--timeout=60"
+      - "kpi_web:app"
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./db:/app/db
+      - ./data:/app/data
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  kpi_tunnel:
+    image: cloudflare/cloudflared:latest
+    command:
+      - "tunnel"
+      - "--no-autoupdate"
+      - "--protocol"
+      - "http2"
+      - "--url"
+      - "http://kpi_web:8080"
+    restart: unless-stopped
+    depends_on:
+      kpi_web:
+        condition: service_healthy

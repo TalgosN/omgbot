@@ -705,7 +705,7 @@ def _sheet_month(value):
         return None
 
 
-def _kpi_sheet_context(spreadsheet):
+def _kpi_sheet_context(spreadsheet, unformatted=False):
     employees = spreadsheet.worksheet_by_title('Сотрудники').get_values(
         start='A1',
         end='B60',
@@ -720,16 +720,26 @@ def _kpi_sheet_context(spreadsheet):
             and str(row[1]).strip() not in ('', '-')
         )
     }
-    main_values = spreadsheet.worksheet_by_title('Главный').get_values(
+    main_value_options = {}
+    if unformatted:
+        main_value_options['value_render'] = (
+            pygsheets.ValueRenderOption.UNFORMATTED_VALUE
+        )
+    main_worksheet = spreadsheet.worksheet_by_title('Главный')
+    main_values = main_worksheet.get_values(
         start='A1',
         end='AA60',
         returnas='matrix',
+        **main_value_options,
     )
-    selected_month = (
-        main_values[0][2]
-        if main_values and len(main_values[0]) > 2
-        else datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-    )
+    if unformatted:
+        selected_month = main_worksheet.get_value('C1')
+    elif main_values and len(main_values[0]) > 2:
+        selected_month = main_values[0][2]
+    else:
+        selected_month = datetime.now(
+            pytz.timezone('Europe/Moscow')
+        ).strftime('%Y-%m-%d')
     return nickname_to_login, main_values, selected_month
 
 
@@ -887,7 +897,10 @@ def compare_server_kpi_with_sheet(spreadsheet=None):
             service_file='key/omgbot-430116-e9a4d9c69b7f.json'
         )
         spreadsheet = client.open('KPI OMG VR')
-    nickname_to_login, main_values, selected_month = _kpi_sheet_context(spreadsheet)
+    nickname_to_login, main_values, selected_month = _kpi_sheet_context(
+        spreadsheet,
+        unformatted=True,
+    )
     server_rows = calculate_monthly_kpi(
         selected_month,
         employee_logins=nickname_to_login.values(),

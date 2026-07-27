@@ -212,6 +212,38 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertEqual(by_login['@yellow']['zone'], '🟡')
         self.assertEqual(by_login['@red']['zone'], '🔴')
         self.assertEqual(by_login['@idle']['zone'], '⚪')
+        self.assertEqual(by_login['@green']['rank'], 1)
+        self.assertEqual(by_login['@yellow']['rank'], 2)
+        self.assertEqual(by_login['@red']['rank'], 3)
+        self.assertIsNone(by_login['@idle']['rank'])
+
+    def test_comparison_ignores_legacy_rank_for_employee_without_shifts(self):
+        differences = kpi_calculator.compare_with_sheet(
+            [{'login': '@idle', 'shifts': 0, 'rank': None}],
+            [{'login': '@idle', 'shifts': 0, 'rank': 19}],
+        )
+
+        self.assertEqual(differences, [])
+
+    def test_month_can_be_closed_and_reopened_without_locking_history(self):
+        kpi_calculator.initialize_kpi_calculation_schema(self.db_path)
+
+        closed = kpi_calculator.set_month_status(
+            '2026-07',
+            True,
+            '@manager',
+            db_path=self.db_path,
+        )
+        reopened = kpi_calculator.set_month_status(
+            '2026-07',
+            False,
+            '@manager',
+            db_path=self.db_path,
+        )
+
+        self.assertTrue(closed['is_closed'])
+        self.assertFalse(reopened['is_closed'])
+        self.assertEqual(reopened['updated_by_login'], '@manager')
 
     def test_penalty_cancellation_keeps_audit_and_removes_impact(self):
         conn = sqlite3.connect(self.db_path)

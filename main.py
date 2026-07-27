@@ -1,4 +1,5 @@
 import telebot
+import os
 from constants import *
 from sheets import *
 import sqlite3
@@ -676,6 +677,33 @@ def roll(message):
     emoji = random.choice(emojis['roll'])
             
     send_react(message,emoji)
+
+
+@bot.message_handler(commands=['kpi'])
+def open_kpi_app(message):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    webapp_url = KPI_WEBAPP_URL
+    runtime_url_path = os.path.join('data', 'kpi_webapp_url.txt')
+    if not webapp_url and os.path.exists(runtime_url_path):
+        with open(runtime_url_path, 'r', encoding='utf-8') as runtime_url_file:
+            webapp_url = runtime_url_file.read().strip()
+    if not webapp_url:
+        bot.send_message(
+            message.chat.id,
+            'KPI Mini App ещё не подключён к HTTPS-ссылке.',
+        )
+        return
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(telebot.types.InlineKeyboardButton(
+        '📊 Открыть KPI',
+        web_app=telebot.types.WebAppInfo(webapp_url),
+    ))
+    bot.send_message(
+        message.chat.id,
+        'KPI всех сотрудников:',
+        reply_markup=markup,
+    )
 
 
 

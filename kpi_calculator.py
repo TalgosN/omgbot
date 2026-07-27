@@ -131,6 +131,13 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (employee_login, period_month)
                 );
+
+                CREATE TABLE IF NOT EXISTS kpi_month_status (
+                    period_month DATE PRIMARY KEY,
+                    is_closed INTEGER NOT NULL DEFAULT 0,
+                    updated_by_login TEXT,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 '''
             )
             seed_month = '1970-01-01'
@@ -280,6 +287,87 @@ def cancel_penalty(
             return cursor.rowcount == 1
     finally:
         conn.close()
+
+
+def list_penalties(period_month, db_path=DB_PATH):
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            '''
+            SELECT id, employee_login, period_month, reason, impact_pct,
+                   status, created_by_login, source, created_at,
+                   cancelled_by_login, cancelled_at, cancel_reason
+            FROM kpi_penalties
+            WHERE date(period_month)=date(?)
+            ORDER BY created_at DESC, id DESC
+            ''',
+            (_month_start(period_month).isoformat(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_month_status(period_month, db_path=DB_PATH):
+    initialize_kpi_calculation_schema(db_path)
+    month = _month_start(period_month).isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            '''
+            SELECT period_month, is_closed, updated_by_login, updated_at
+            FROM kpi_month_status
+            WHERE date(period_month)=date(?)
+            ''',
+            (month,),
+        ).fetchone()
+        if not row:
+            return {
+                'period_month': month,
+                'is_closed': False,
+                'updated_by_login': None,
+                'updated_at': None,
+            }
+        result = dict(row)
+        result['is_closed'] = bool(result['is_closed'])
+        return result
+    finally:
+        conn.close()
+
+
+def set_month_status(
+    period_month,
+    is_closed,
+    updated_by_login,
+    db_path=DB_PATH,
+):
+    initialize_kpi_calculation_schema(db_path)
+    month = _month_start(period_month).isoformat()
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                '''
+                INSERT INTO kpi_month_status (
+                    period_month, is_closed, updated_by_login, updated_at
+                ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(period_month) DO UPDATE SET
+                    is_closed=excluded.is_closed,
+                    updated_by_login=excluded.updated_by_login,
+                    updated_at=CURRENT_TIMESTAMP
+                ''',
+                (
+                    month,
+                    int(bool(is_closed)),
+                    _normalize_login(updated_by_login),
+                ),
+            )
+    finally:
+        conn.close()
+    return get_month_status(month, db_path)
 
 
 def set_monthly_stream(
@@ -609,7 +697,15 @@ def calculate_monthly_kpi(
         )
         result.append(row)
 
-    ranked = sorted(result, key=lambda item: item['total_pct'], reverse=True)
+    participants = [row for row in result if row['shifts'] > 0]
+    for row in result:
+        row['rank'] = None
+
+    ranked = sorted(
+        participants,
+        key=lambda item: item['total_pct'],
+        reverse=True,
+    )
     previous_value = None
     previous_rank = 0
     for index, row in enumerate(ranked, start=1):
@@ -618,7 +714,6 @@ def calculate_monthly_kpi(
             previous_value = row['total_pct']
         row['rank'] = previous_rank
 
-    participants = [row for row in result if row['shifts'] > 0]
     average = (
         sum(row['total_pct'] for row in participants) / len(participants)
         if participants else 0.0
@@ -677,6 +772,8 @@ def compare_with_sheet(server_rows, sheet_rows):
             })
             continue
         for field in numeric_fields:
+            if field == 'rank' and float(server_row.get('shifts', 0) or 0) <= 0:
+                continue
             server_value = float(server_row.get(field, 0) or 0)
             sheet_value = float(sheet_row.get(field, 0) or 0)
             tolerance = 0.0001 if field not in ('rank', 'penalties') else 0
