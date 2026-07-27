@@ -15,20 +15,19 @@ HELP_MENU_BUTTONS = (
 )
 OMG_SHIFT_URL = 'http://31.129.109.167/?page=settings'
 GOOGLE_SHEET_LINKS = (
-    ('📊 KPI OMG VR', 'https://docs.google.com/spreadsheets/d/1abZHTzME77-GHuU9L-32nANki671cSq3TPHIrWmXjZY/edit?gid=787957765#gid=787957765'),
-    ('🧮 KPI helper', 'https://docs.google.com/spreadsheets/d/1JHOLFykKPbQ0Ou2zqq4GMPTVHFst8iFJxHkpMVjFlYk/edit?gid=972562992#gid=972562992'),
-    ('👥 Сотрудники', 'https://docs.google.com/spreadsheets/d/1McS0h3TxnxA-QqIWfR37LHBTN3D7TDSvzz3nitAaq98/edit?gid=0#gid=0'),
-    ('📝 Клиентская база', 'https://docs.google.com/spreadsheets/d/1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI/edit?gid=44645110#gid=44645110'),
+    ('📊 KPI OMG VR', 'https://docs.google.com/spreadsheets/d/1Jsz9im2ss9NIGfDcSLuIv37op_5QzaB03m6Z_JjDE9U/edit?gid=270994446#gid=270994446'),
+    ('🧮 KPI helper', 'https://docs.google.com/spreadsheets/d/1McS0h3TxnxA-QqIWfR37LHBTN3D7TDSvzz3nitAaq98/edit?gid=0#gid=0'),
+    ('👥 Сотрудники', 'https://docs.google.com/spreadsheets/d/1KyApsY0L_TL_WhpJDagB2VSZuvyxs4vb1aicgAHtUPk/edit?gid=0#gid=0'),
     ('⚙️ Виарыч', 'https://docs.google.com/spreadsheets/d/1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q/edit?gid=1951407525#gid=1951407525'),
-    ('🚪 Открытия и закрытия', 'https://docs.google.com/spreadsheets/d/1Jsz9im2ss9NIGfDcSLuIv37op_5QzaB03m6Z_JjDE9U/edit?gid=270994446#gid=270994446'),
-    ('📦 Расходники', 'https://docs.google.com/spreadsheets/d/1KyApsY0L_TL_WhpJDagB2VSZuvyxs4vb1aicgAHtUPk/edit?gid=0#gid=0'),
+    ('🚪 Открытия и закрытия', 'https://docs.google.com/spreadsheets/d/1JHOLFykKPbQ0Ou2zqq4GMPTVHFst8iFJxHkpMVjFlYk/edit?gid=972562992#gid=972562992'),
+    ('📦 Расходники', 'https://docs.google.com/spreadsheets/d/1abZHTzME77-GHuU9L-32nANki671cSq3TPHIrWmXjZY/edit?gid=787957765#gid=787957765'),
 )
 
 
 def steamtracker_url():
     spreadsheet_id = os.getenv(
         'STEAMTRACKER_SPREADSHEET_ID',
-        '1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI',
+        '1h_pCl6tpwYAhZveVSfUVGh4awl0r3yVCv1EwIIhJBZw',
     )
     return f'https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit'
 

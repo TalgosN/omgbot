@@ -84,10 +84,14 @@ class HelpMenuTest(unittest.TestCase):
             markup = self.menu.resource_links_markup()
 
         buttons = [button for row in markup.rows for button in row]
-        self.assertEqual(len(buttons), 9)
+        self.assertEqual(len(buttons), 8)
         self.assertEqual(buttons[0].url, self.menu.OMG_SHIFT_URL)
         self.assertTrue(any(
             button.url.endswith('/current-steam-sheet/edit')
+            for button in buttons
+        ))
+        self.assertFalse(any(
+            '1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI' in button.url
             for button in buttons
         ))
         self.assertFalse(any('Расписание' in button.text for button in buttons))
