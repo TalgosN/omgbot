@@ -98,7 +98,7 @@ class PayrollReportTests(unittest.TestCase):
 
     def test_calculates_all_local_payroll_sources(self):
         with patch.object(finance, 'PAYROLL_DB_PATH', self.db_path):
-            data = finance.get_data_pay_report(
+            data, _skipped = finance._collect_payroll_report_data(
                 '2026-07-20 00:00:00', '2026-07-22 00:00:00'
             )
 

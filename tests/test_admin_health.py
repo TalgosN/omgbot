@@ -126,12 +126,14 @@ class AdminHealthTest(unittest.TestCase):
         manager_buttons = [
             '⚙️ Обновить настройки',
             '🩺 Статус систем',
+            '🧪 Диагностика KPI',
             '📦 Тест отчета по расходникам',
             '⬅️ Назад в админку',
         ]
         owner_buttons = [
             '⚙️ Обновить настройки',
             '🩺 Статус систем',
+            '🧪 Диагностика KPI',
             '📊 Тест недельного отчета',
             '📦 Тест отчета по расходникам',
             '⬅️ Назад в админку',
@@ -173,6 +175,35 @@ class AdminHealthTest(unittest.TestCase):
             self.admin.admin_extra_menu_handler(message, bot)
 
         handler.assert_called_once_with(message, bot)
+
+    def test_kpi_shadow_report_groups_differences_and_import_status(self):
+        report = self.admin.build_kpi_shadow_report(
+            {
+                'period_month': '2026-07-01',
+                'employees': 20,
+                'differences': [
+                    {'login': '@first', 'field': 'forms'},
+                    {'login': '@first', 'field': 'forms'},
+                    {'login': '@second', 'field': 'rank'},
+                ],
+            },
+            {
+                'penalty_sources': {
+                    'legacy_google_sheet': 14,
+                    'legacy_db': 10,
+                },
+                'current_penalties': 2,
+                'current_streams': 7,
+            },
+        )
+
+        self.assertIn('Расхождений: <b>3</b>', report)
+        self.assertIn('Затронуто сотрудников: <b>2</b>', report)
+        self.assertIn('Анкеты: <b>2</b>', report)
+        self.assertIn('Рейтинг: <b>1</b>', report)
+        self.assertIn('Google Sheets: <b>14</b>', report)
+        self.assertIn('старой БД: <b>10</b>', report)
+        self.assertIn('Трансляции месяца: <b>7</b>', report)
 
 
 if __name__ == "__main__":

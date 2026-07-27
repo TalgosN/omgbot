@@ -14,6 +14,7 @@ from kpi import init
 import requests
 from sender import safe_send
 from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
+from kpi_calculator import initialize_kpi_calculation_schema
 
 validate_config()
 bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
@@ -41,13 +42,6 @@ def all_active_tasks_schedule():
     text="\n".join(list_title)
     bot.send_message(CHATS['reports'], f'🔺 Невыполненные #задачи:\n\n{text}\n\n @OMGVR_Admin_Bot') #здесь в канал репорт CHATS['reports']
 
-
-
-
-
-def send_status_bot(): #отправка статуса о работе бота в ЛС
-    bot.send_message(CHATS['me'], f'Опять работа:(')
-    
 
 
 
@@ -336,15 +330,6 @@ def create_tables_KPI():
     conn.close()
 
 
-def define_name(message):
-    conn=sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE login=?", ("@"+message.from_user.username,))
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-    return users
-
 user_last_message_time = {}
 
 def is_spam(message):
@@ -404,6 +389,7 @@ Indexes of users
 create_tables()
 initialize_permissions_schema()
 create_tables_KPI()
+initialize_kpi_calculation_schema()
 finalize_legacy_kpi_approval()
 kpi.initialize_hashtag_events()
 
@@ -681,78 +667,6 @@ def handler_left_member(message): # Прощание с сотрудником �
 
 
   
-
-
-def stats(message, bot=bot):
-    if is_spam(message):
-        for i in range(len(tables)):
-            update_table(tables[i])
-            
-        if "@" not in message.text and " " not in message.text:
-            user_name = "@"+message.from_user.username
-        elif  "@OMGVR_Admin_Bot" in message.text:
-            user_name = "@"+message.from_user.username
-        else:
-            user_name = message.text[message.text.find(" ")+1:]
-
-        begin = datetime.now().replace(day=1)
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-        count_list=[]
-        for i in action:
-            count_list.append(str(def_count(action[i],user_name,begin,today)))       
-        
-        sale_abik = def_sum_bonus('abik',user_name,begin,today)
-        sale_sert = def_sum_bonus('sert',user_name,begin,today)
-
-        if sale_abik==None:
-            sale_abik = 0
-        
-        if sale_sert==None:
-            sale_sert = 0
-
-        
-        
-        text = f"{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за месяц:\n\n⏱ Продления: {count_list[0]}\n🌠 Инициативы: {count_list[1]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р."
-
-        bot.reply_to(message, text)
-
-
-
-def statsall(message, bot=bot):
-    if is_spam(message):
-        for i in range(len(tables)):
-            update_table(tables[i])
-            
-        if "@" not in message.text and " " not in message.text:
-            user_name = "@"+message.from_user.username
-        elif  "@OMGVR_Admin_Bot" in message.text:
-            user_name = "@"+message.from_user.username
-        else:
-            user_name = message.text[message.text.find(" ")+1:]
-
-        begin = datetime.now().replace(year=2022)
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-        count_list=[]
-        for i in action:
-            count_list.append(str(def_count(action[i],user_name,begin,today)))       
-        
-        sale_abik = def_sum_bonus('abik',user_name,begin,today)
-        sale_sert = def_sum_bonus('sert',user_name,begin,today)
-
-        if sale_abik==None:
-            sale_abik = 0
-        
-        if sale_sert==None:
-            sale_sert = 0
-
-        
-        
-        text = f"{random.choice(TEXTS['hey'])} {user_name}!\n\n📊 Твоя статистика за все время:\n\n⏱ Продления: {count_list[0]}\n🌠 Инициативы: {count_list[1]}\n💸 Продано абонементов на сумму: {sale_abik} р.\n💲 Продано сертификатов на сумму: {sale_sert} р."
-
-        bot.reply_to(message, text)
-
-
-
 
 
 @bot.message_handler(commands=['roll'])

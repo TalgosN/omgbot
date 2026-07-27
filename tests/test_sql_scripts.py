@@ -51,8 +51,8 @@ class SqlScriptsTest(unittest.TestCase):
         )
 
         data_rows = self.conn.execute(sql_scripts.union).fetchall()
-        raw_rows = self.conn.execute(sql_scripts.records).fetchall()
-        shift_rows = self.conn.execute(sql_scripts.shifts).fetchall()
+        raw_rows = self.conn.execute(sql_scripts.sheets_records).fetchall()
+        shift_rows = self.conn.execute(sql_scripts.sheets_shifts).fetchall()
 
         self.assertEqual(data_rows, [("2026-07-20", "@maxon", "Анкеты", 1.0)])
         self.assertEqual(raw_rows, [("@maxon", "Анкеты", 1.0)])

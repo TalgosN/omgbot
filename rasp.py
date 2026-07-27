@@ -5,7 +5,6 @@ import requests
 import json
 import os
 from datetime import datetime, timedelta
-import math
 import locale
 import sqlite3
 import threading
@@ -202,18 +201,6 @@ def start_shifton_notifications_check(bot):
             shifton_notifications_lock.release()
 
     threading.Thread(target=worker, daemon=True).start()
-
-def calculate_duration(start_time_str, end_time_str):
-    """Вычисляет длительность в часах из строк вида '09:30' и '20:00'"""
-    try:
-        t1 = datetime.strptime(start_time_str, "%H:%M")
-        t2 = datetime.strptime(end_time_str, "%H:%M")
-        if t2 < t1:
-            t2 += timedelta(days=1) # Переход через полночь
-        duration = t2 - t1
-        return round(math.fabs(duration.total_seconds() / 3600), 1)
-    except:
-        return 0
 
 def last_monday(datetime_str):
     dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')

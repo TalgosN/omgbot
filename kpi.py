@@ -14,6 +14,14 @@ import random
 import os
 import re
 import time
+from kpi_calculator import (
+    calculate_monthly_kpi,
+    compare_with_sheet,
+    import_sheet_penalty,
+    initialize_kpi_calculation_schema,
+    mirror_legacy_penalty,
+    set_monthly_stream,
+)
 
 
 # Словари
@@ -36,19 +44,6 @@ _hashtag_rules_cache_until = 0.0
 # ==========================================
 # 1. ЗАГРУЗКА И ВЫГРУЗКА ДАННЫХ И СМЕН
 # ==========================================
-
-def read_kpi():
-    c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
-    sh = c.open('KPI OMG VR')
-    wks = sh.worksheet_by_title('Настройки')
-    tasks = wks.get_values(start='A', end='A', returnas='matrix')
-    price = wks.get_values(start='B', end='B', returnas='matrix')
-    plan = wks.get_values(start='C', end='C', returnas='matrix')
-
-    df_tasks = pd.DataFrame(tasks, columns=['Task'])
-    df_price = pd.DataFrame(price, columns=['Club'])
-    df_plan = pd.DataFrame(plan, columns=['Date'])
-    return pd.concat([df_tasks, df_price, df_plan], axis=1)
 
 def read_ank_table():
     conn = sqlite3.connect('db/omgbot.sql')
@@ -615,6 +610,7 @@ def do_penalty(message, text_args, bypass_admin=False):
     target_login = parts[0]
     desc = parts[1]
     
+    initialize_kpi_calculation_schema()
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     cur.execute("SELECT login FROM users WHERE login=?", (target_login,))
@@ -625,6 +621,14 @@ def do_penalty(message, text_args, bypass_admin=False):
     if role_of(message) == ROLE_OWNER or bypass_admin:
         today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
         cur.execute("INSERT INTO penalty (dt, name, desc) VALUES (?, ?, ?)", (today, target_login, desc))
+        mirror_legacy_penalty(
+            conn,
+            cur.lastrowid,
+            target_login,
+            today,
+            desc,
+            f"@{message.from_user.username}",
+        )
         conn.commit()
         conn.close()
         return KPI_SUCCESS, random.choice(TEXTS['penalty_phrases']), ""
@@ -663,6 +667,250 @@ def hash_handle(message):
         print(f"Ошибка в hash_handle: {e}")
         return KPI_ERROR, "Не удалось обработать хештег. Попробуйте ещё раз или обратитесь к администратору.", ""
 
+
+def _sheet_number(value, percent=False):
+    raw = str(value or '').replace(' ', '').replace(',', '.').strip()
+    is_percent = raw.endswith('%')
+    raw = raw.rstrip('%')
+    try:
+        number = float(raw)
+    except ValueError:
+        return 0.0
+    if percent or is_percent:
+        return number / 100.0 if is_percent else number
+    return number
+
+
+def _sheet_truthy(value):
+    return str(value or '').strip().lower() in ('true', 'истина', '1', 'да')
+
+
+def _kpi_sheet_context(spreadsheet):
+    employees = spreadsheet.worksheet_by_title('Сотрудники').get_values(
+        start='A1',
+        end='B60',
+        returnas='matrix',
+    )
+    nickname_to_login = {
+        str(row[0]).strip(): str(row[1]).strip()
+        for row in employees
+        if (
+            len(row) > 1
+            and str(row[0]).strip() not in ('', '-')
+            and str(row[1]).strip() not in ('', '-')
+        )
+    }
+    main_values = spreadsheet.worksheet_by_title('Главный').get_values(
+        start='A1',
+        end='AA60',
+        returnas='matrix',
+    )
+    selected_month = (
+        main_values[0][2]
+        if main_values and len(main_values[0]) > 2
+        else datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    )
+    return nickname_to_login, main_values, selected_month
+
+
+def _legacy_nickname_logins():
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        rows = conn.execute(
+            '''
+            SELECT nick_name, login
+            FROM users
+            WHERE nick_name IS NOT NULL AND trim(nick_name) <> ''
+              AND login IS NOT NULL AND trim(login) <> ''
+            '''
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        str(nickname).strip(): str(login).strip()
+        for nickname, login in rows
+    }
+
+
+def import_legacy_kpi_sheet_controls(spreadsheet=None):
+    """Импортирует доступные штрафы и текущие отметки трансляций идемпотентно."""
+    initialize_kpi_calculation_schema()
+    if spreadsheet is None:
+        client = pygsheets.authorize(
+            service_file='key/omgbot-430116-e9a4d9c69b7f.json'
+        )
+        spreadsheet = client.open('KPI OMG VR')
+
+    nickname_to_login, main_values, selected_month = _kpi_sheet_context(spreadsheet)
+    legacy_nickname_to_login = _legacy_nickname_logins()
+    legacy_nickname_to_login.update(nickname_to_login)
+    imported_penalties = 0
+    unmatched = []
+
+    for worksheet in spreadsheet.worksheets():
+        title = worksheet.title
+        if title == 'Штрафы':
+            period_month = selected_month
+        elif title.startswith('Штрафы '):
+            period_month = title.split(' ', 1)[1]
+        else:
+            continue
+
+        values = worksheet.get_values(
+            start='A1',
+            end='F60',
+            returnas='matrix',
+        )
+        categories = values[0][1:6] if values else []
+        for row_index, row in enumerate(values[2:], start=3):
+            nickname = str(row[0]).strip() if row else ''
+            if not nickname:
+                # В архивных листах пустая строка после сотрудников содержит итоги.
+                continue
+            login = legacy_nickname_to_login.get(nickname)
+            counts = row[1:6] if len(row) > 1 else []
+            if not login and any(_sheet_number(value) > 0 for value in counts):
+                unmatched.append({
+                    'sheet': title,
+                    'row': row_index,
+                    'nickname': nickname,
+                })
+                continue
+            if not login:
+                continue
+
+            for column_index, raw_count in enumerate(counts, start=2):
+                count = max(0, int(_sheet_number(raw_count)))
+                reason = (
+                    str(categories[column_index - 2]).strip()
+                    if len(categories) >= column_index - 1
+                    else 'Импортированный штраф'
+                )
+                for sequence in range(1, count + 1):
+                    source_key = (
+                        f'legacy-sheet:{title}:{row_index}:{column_index}:{sequence}'
+                    )
+                    if import_sheet_penalty(
+                        login,
+                        period_month,
+                        reason,
+                        source_key,
+                    ):
+                        imported_penalties += 1
+
+    imported_streams = 0
+    for row in main_values[7:]:
+        nickname = str(row[1]).strip() if len(row) > 1 else ''
+        login = nickname_to_login.get(nickname)
+        if not login or len(row) <= 18 or not _sheet_truthy(row[18]):
+            continue
+        set_monthly_stream(
+            login,
+            selected_month,
+            True,
+            'legacy_import',
+            source='legacy_google_sheet',
+            overwrite=False,
+        )
+        imported_streams += 1
+
+    return {
+        'penalties': imported_penalties,
+        'streams_seen': imported_streams,
+        'unmatched': unmatched,
+    }
+
+
+def _sheet_shadow_rows(main_values, nickname_to_login):
+    rows = []
+    for row in main_values[7:]:
+        nickname = str(row[1]).strip() if len(row) > 1 else ''
+        login = nickname_to_login.get(nickname)
+        if not login:
+            continue
+
+        def cell(index):
+            return row[index] if len(row) > index else 0
+
+        rows.append({
+            'login': login,
+            'nickname': nickname,
+            'shifts': _sheet_number(cell(2)),
+            'weighted_shifts': _sheet_number(cell(3)),
+            'reviews': _sheet_number(cell(4)),
+            'reviews_pct': _sheet_number(cell(5), percent=True),
+            'forms': _sheet_number(cell(6)),
+            'forms_pct': _sheet_number(cell(7), percent=True),
+            'extensions': _sheet_number(cell(8)),
+            'extensions_pct': _sheet_number(cell(9), percent=True),
+            'certificates': _sheet_number(cell(10)),
+            'certificates_pct': _sheet_number(cell(11), percent=True),
+            'subscriptions': _sheet_number(cell(12)),
+            'subscriptions_pct': _sheet_number(cell(13), percent=True),
+            'bs': _sheet_number(cell(14)),
+            'bs_pct': _sheet_number(cell(15), percent=True),
+            'initiatives': _sheet_number(cell(16)),
+            'initiatives_pct': _sheet_number(cell(17), percent=True),
+            'penalties': _sheet_number(cell(19)),
+            'total_pct': _sheet_number(cell(20), percent=True),
+            'weighted_pct': _sheet_number(cell(21), percent=True),
+            'amount': _sheet_number(cell(22)),
+            'rank': _sheet_number(cell(24)),
+        })
+    return rows
+
+
+def compare_server_kpi_with_sheet(spreadsheet=None):
+    """Сравнивает новый расчёт с Google Sheets, не меняя ответы пользователям."""
+    if spreadsheet is None:
+        client = pygsheets.authorize(
+            service_file='key/omgbot-430116-e9a4d9c69b7f.json'
+        )
+        spreadsheet = client.open('KPI OMG VR')
+    nickname_to_login, main_values, selected_month = _kpi_sheet_context(spreadsheet)
+    server_rows = calculate_monthly_kpi(
+        selected_month,
+        employee_logins=nickname_to_login.values(),
+        ensure_schema=False,
+    )
+    sheet_rows = _sheet_shadow_rows(main_values, nickname_to_login)
+    return {
+        'period_month': str(selected_month),
+        'employees': len(sheet_rows),
+        'differences': compare_with_sheet(server_rows, sheet_rows),
+    }
+
+
+def run_kpi_shadow_cycle():
+    try:
+        client = pygsheets.authorize(
+            service_file='key/omgbot-430116-e9a4d9c69b7f.json'
+        )
+        spreadsheet = client.open('KPI OMG VR')
+        imported = import_legacy_kpi_sheet_controls(spreadsheet)
+        comparison = compare_server_kpi_with_sheet(spreadsheet)
+        differences = comparison['differences']
+        print(
+            'KPI shadow: '
+            f"month={comparison['period_month']}, "
+            f"employees={comparison['employees']}, "
+            f'differences={len(differences)}, '
+            f"imported_penalties={imported['penalties']}, "
+            f"unmatched_penalties={len(imported['unmatched'])}"
+        )
+        for difference in differences[:20]:
+            print(f'KPI shadow difference: {difference}')
+        for unresolved in imported['unmatched'][:20]:
+            print(f'KPI legacy penalty unresolved: {unresolved}')
+        return {
+            'import': imported,
+            'comparison': comparison,
+        }
+    except Exception as error:
+        print(f'KPI shadow failed: {error}')
+        return None
+
+
 # ==========================================
 # 5. СИНХРОНИЗАЦИЯ
 # ==========================================
@@ -674,6 +922,7 @@ def init():
     write_data(sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
     write_data(sql_select(sql_scripts.sheets_shifts), 'KPI OMG VR', 'shifts')
     write_data(sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')
+    run_kpi_shadow_cycle()
 
 def update_kpi():
     read_ank_table()

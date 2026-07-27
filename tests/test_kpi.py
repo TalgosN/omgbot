@@ -366,6 +366,72 @@ class KpiTest(unittest.TestCase):
         self.assertEqual(len(rows), 15)
         self.assertTrue(all(row[4] == 6.0 for row in rows))
 
+    def test_legacy_sheet_controls_import_penalties_and_current_stream(self):
+        class Worksheet:
+            def __init__(self, title, values):
+                self.title = title
+                self.values = values
+
+            def get_values(self, **_kwargs):
+                return self.values
+
+        employees = Worksheet(
+            "employees",
+            [["Алиса", "@alice"], ["-", "-"]],
+        )
+        main_rows = [["", "", "2026-07-01"]] + [[] for _ in range(6)]
+        main_rows.append(["", "Алиса"] + [""] * 16 + ["TRUE"])
+        main = Worksheet("main", main_rows)
+        penalties = Worksheet(
+            "Штрафы 08.10.2025",
+            [
+                ["Сотрудник", "Опоздание", "Форма", "", "", ""],
+                ["Ник", "", "", "", "", ""],
+                ["Алиса", "2", "1", "", "", ""],
+                ["Бывший", "1", "", "", "", ""],
+                ["", "1", "", "", "", ""],
+            ],
+        )
+
+        class Spreadsheet:
+            def worksheet_by_title(self, title):
+                return {
+                    "Сотрудники": employees,
+                    "Главный": main,
+                }[title]
+
+            def worksheets(self):
+                return [main, penalties]
+
+        imported = []
+        streams = []
+        with patch.object(self.kpi, "initialize_kpi_calculation_schema"), \
+                patch.object(
+                    self.kpi,
+                    "_legacy_nickname_logins",
+                    return_value={"Бывший": "@former"},
+                ), \
+                patch.object(
+                    self.kpi,
+                    "import_sheet_penalty",
+                    side_effect=lambda *args: imported.append(args) or True,
+                ), \
+                patch.object(
+                    self.kpi,
+                    "set_monthly_stream",
+                    side_effect=lambda *args, **kwargs: streams.append((args, kwargs)),
+                ):
+            result = self.kpi.import_legacy_kpi_sheet_controls(Spreadsheet())
+
+        self.assertEqual(result["penalties"], 4)
+        self.assertEqual(len(result["unmatched"]), 0)
+        self.assertEqual(
+            [item[2] for item in imported],
+            ["Опоздание", "Опоздание", "Форма", "Опоздание"],
+        )
+        self.assertEqual(len(streams), 1)
+        self.assertEqual(streams[0][0][:3], ("@alice", "2026-07-01", True))
+
 
 if __name__ == "__main__":
     unittest.main()

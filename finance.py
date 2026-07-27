@@ -1174,11 +1174,6 @@ def _collect_payroll_report_data(date_start, date_end):
         conn.close()
 
 
-def get_data_pay_report(date_start, date_end):
-    data, _skipped_employees = _collect_payroll_report_data(date_start, date_end)
-    return data
-
-
 def _find_excel_row(ws, label):
     for row in range(1, ws.max_row + 1):
         if ws.cell(row=row, column=1).value == label:

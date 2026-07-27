@@ -1,14 +1,9 @@
-from telebot import *
 import pygsheets
 import sqlite3
-from datetime import date
-import pytz
 import pandas as pd
 
 
 action = {'#продление':'afterparty','#инициатива':'initiative'}
-
-symb = {'#продление':10,'#инициатива':11}
 
 bonus = {'#серт':'sert','#абик':'abik'}
          
@@ -104,32 +99,6 @@ def finalize_legacy_kpi_approval():
 
 
 
-
-
-def def_count (table,user_name,begin,today):
-
-    table = validate_table(table)
-    conn=sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute(f'''SELECT COUNT (*) FROM "{table}"
-                    WHERE who=? AND dt_rep BETWEEN ? AND datetime(?, '+1 day')
-                    AND COALESCE(status, '') <> 'Отклонено' ''', (user_name, begin, today))
-    count = cur.fetchall()[0][0]
-    cur.close()
-    conn.close() 
-    return count
-
-def def_sum_bonus (table,user_name,begin,today):
-
-    table = validate_table(table)
-    conn=sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute(f'''SELECT SUM (bonus) FROM "{table}"
-                    WHERE who=? AND d_rep BETWEEN ? AND datetime(?, '+1 day')''', (user_name, begin, today))
-    sum1 = cur.fetchall()[0][0]
-    cur.close()
-    conn.close() 
-    return sum1
 
 
 def update_users():

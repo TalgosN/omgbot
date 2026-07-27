@@ -37,6 +37,7 @@ CONFIG_SPREADSHEET_ID = '1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q'
 temp_broadcasts = {}
 health_check_lock = threading.Lock()
 config_sync_lock = threading.Lock()
+kpi_shadow_lock = threading.Lock()
 
 def generate_days_keyboard(selected_days=""):
     markup = types.InlineKeyboardMarkup()
@@ -111,6 +112,9 @@ def admin_func_handler(message, bot):
     elif a == '🩺 Статус систем':
         handle_system_health(message, bot)
 
+    elif a == '🧪 Диагностика KPI':
+        handle_kpi_shadow_diagnostics(message, bot)
+
     elif a == '📊 KPI сотрудников':
         handle_monthly_kpi_report(message, bot)
         
@@ -184,6 +188,7 @@ def admin_extra_menu_handler(message, bot):
     if message.text in {
         '⚙️ Обновить настройки',
         '🩺 Статус систем',
+        '🧪 Диагностика KPI',
         '📊 Тест недельного отчета',
         '📦 Тест отчета по расходникам',
     }:
@@ -198,6 +203,78 @@ def parse_report_number(value):
         return float(normalized)
     except ValueError:
         return 0.0
+
+
+KPI_SHADOW_FIELD_LABELS = {
+    'employee': 'Сотрудник',
+    'shifts': 'Смены',
+    'weighted_shifts': 'Взвешенные смены',
+    'reviews': 'Отзывы',
+    'reviews_pct': 'Отзывы, %',
+    'forms': 'Анкеты',
+    'forms_pct': 'Анкеты, %',
+    'extensions': 'Продления',
+    'extensions_pct': 'Продления, %',
+    'certificates': 'Сертификаты',
+    'certificates_pct': 'Сертификаты, %',
+    'subscriptions': 'Абонементы',
+    'subscriptions_pct': 'Абонементы, %',
+    'bs': 'БС',
+    'bs_pct': 'БС, %',
+    'initiatives': 'Инициативы',
+    'initiatives_pct': 'Инициативы, %',
+    'penalties': 'Штрафы',
+    'total_pct': 'Итоговый KPI',
+    'weighted_pct': 'Взвешенный KPI',
+    'amount': 'Сумма',
+    'rank': 'Рейтинг',
+}
+
+
+def build_kpi_shadow_report(comparison, controls):
+    differences = comparison.get('differences', [])
+    field_counts = {}
+    affected_employees = set()
+    for difference in differences:
+        field = difference.get('field', 'unknown')
+        field_counts[field] = field_counts.get(field, 0) + 1
+        if difference.get('login'):
+            affected_employees.add(difference['login'])
+
+    lines = [
+        '🧪 <b>Диагностика теневого KPI</b>',
+        f"📅 Период: <b>{html.escape(str(comparison.get('period_month', '—')))}</b>",
+        f"👥 Сотрудников проверено: <b>{comparison.get('employees', 0)}</b>",
+        '',
+    ]
+    if differences:
+        lines.extend([
+            f'⚠️ Расхождений: <b>{len(differences)}</b>',
+            f'👤 Затронуто сотрудников: <b>{len(affected_employees)}</b>',
+            '',
+            '<b>По показателям:</b>',
+        ])
+        for field, count in sorted(
+            field_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        ):
+            label = KPI_SHADOW_FIELD_LABELS.get(field, field)
+            lines.append(f'• {html.escape(label)}: <b>{count}</b>')
+    else:
+        lines.append('✅ Серверный расчёт совпадает с Google Sheets.')
+
+    sources = controls.get('penalty_sources', {})
+    lines.extend([
+        '',
+        '<b>Перенос управляющих данных:</b>',
+        f"• Штрафы из Google Sheets: <b>{sources.get('legacy_google_sheet', 0)}</b>",
+        f"• Штрафы из старой БД: <b>{sources.get('legacy_db', 0)}</b>",
+        f"• Активные штрафы месяца: <b>{controls.get('current_penalties', 0)}</b>",
+        f"• Трансляции месяца: <b>{controls.get('current_streams', 0)}</b>",
+        '',
+        '<i>Диагностика ничего не переключает и не изменяет рабочий отчёт.</i>',
+    ])
+    return '\n'.join(lines)
 
 
 def build_monthly_kpi_report(values):
@@ -600,6 +677,47 @@ def handle_system_health(message, bot):
             admin_extra_menu(message, bot)
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def handle_kpi_shadow_diagnostics(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if not kpi_shadow_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, '⏳ Диагностика KPI уже выполняется.')
+        admin_extra_menu(message, bot)
+        return
+
+    msg = bot.send_message(
+        message.chat.id,
+        '⏳ Сравниваю серверный KPI с Google Sheets...',
+    )
+
+    def worker():
+        try:
+            from kpi import compare_server_kpi_with_sheet
+            from kpi_calculator import get_kpi_control_status
+
+            comparison = compare_server_kpi_with_sheet()
+            controls = get_kpi_control_status(comparison['period_month'])
+            report = build_kpi_shadow_report(comparison, controls)
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=msg.message_id,
+                text=report,
+                parse_mode='HTML',
+            )
+        except Exception as error:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=msg.message_id,
+                text=f'❌ Ошибка диагностики KPI: {error}',
+            )
+        finally:
+            kpi_shadow_lock.release()
+            admin_extra_menu(message, bot)
+
+    threading.Thread(target=worker, daemon=True).start()
+
 
 def handle_update_config(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
