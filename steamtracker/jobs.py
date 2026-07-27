@@ -5,14 +5,38 @@ import threading
 from .config import Settings
 from .db import TrackerStorage
 from .management import CatalogManagementService
+from .llm import build_generator
+from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
 from .steam import LicenseSyncService, SteamClient
 from .store import GameEnrichmentService, SteamStoreClient
+from .weekly import WeeklyPromotionService
 
 
 _license_lock = threading.Lock()
 _store_lock = threading.Lock()
 _catalog_lock = threading.Lock()
+_weekly_lock = threading.Lock()
+
+
+def _sync_google_data(
+    settings: Settings,
+    storage: TrackerStorage,
+) -> None:
+    if not settings.google_export_enabled:
+        return
+    try:
+        result = GoogleSheetsManager(settings).sync_tracker_data(
+            storage,
+            apply=True,
+        )
+        print(
+            "Steam Tracker Google: "
+            f"Current_State={result.current_state_rows}, "
+            f"игр={result.game_rows}"
+        )
+    except Exception as error:
+        print(f"Steam Tracker Google: ошибка выгрузки: {error}")
 
 
 def _run_license_sync(settings: Settings) -> None:
@@ -32,6 +56,7 @@ def _run_license_sync(settings: Settings) -> None:
                 f"добавлено={summary.licenses_added}, "
                 f"удалено={summary.licenses_removed}"
             )
+            _sync_google_data(settings, storage)
         except Exception as error:
             print(f"Steam Tracker: ошибка синхронизации лицензий: {error}")
 
@@ -69,6 +94,7 @@ def _run_store_enrichment(settings: Settings) -> None:
                 f"свежих={summary.skipped_fresh}, "
                 f"ошибок={summary.failed}"
             )
+            _sync_google_data(settings, storage)
         except Exception as error:
             print(f"Steam Tracker Store: ошибка обогащения: {error}")
 
@@ -113,6 +139,7 @@ def _run_catalog_sync(settings: Settings) -> None:
                 f"исключено={result.excluded_games}, "
                 f"черновиков={result.draft_games}"
             )
+            _sync_google_data(settings, storage)
         except Exception as error:
             print(f"Steam Tracker Catalog: ошибка синхронизации: {error}")
 
@@ -127,6 +154,63 @@ def start_catalog_sync() -> bool:
         target=_run_catalog_sync,
         args=(settings,),
         name="steamtracker-catalog-sync",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _run_weekly_promo(settings: Settings, bot=None) -> None:
+    with _weekly_lock:
+        try:
+            if settings.publish_mode != "dry_run":
+                raise RuntimeError(
+                    "Автоматическое промо пока разрешено только в dry_run"
+                )
+            storage = TrackerStorage(settings.db_path)
+            storage.initialize()
+            sheets = GoogleSheetsManager(settings)
+            service = WeeklyPromotionService(
+                storage,
+                PromotionWorkflow(
+                    storage,
+                    build_generator(settings),
+                    DryRunPublisher(),
+                ),
+                sheets,
+            )
+            result = service.run()
+            print(
+                "Steam Tracker Weekly: "
+                f"промо={result.promotion_id}, "
+                f"app_id={result.app_id}, "
+                f"цикл={result.cycle_number}"
+            )
+            if (
+                bot is not None
+                and settings.telegram_approval_enabled
+                and settings.telegram_approver_ids
+            ):
+                from .telegram import send_promotion_to_approvers
+
+                send_promotion_to_approvers(
+                    bot,
+                    settings,
+                    result.promotion_id,
+                )
+        except Exception as error:
+            print(f"Steam Tracker Weekly: ошибка: {error}")
+
+
+def start_weekly_promo(bot=None) -> bool:
+    settings = Settings.from_env()
+    if not settings.weekly_promo_enabled:
+        return False
+    if _weekly_lock.locked():
+        return False
+    threading.Thread(
+        target=_run_weekly_promo,
+        args=(settings, bot),
+        name="steamtracker-weekly-promo",
         daemon=True,
     ).start()
     return True

@@ -134,6 +134,7 @@ class GameEnrichmentService:
                 metadata = self.client.get_metadata(row["app_id"])
                 self.storage.save_game_metadata(
                     metadata.app_id,
+                    steam_name=metadata.name,
                     store_description=metadata.description,
                     genres=metadata.genres,
                     categories=metadata.categories,

@@ -1,15 +1,22 @@
 """Настоящий OpenRouter-генератор с проверяемым JSON и fake fallback."""
 
 import json
+from html import unescape
 from typing import Any
 
 import requests
 
 from .config import Settings
-from .promo import ContentGenerator, FakeGenerator, GeneratedTexts
+from .promo import (
+    ContentDraft,
+    ContentGenerator,
+    FakeGenerator,
+    GeneratedTexts,
+    render_content,
+)
 
 
-PROMPT_VERSION = "steamtracker-promo-v1"
+PROMPT_VERSION = "steamtracker-promo-v2"
 
 
 def _json_list(value: Any) -> list[str]:
@@ -66,23 +73,43 @@ class OpenRouterGenerator:
                 {
                     "role": "system",
                     "content": (
-                        "Ты редактор VR-клуба OMG VR. Используй только факты "
-                        "из входного JSON. Не придумывай скидки, количество "
-                        "игроков, игровые режимы или условия акции. Верни "
-                        "только JSON с ключами employee, telegram и vk."
+                        "Ты SMM-редактор VR-клуба OMG VR. Используй только "
+                        "факты из входного JSON. Не придумывай игровые "
+                        "режимы, механики или другие факты. Не пиши название "
+                        "игры, скидку, даты и количество игроков: система "
+                        "добавит их сама без искажений. Не используй HTML. "
+                        "Верни только JSON указанной структуры."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "Создай три разных русскоязычных текста.\n"
-                        "employee: обучающая карточка сотрудникам — что за "
-                        "игра, кому рекомендовать, что проверить самому, "
-                        "количество игроков и точная скидка.\n"
-                        "telegram: короткий клиентский анонс с CTA.\n"
-                        "vk: более подробный клиентский анонс с CTA.\n"
-                        "Точная скидка должна присутствовать во всех трёх "
-                        "текстах.\n\nФакты:\n"
+                        "Подготовь русскоязычные смысловые блоки.\n\n"
+                        "Правила стиля:\n"
+                        "1. Пиши живо, естественно и вовлекающе.\n"
+                        "2. Не используй длинное тире (—), только дефис (-) "
+                        "или запятую.\n"
+                        "3. Не изменяй и не повторяй название игры: в ответе "
+                        "называй её «эта игра» или перестрой предложение.\n"
+                        "4. Для сотрудника дай только понятное описание и "
+                        "кому игру рекомендовать. Не пиши про оборудование, "
+                        "пространство или очевидные обязанности.\n"
+                        "5. Для соцсетей дай 2-4 коротких абзаца. Допускается "
+                        "один список из 3-4 преимуществ, только если он "
+                        "действительно помогает тексту.\n"
+                        "6. Заверши естественным вопросом или призывом к "
+                        "бронированию.\n\n"
+                        "Формат ответа строго JSON:\n"
+                        "{\n"
+                        '  "employee_description": "строка",\n'
+                        '  "employee_audience": "строка",\n'
+                        '  "social_headline": "строка без названия игры",\n'
+                        '  "social_paragraphs": ["абзац 1", "абзац 2"],\n'
+                        '  "social_benefits": [],\n'
+                        '  "social_closing": "строка"\n'
+                        "}\n"
+                        "`social_benefits` должен быть пустым либо содержать "
+                        "3-4 коротких пункта без маркеров.\n\nФакты:\n"
                         + json.dumps(facts, ensure_ascii=False)
                     ),
                 },
@@ -113,15 +140,66 @@ class OpenRouterGenerator:
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("OpenRouter вернул некорректный JSON") from error
 
-        texts = GeneratedTexts(
-            employee=self._validate_text(result, "employee", 3500),
-            telegram=self._validate_text(result, "telegram", 3500),
-            vk=self._validate_text(result, "vk", 6000),
+        draft = ContentDraft(
+            employee_description=self._validate_text(
+                result,
+                "employee_description",
+                1000,
+            ),
+            employee_audience=self._validate_text(
+                result,
+                "employee_audience",
+                700,
+            ),
+            social_headline=self._validate_text(
+                result,
+                "social_headline",
+                180,
+            ),
+            social_paragraphs=tuple(
+                self._validate_list(
+                    result,
+                    "social_paragraphs",
+                    minimum=2,
+                    maximum=4,
+                    item_limit=1000,
+                )
+            ),
+            social_benefits=tuple(
+                self._validate_list(
+                    result,
+                    "social_benefits",
+                    minimum=0,
+                    maximum=4,
+                    item_limit=250,
+                    allowed_empty=True,
+                )
+            ),
+            social_closing=self._validate_text(
+                result,
+                "social_closing",
+                400,
+            ),
         )
-        for text in (texts.employee, texts.telegram, texts.vk):
+        if draft.social_benefits and len(draft.social_benefits) < 3:
+            raise ValueError(
+                "social_benefits должен быть пустым либо содержать 3-4 пункта"
+            )
+        texts = render_content(context, draft)
+        for key, text, limit in (
+            ("employee", texts.employee, 3500),
+            ("telegram", texts.telegram, 3500),
+            ("vk", texts.vk, 6000),
+        ):
+            if len(text) > limit:
+                raise ValueError(f"Поле {key} длиннее {limit} символов")
             if facts["discount"] not in text:
                 raise ValueError(
                     "Сгенерированный текст потерял точное значение скидки"
+                )
+            if facts["game_name"] not in unescape(text):
+                raise ValueError(
+                    "Сгенерированный текст потерял точное название игры"
                 )
         return texts
 
@@ -134,6 +212,38 @@ class OpenRouterGenerator:
         if len(value) > limit:
             raise ValueError(f"Поле {key} длиннее {limit} символов")
         return value
+
+    @staticmethod
+    def _validate_list(
+        result: dict,
+        key: str,
+        *,
+        minimum: int,
+        maximum: int,
+        item_limit: int,
+        allowed_empty: bool = False,
+    ) -> list[str]:
+        value = result.get(key)
+        if not isinstance(value, list):
+            raise ValueError(f"OpenRouter не вернул список {key}")
+        if not value and allowed_empty:
+            return []
+        if not minimum <= len(value) <= maximum:
+            raise ValueError(
+                f"Поле {key} должно содержать от {minimum} до "
+                f"{maximum} элементов"
+            )
+        items: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"Поле {key} содержит пустой элемент")
+            item = item.strip()
+            if len(item) > item_limit:
+                raise ValueError(
+                    f"Элемент {key} длиннее {item_limit} символов"
+                )
+            items.append(item)
+        return items
 
 
 def build_generator(settings: Settings) -> ContentGenerator:

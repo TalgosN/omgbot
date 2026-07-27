@@ -9,24 +9,42 @@ from steamtracker.management import (
     CatalogManagementService,
     parse_app_id,
 )
-from steamtracker.sheets import GoogleSheetsManager
+from steamtracker.sheets import CURRENT_STATE_HEADERS, GoogleSheetsManager
 from steamtracker.store import StoreMetadata
 
 
 class FakeWorksheet:
-    def __init__(self, headers=None):
+    def __init__(self, headers=None, records=None):
         self.headers = list(headers or [])
+        self.records = [dict(row) for row in (records or [])]
         self.updates = []
+        self.clears = []
 
     def get_row(self, row, include_tailing_empty=False):
         return list(self.headers)
 
-    def update_values(self, start, values):
+    def update_values(self, start, values, **kwargs):
         self.headers = list(values[0])
+        self.records = [
+            {
+                header: row[index] if index < len(row) else ""
+                for index, header in enumerate(self.headers)
+            }
+            for row in values[1:]
+        ]
         self.updates.append((start, values))
 
     def get_all_records(self):
-        return []
+        return [dict(row) for row in self.records]
+
+    def get_all_values(self, **kwargs):
+        return [list(self.headers)] + [
+            [row.get(header, "") for header in self.headers]
+            for row in self.records
+        ]
+
+    def clear(self, **kwargs):
+        self.clears.append(kwargs)
 
 
 class FakeSpreadsheet:
@@ -90,7 +108,145 @@ class GoogleSetupTests(unittest.TestCase):
         self.assertIn("steam_app_id", self.games.headers)
         self.assertEqual(self.promo.headers[2], "Текст_сотрудникам")
         self.assertIn("Скидка", self.promo.headers)
-        self.assertIn("Наличие лицензий", self.spreadsheet.worksheets)
+        self.assertIn("Current_State", self.spreadsheet.worksheets)
+        self.assertNotIn("Наличие лицензий", self.spreadsheet.worksheets)
+
+
+class GoogleDataSyncTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.storage = TrackerStorage(Path(self.temp_dir.name) / "tracker.db")
+        self.storage.initialize()
+        self.storage.upsert_catalog_games(
+            [
+                {
+                    "app_id": 10,
+                    "steam_name": "Steam Game One",
+                    "official_name": "Old Game One",
+                    "player_count": 2,
+                    "base_description": "Старое описание",
+                },
+                {
+                    "app_id": 20,
+                    "steam_name": "Steam Game Two",
+                    "official_name": "Old Game Two",
+                    "player_count": 1,
+                    "base_description": "Старое описание 2",
+                },
+            ]
+        )
+        with self.storage.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO accounts (
+                    steam_id, vanity_url, club_name, active, updated_at
+                ) VALUES (?, ?, ?, 1, ?)
+                """,
+                [
+                    ("76561198000000001", "zone1", "Клуб", "2026-08-03"),
+                    ("76561198000000002", "zone2", "Клуб", "2026-08-03"),
+                ],
+            )
+        from steamtracker.db import OwnedGame
+
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [OwnedGame(10, "Steam Game One", 50)],
+            scanned_at="2026-08-03T10:00:00+00:00",
+        )
+        self.storage.record_account_scan(
+            "76561198000000002",
+            [],
+            scanned_at="2026-08-03T10:01:00+00:00",
+        )
+        self.storage.save_game_metadata(
+            10,
+            steam_name="Steam Game One",
+            store_description="Новое описание Steam",
+            genres=["Action"],
+            categories=["Multi-player"],
+            header_image="https://example.test/10.jpg",
+            screenshots=[],
+            is_free=False,
+            source_language="ru",
+        )
+        self.games = FakeWorksheet(
+            ["name", "player_count", "description"],
+            [
+                {
+                    "name": "Old Game One",
+                    "player_count": "2",
+                    "description": "Старое описание",
+                },
+                {
+                    "name": "Old Game Two",
+                    "player_count": "1",
+                    "description": "Старое описание 2",
+                },
+            ],
+        )
+        self.current = FakeWorksheet(
+            ["club_name", "nickname", "game_name"]
+        )
+        self.settings_sheet = FakeWorksheet(
+            ["Параметр", "Значение", "Комментарий"]
+        )
+        self.spreadsheet = FakeSpreadsheet(
+            {
+                "Игры": self.games,
+                "Промо-план": FakeWorksheet(["Игра", "Статус"]),
+                "Current_State": self.current,
+                "Steam Динамика": FakeWorksheet(),
+                "Ошибки Steam Tracker": FakeWorksheet(),
+                "Настройки Steam Tracker": self.settings_sheet,
+            }
+        )
+        self.manager = GoogleSheetsManager(
+            SimpleNamespace(spreadsheet_id="sheet-id"),
+            client=FakeClient(self.spreadsheet),
+            worksheet_not_found=LookupError,
+        )
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_sync_writes_full_app_id_matrix_and_steam_catalog(self):
+        preview = self.manager.sync_tracker_data(self.storage)
+        self.assertFalse(preview.applied)
+        self.assertEqual(preview.current_state_rows, 4)
+        self.assertEqual(self.current.records, [])
+
+        result = self.manager.sync_tracker_data(self.storage, apply=True)
+
+        self.assertTrue(result.applied)
+        self.assertEqual(self.current.headers, CURRENT_STATE_HEADERS)
+        self.assertEqual(len(self.current.records), 4)
+        self.assertEqual(
+            {row["owned"] for row in self.current.records},
+            {0, 1},
+        )
+        self.assertNotIn("game_name", self.current.headers)
+        self.assertEqual(
+            {row["steam_app_id"] for row in self.current.records},
+            {10, 20},
+        )
+        game_one = next(
+            row
+            for row in self.games.records
+            if row["steam_app_id"] == 10
+        )
+        self.assertEqual(game_one["Название_Steam"], "Steam Game One")
+        self.assertEqual(
+            game_one["Описание_Steam"],
+            "Новое описание Steam",
+        )
+        self.assertEqual(game_one["description"], "Старое описание")
+        settings = {
+            row["Параметр"]: row["Значение"]
+            for row in self.settings_sheet.records
+        }
+        self.assertEqual(settings["weekly_discount"], "100 рублей")
+        self.assertEqual(settings["weekly_promo_enabled"], "false")
 
 
 class CatalogManagementTests(unittest.TestCase):

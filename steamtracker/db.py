@@ -1,6 +1,7 @@
 """Хранилище лицензий, дневной динамики и промо-процесса."""
 
 import json
+import random
 import sqlite3
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -26,6 +27,14 @@ class ScanResult:
     seen_games: int
     added: int
     removed: int
+
+
+@dataclass(frozen=True)
+class WeeklyPromotionSelection:
+    promotion_id: int
+    app_id: int
+    cycle_number: int
+    created: bool
 
 
 class TrackerStorage:
@@ -65,6 +74,7 @@ class TrackerStorage:
                     is_approved INTEGER NOT NULL DEFAULT 0,
                     player_count INTEGER,
                     base_description TEXT,
+                    manager_description TEXT,
                     description_source TEXT,
                     updated_at TEXT NOT NULL
                 );
@@ -162,6 +172,20 @@ class TrackerStorage:
                     FOREIGN KEY (promotion_id) REFERENCES promotions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS game_rotation (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle_number INTEGER NOT NULL,
+                    app_id INTEGER NOT NULL,
+                    promotion_id INTEGER NOT NULL UNIQUE,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('reserved', 'used', 'released')
+                    ),
+                    selected_at TEXT NOT NULL,
+                    used_at TEXT,
+                    FOREIGN KEY (app_id) REFERENCES games(app_id),
+                    FOREIGN KEY (promotion_id) REFERENCES promotions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_account_games_owned_app
                     ON account_games(owned, app_id);
                 CREATE INDEX IF NOT EXISTS idx_license_events_recorded_at
@@ -172,10 +196,23 @@ class TrackerStorage:
                     ON outbox(status);
                 CREATE INDEX IF NOT EXISTS idx_content_generations_promotion
                     ON content_generations(promotion_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_game_rotation_cycle_status
+                    ON game_rotation(cycle_number, status, app_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_game_rotation_active_game
+                    ON game_rotation(cycle_number, app_id)
+                    WHERE status IN ('reserved', 'used');
 
-                PRAGMA user_version = 2;
+                PRAGMA user_version = 3;
                 """
             )
+            game_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(games)")
+            }
+            if "manager_description" not in game_columns:
+                conn.execute(
+                    "ALTER TABLE games ADD COLUMN manager_description TEXT"
+                )
 
     def import_legacy_accounts(self, legacy_db_path: str | Path) -> int:
         legacy_path = Path(legacy_db_path)
@@ -229,14 +266,19 @@ class TrackerStorage:
                     """
                     INSERT INTO games (
                         app_id, steam_name, official_name, is_approved,
-                        player_count, base_description, description_source,
-                        updated_at
-                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                        player_count, base_description, manager_description,
+                        description_source, updated_at
+                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
                     ON CONFLICT(app_id) DO UPDATE SET
+                        steam_name = excluded.steam_name,
                         official_name = excluded.official_name,
                         is_approved = 1,
                         player_count = excluded.player_count,
                         base_description = excluded.base_description,
+                        manager_description = COALESCE(
+                            excluded.manager_description,
+                            manager_description
+                        ),
                         description_source = excluded.description_source,
                         updated_at = excluded.updated_at
                     """,
@@ -246,6 +288,7 @@ class TrackerStorage:
                         game["official_name"],
                         game.get("player_count"),
                         game.get("base_description"),
+                        game.get("manager_description"),
                         game.get("description_source", "google_sheet"),
                         timestamp,
                     ),
@@ -269,15 +312,16 @@ class TrackerStorage:
                     """
                     INSERT INTO games (
                         app_id, steam_name, official_name, is_approved,
-                        player_count, base_description, description_source,
-                        updated_at
-                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                        player_count, base_description, manager_description,
+                        description_source, updated_at
+                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
                     ON CONFLICT(app_id) DO UPDATE SET
                         steam_name = excluded.steam_name,
                         official_name = excluded.official_name,
                         is_approved = 1,
                         player_count = excluded.player_count,
                         base_description = excluded.base_description,
+                        manager_description = excluded.manager_description,
                         description_source = excluded.description_source,
                         updated_at = excluded.updated_at
                     """,
@@ -287,6 +331,7 @@ class TrackerStorage:
                         game["official_name"],
                         game.get("player_count"),
                         game.get("base_description"),
+                        game.get("manager_description"),
                         game.get("description_source", "google_sheet"),
                         timestamp,
                     ),
@@ -321,6 +366,7 @@ class TrackerStorage:
                     g.official_name,
                     g.player_count,
                     g.base_description,
+                    g.manager_description,
                     gm.store_description,
                     gm.source_language
                 FROM games g
@@ -470,6 +516,15 @@ class TrackerStorage:
                         (missing_checks, steam_id, app_id),
                     )
 
+            conn.execute(
+                """
+                UPDATE accounts
+                SET updated_at = ?
+                WHERE steam_id = ?
+                """,
+                (scanned_at, steam_id),
+            )
+
         return ScanResult(
             steam_id=steam_id,
             seen_games=len(games),
@@ -497,12 +552,31 @@ class TrackerStorage:
 
         timestamp = utc_now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             game = conn.execute(
                 "SELECT is_approved FROM games WHERE app_id = ?",
                 (app_id,),
             ).fetchone()
             if game is None or not game["is_approved"]:
                 raise ValueError("Промо можно создать только для согласованной игры")
+            if parsed_from and parsed_to:
+                overlap = conn.execute(
+                    """
+                    SELECT id
+                    FROM promotions
+                    WHERE status NOT IN ('postponed', 'cancelled')
+                        AND valid_from IS NOT NULL
+                        AND valid_to IS NOT NULL
+                        AND valid_from <= ?
+                        AND valid_to >= ?
+                    LIMIT 1
+                    """,
+                    (valid_to, valid_from),
+                ).fetchone()
+                if overlap is not None:
+                    raise ValueError(
+                        f"Период пересекается с промо #{overlap['id']}"
+                    )
             cursor = conn.execute(
                 """
                 INSERT INTO promotions (
@@ -523,17 +597,167 @@ class TrackerStorage:
             )
             return int(cursor.lastrowid)
 
+    def create_random_weekly_promotion(
+        self,
+        *,
+        discount_text: str,
+        valid_from: str,
+        valid_to: str,
+        exclude_app_ids: set[int] | None = None,
+        rng=None,
+    ) -> WeeklyPromotionSelection:
+        discount_text = discount_text.strip()
+        if not discount_text:
+            raise ValueError("Скидка обязательна")
+        parsed_from = date.fromisoformat(valid_from)
+        parsed_to = date.fromisoformat(valid_to)
+        if parsed_from > parsed_to:
+            raise ValueError("Дата начала акции позже даты окончания")
+
+        excluded = set(exclude_app_ids or ())
+        chooser = rng or random.SystemRandom()
+        timestamp = utc_now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """
+                SELECT p.id, p.app_id, gr.cycle_number
+                FROM promotions p
+                LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
+                WHERE p.status NOT IN ('postponed', 'cancelled')
+                    AND p.valid_from = ?
+                    AND p.valid_to = ?
+                ORDER BY p.id
+                LIMIT 1
+                """,
+                (valid_from, valid_to),
+            ).fetchone()
+            if existing is not None:
+                return WeeklyPromotionSelection(
+                    promotion_id=existing["id"],
+                    app_id=existing["app_id"],
+                    cycle_number=existing["cycle_number"] or 0,
+                    created=False,
+                )
+
+            overlap = conn.execute(
+                """
+                SELECT id
+                FROM promotions
+                WHERE status NOT IN ('postponed', 'cancelled')
+                    AND valid_from IS NOT NULL
+                    AND valid_to IS NOT NULL
+                    AND valid_from <= ?
+                    AND valid_to >= ?
+                LIMIT 1
+                """,
+                (valid_to, valid_from),
+            ).fetchone()
+            if overlap is not None:
+                raise ValueError(
+                    f"Период пересекается с промо #{overlap['id']}"
+                )
+
+            cycle_row = conn.execute(
+                "SELECT MAX(cycle_number) AS value FROM game_rotation"
+            ).fetchone()
+            cycle_number = int(cycle_row["value"] or 1)
+            blocked = {
+                row["app_id"]
+                for row in conn.execute(
+                    """
+                    SELECT app_id
+                    FROM game_rotation
+                    WHERE cycle_number = ?
+                        AND status IN ('reserved', 'used')
+                    """,
+                    (cycle_number,),
+                )
+            }
+            approved = [
+                row["app_id"]
+                for row in conn.execute(
+                    """
+                    SELECT app_id
+                    FROM games
+                    WHERE is_approved = 1
+                    ORDER BY app_id
+                    """
+                )
+            ]
+            if not approved:
+                raise ValueError("Нет согласованных игр для ротации")
+
+            eligible = [
+                app_id
+                for app_id in approved
+                if app_id not in blocked and app_id not in excluded
+            ]
+            if not eligible:
+                cycle_number += 1
+                previous = conn.execute(
+                    """
+                    SELECT app_id
+                    FROM game_rotation
+                    WHERE status = 'used'
+                    ORDER BY used_at DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                avoid = set(excluded)
+                if previous is not None and len(approved) > 1:
+                    avoid.add(previous["app_id"])
+                eligible = [
+                    app_id for app_id in approved if app_id not in avoid
+                ]
+            if not eligible:
+                raise ValueError("Нет доступных игр для ротации")
+
+            app_id = int(chooser.choice(eligible))
+            cursor = conn.execute(
+                """
+                INSERT INTO promotions (
+                    app_id, discount_text, valid_from, valid_to,
+                    manager_comment, image_url, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                (
+                    app_id,
+                    discount_text,
+                    valid_from,
+                    valid_to,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            promotion_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO game_rotation (
+                    cycle_number, app_id, promotion_id, status, selected_at
+                ) VALUES (?, ?, ?, 'reserved', ?)
+                """,
+                (cycle_number, app_id, promotion_id, timestamp),
+            )
+            return WeeklyPromotionSelection(
+                promotion_id=promotion_id,
+                app_id=app_id,
+                cycle_number=cycle_number,
+                created=True,
+            )
+
     def promotion_context(self, promotion_id: int) -> sqlite3.Row:
         with self.connect() as conn:
             row = conn.execute(
                 """
                 SELECT
                     p.*,
-                    COALESCE(g.official_name, g.steam_name) AS game_name,
+                    g.steam_name AS game_name,
                     g.player_count,
                     COALESCE(
-                        NULLIF(g.base_description, ''),
-                        gm.store_description
+                        NULLIF(g.manager_description, ''),
+                        NULLIF(gm.store_description, ''),
+                        NULLIF(g.base_description, '')
                     ) AS base_description,
                     gm.genres_json,
                     gm.categories_json,
@@ -644,8 +868,10 @@ class TrackerStorage:
                 """
                 SELECT
                     p.*,
-                    COALESCE(p.image_url, gm.header_image) AS publish_image_url
+                    COALESCE(p.image_url, gm.header_image) AS publish_image_url,
+                    g.is_approved
                 FROM promotions p
+                JOIN games g ON g.app_id = p.app_id
                 LEFT JOIN game_metadata gm ON gm.app_id = p.app_id
                 WHERE p.id = ?
                 """,
@@ -653,6 +879,8 @@ class TrackerStorage:
             ).fetchone()
             if promo is None:
                 raise ValueError(f"Промо #{promotion_id} не найдено")
+            if not promo["is_approved"]:
+                raise ValueError("Нельзя согласовать промо исключённой игры")
             if not all(
                 [
                     promo["employee_text"],
@@ -673,6 +901,15 @@ class TrackerStorage:
                 """,
                 (approved_by, timestamp, timestamp, promotion_id),
             )
+            conn.execute(
+                """
+                UPDATE game_rotation
+                SET status = 'used', used_at = ?
+                WHERE promotion_id = ?
+                    AND status = 'reserved'
+                """,
+                (timestamp, promotion_id),
+            )
 
             payloads = {
                 "employees": promo["employee_text"],
@@ -684,6 +921,11 @@ class TrackerStorage:
                     {
                         "text": text,
                         "image_url": promo["publish_image_url"],
+                        "parse_mode": (
+                            "HTML"
+                            if channel in {"employees", "telegram"}
+                            else None
+                        ),
                     },
                     ensure_ascii=False,
                 )
@@ -740,6 +982,16 @@ class TrackerStorage:
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Промо #{promotion_id} не найдено")
+            if status in {"postponed", "cancelled"}:
+                conn.execute(
+                    """
+                    UPDATE game_rotation
+                    SET status = 'released'
+                    WHERE promotion_id = ?
+                        AND status = 'reserved'
+                    """,
+                    (promotion_id,),
+                )
 
     def approved_games_for_enrichment(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
@@ -762,6 +1014,7 @@ class TrackerStorage:
         self,
         app_id: int,
         *,
+        steam_name: str | None = None,
         store_description: str | None,
         genres: list[str],
         categories: list[str],
@@ -772,6 +1025,15 @@ class TrackerStorage:
         error: str | None = None,
     ) -> None:
         with self.connect() as conn:
+            if steam_name:
+                conn.execute(
+                    """
+                    UPDATE games
+                    SET steam_name = ?, updated_at = ?
+                    WHERE app_id = ?
+                    """,
+                    (steam_name, utc_now(), app_id),
+                )
             conn.execute(
                 """
                 INSERT INTO game_metadata (
@@ -832,6 +1094,138 @@ class TrackerStorage:
                 "outbox": conn.execute(
                     "SELECT COUNT(*) FROM outbox"
                 ).fetchone()[0],
+            }
+
+    def current_state_matrix(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        g.app_id,
+                        a.steam_id,
+                        a.vanity_url AS nickname,
+                        a.club_name,
+                        COALESCE(ag.owned, 0) AS owned,
+                        COALESCE(ag.last_playtime_minutes, 0)
+                            AS playtime_minutes,
+                        a.updated_at AS recorded_at
+                    FROM games g
+                    CROSS JOIN accounts a
+                    LEFT JOIN account_games ag
+                        ON ag.app_id = g.app_id
+                        AND ag.steam_id = a.steam_id
+                    WHERE g.is_approved = 1
+                        AND a.active = 1
+                    ORDER BY g.app_id, a.club_name, a.vanity_url
+                    """
+                )
+            )
+
+    def approved_game_sheet_rows(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        g.app_id,
+                        g.steam_name,
+                        g.official_name,
+                        g.player_count,
+                        g.base_description,
+                        g.manager_description,
+                        gm.store_description,
+                        gm.source_language,
+                        gm.genres_json,
+                        gm.categories_json,
+                        gm.header_image,
+                        gm.updated_at AS metadata_updated_at,
+                        gm.last_error,
+                        (
+                            SELECT COUNT(*)
+                            FROM account_games ag
+                            JOIN accounts a ON a.steam_id = ag.steam_id
+                            WHERE ag.app_id = g.app_id
+                                AND ag.owned = 1
+                                AND a.active = 1
+                        ) AS owned_count,
+                        (
+                            SELECT COUNT(*)
+                            FROM accounts a
+                            WHERE a.active = 1
+                        ) AS account_count,
+                        (
+                            SELECT MAX(p.valid_to)
+                            FROM promotions p
+                            WHERE p.app_id = g.app_id
+                                AND p.status = 'approved'
+                        ) AS last_promotion,
+                        (
+                            SELECT MAX(gr.cycle_number)
+                            FROM game_rotation gr
+                            WHERE gr.app_id = g.app_id
+                                AND gr.status = 'used'
+                        ) AS last_rotation_cycle
+                    FROM games g
+                    LEFT JOIN game_metadata gm ON gm.app_id = g.app_id
+                    WHERE g.is_approved = 1
+                    ORDER BY g.steam_name
+                    """
+                )
+            )
+
+    def promotion_sheet_row(self, promotion_id: int) -> sqlite3.Row:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    p.*,
+                    g.steam_name,
+                    COALESCE(p.image_url, gm.header_image) AS publish_image_url,
+                    gr.cycle_number
+                FROM promotions p
+                JOIN games g ON g.app_id = p.app_id
+                LEFT JOIN game_metadata gm ON gm.app_id = p.app_id
+                LEFT JOIN game_rotation gr ON gr.promotion_id = p.id
+                WHERE p.id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Промо #{promotion_id} не найдено")
+            return row
+
+    def rotation_summary(self) -> dict[str, int]:
+        with self.connect() as conn:
+            cycle_row = conn.execute(
+                "SELECT MAX(cycle_number) AS value FROM game_rotation"
+            ).fetchone()
+            cycle_number = int(cycle_row["value"] or 1)
+            approved = conn.execute(
+                "SELECT COUNT(*) FROM games WHERE is_approved = 1"
+            ).fetchone()[0]
+            used = conn.execute(
+                """
+                SELECT COUNT(DISTINCT app_id)
+                FROM game_rotation
+                WHERE cycle_number = ? AND status = 'used'
+                """,
+                (cycle_number,),
+            ).fetchone()[0]
+            reserved = conn.execute(
+                """
+                SELECT COUNT(DISTINCT app_id)
+                FROM game_rotation
+                WHERE cycle_number = ? AND status = 'reserved'
+                """,
+                (cycle_number,),
+            ).fetchone()[0]
+            return {
+                "cycle_number": cycle_number,
+                "approved_games": approved,
+                "used_games": used,
+                "reserved_games": reserved,
+                "available_games": max(approved - used - reserved, 0),
             }
 
     def approved_license_matrix(self) -> list[sqlite3.Row]:

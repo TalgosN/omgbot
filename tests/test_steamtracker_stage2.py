@@ -8,6 +8,7 @@ from steamtracker.jobs import (
     start_catalog_sync,
     start_license_sync,
     start_store_enrichment,
+    start_weekly_promo,
 )
 from steamtracker.store import SteamStoreClient
 from steamtracker.telegram import register_steamtracker_handlers
@@ -57,9 +58,15 @@ class StageTwoTests(unittest.TestCase):
 
     def test_openrouter_uses_json_mode_and_validates_discount(self):
         result = {
-            "employee": "Сотрудникам: скидка 100 рублей",
-            "telegram": "Анонс: скидка 100 рублей",
-            "vk": "Подробный анонс: скидка 100 рублей",
+            "employee_description": "Командная VR-игра.",
+            "employee_audience": "Любителям совместных приключений.",
+            "social_headline": "командное приключение начинается!",
+            "social_paragraphs": [
+                "Проверьте, насколько слаженно действует ваша команда.",
+                "Приходите за яркими эмоциями и новыми впечатлениями!",
+            ],
+            "social_benefits": [],
+            "social_closing": "Бронируйте удобное время! 👇",
         }
         session = Mock()
         session.post.return_value = FakeResponse(
@@ -97,7 +104,9 @@ class StageTwoTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(texts.employee, result["employee"])
+        self.assertIn("<b>🎮 Игра недели: Test Game</b>", texts.employee)
+        self.assertIn("100 рублей", texts.telegram)
+        self.assertIn("Test Game", texts.vk)
         request_body = session.post.call_args.kwargs["json"]
         self.assertEqual(
             request_body["response_format"],
@@ -125,12 +134,14 @@ class StageTwoTests(unittest.TestCase):
                 "STEAMTRACKER_SYNC_ENABLED": "false",
                 "STEAMTRACKER_STORE_ENRICHMENT_ENABLED": "false",
                 "STEAMTRACKER_CATALOG_SYNC_ENABLED": "false",
+                "STEAMTRACKER_WEEKLY_PROMO_ENABLED": "false",
             },
             clear=False,
         ):
             self.assertFalse(start_license_sync())
             self.assertFalse(start_store_enrichment())
             self.assertFalse(start_catalog_sync())
+            self.assertFalse(start_weekly_promo())
 
 
 if __name__ == "__main__":

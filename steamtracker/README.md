@@ -17,16 +17,17 @@
 - Steam Store-описания, жанры, категории и изображения для 89 игр;
 - переключаемый `FakeGenerator`/OpenRouter с проверкой JSON;
 - Telegram-согласование внутри Виарыча, выключенное по умолчанию.
+- полный `Current_State` из 89 игр × 42 аккаунта с `owned=0`;
+- автоматические Steam-названия и описания в листе `Игры`;
+- случайная ротация без повторов внутри цикла;
+- автоматическая игра недели по понедельникам в 10:30 по Москве;
+- безопасный HTML для сотрудников и Telegram.
 
 ## Установка и тесты
 
 ```powershell
 pip install -r requirements.txt
-python -m unittest tests.test_steamtracker_catalog `
-  tests.test_steamtracker_license_sync `
-  tests.test_steamtracker_promo_workflow `
-  tests.test_steamtracker_sync_service `
-  tests.test_steamtracker_stage2 -v
+python -m unittest discover -s tests -p "test_steamtracker*.py" -v
 ```
 
 Тесты не требуют Steam, Telegram, VK или LLM-ключей.
@@ -37,10 +38,10 @@ python -m unittest tests.test_steamtracker_catalog `
 из листа `Игры` Google-таблицы:
 
 ```powershell
-python tracker_cli.py init
-python tracker_cli.py status
-python tracker_cli.py export-availability
-python tracker_cli.py enrich-store
+python steamtracker_cli.py init
+python steamtracker_cli.py status
+python steamtracker_cli.py export-availability
+python steamtracker_cli.py enrich-store
 ```
 
 Будет создана новая компактная база `db/steamtracker_v2.db`. Legacy-база
@@ -51,7 +52,7 @@ python tracker_cli.py enrich-store
 Для полностью автономного запуска каталог можно передать CSV-файлом:
 
 ```powershell
-python tracker_cli.py init --catalog-csv .\games.csv
+python steamtracker_cli.py init --catalog-csv .\games.csv
 ```
 
 CSV поддерживает колонки:
@@ -66,21 +67,21 @@ steam_app_id,name,player_count,description
 ## Проверка промо-процесса без публикации
 
 Целевая структура листа `Промо-план` сохранена в
-`steamtracker/promo_plan_template.csv`. Рабочую Google-таблицу этот этап
-автоматически не изменяет.
+`steamtracker/promo_plan_template.csv`. Автоматическая недельная задача
+добавляет или обновляет строку по ID промо.
 
 Пример использует Beat Saber и тестовую скидку:
 
 ```powershell
-python tracker_cli.py create-promo `
+python steamtracker_cli.py create-promo `
   --app-id 620980 `
-  --discount "ТЕСТ: 100 рублей" `
+  --discount "100 рублей" `
   --from 2026-08-01 `
   --to 2026-08-07
 
-python tracker_cli.py generate 1
-python tracker_cli.py approve 1 --by test-manager
-python tracker_cli.py status
+python steamtracker_cli.py generate 1
+python steamtracker_cli.py approve 1 --by test-manager
+python steamtracker_cli.py status
 ```
 
 После согласования создаются три записи outbox со статусом
@@ -94,7 +95,7 @@ Steam API key:
 
 ```powershell
 $env:STEAM_API_KEY="новый_ключ"
-python tracker_cli.py sync-steam
+python steamtracker_cli.py sync-steam
 ```
 
 Если конкретный аккаунт не ответил, его лицензии не меняются. Лицензия
@@ -108,6 +109,8 @@ STEAM_API_KEY=...
 STEAMTRACKER_SYNC_ENABLED=true
 STEAMTRACKER_STORE_ENRICHMENT_ENABLED=true
 STEAMTRACKER_CATALOG_SYNC_ENABLED=true
+STEAMTRACKER_GOOGLE_EXPORT_ENABLED=true
+STEAMTRACKER_WEEKLY_PROMO_ENABLED=false
 ```
 
 Лицензии проверяются раз в четыре часа, Steam Store — ежедневно в 05:30 по
@@ -137,8 +140,9 @@ OPENROUTER_MODEL=
 
 `OPENROUTER_MODEL` можно оставить пустым, чтобы использовать модель,
 назначенную в аккаунте OpenRouter, либо указать проверенный slug. Ответ
-принимается только как JSON с полями `employee`, `telegram` и `vk`. Во всех
-трёх текстах проверяется точное значение скидки.
+принимается только как структурированный JSON. Название Steam, скидка, даты и
+количество игроков добавляются программно, поэтому модель не может исказить
+эти значения. Telegram и карточка сотрудникам формируются безопасным HTML.
 
 ## Telegram-согласование
 
@@ -163,9 +167,9 @@ STEAMTRACKER_APPROVER_IDS=123456789
 /steam_promo 1
 ```
 
-Доступны согласование, полная перегенерация, отдельная перегенерация текста
-сотрудникам или социальных анонсов и откладывание. Даже после согласования
-создаётся только dry-run outbox.
+Доступны согласование, выбор другой случайной игры, полная перегенерация,
+отдельная перегенерация текста сотрудникам или социальных анонсов и
+откладывание. Даже после согласования создаётся только dry-run outbox.
 
 ## Управляющие Google-листы
 
@@ -184,6 +188,24 @@ python steamtracker_cli.py setup-sheets --apply
 
 Существующие строки и колонки не очищаются. Для старого `Промо-плана`
 заполняется пустой заголовок колонки C, старые тексты остаются на месте.
+
+Предварительный просмотр автоматических данных:
+
+```powershell
+python steamtracker_cli.py sync-data-sheets
+```
+
+Запись актуального справочника `Игры`, настроек и полной матрицы
+`Current_State`:
+
+```powershell
+python steamtracker_cli.py sync-data-sheets --apply
+```
+
+`Current_State` содержит колонки `steam_app_id`, `steam_id`, `nickname`,
+`club_name`, `owned`, `playtime_minutes`, `recorded_at`. Он полностью
+перезаписывается актуальным снимком. Старый лист `Наличие лицензий` больше не
+используется.
 
 Проверка менеджерских изменений в листе `Игры`:
 
@@ -205,8 +227,43 @@ Steam AppID либо полной Steam-ссылкой. Новая игра пр
 Store. Для временного отключения используется `Приостановлена`, для исключения
 — `Исключена`. Физического удаления игры и её истории не происходит.
 
+Steam-данные записываются только в автоматические колонки:
+`Название_Steam`, `Описание_Steam`, `Язык_описания`, жанры, категории,
+изображение и время обновления. Старые `name` и `description` не очищаются.
+Для ручной замены описания используется `Описание_менеджера`.
+
+## Игра недели
+
+Лист `Настройки Steam Tracker` создаётся со значениями:
+
+```text
+weekly_discount=100 рублей
+generation_day=monday
+generation_time=10:30
+timezone=Europe/Moscow
+weekly_promo_enabled=false
+```
+
+Проверка ротации без изменений:
+
+```powershell
+python steamtracker_cli.py weekly-promo
+```
+
+Тестовое создание с явным подтверждением:
+
+```powershell
+python steamtracker_cli.py weekly-promo --apply --force
+```
+
+Для автоматики нужны одновременно
+`STEAMTRACKER_WEEKLY_PROMO_ENABLED=true` в `.env` и
+`weekly_promo_enabled=true` в таблице. Период всегда понедельник-воскресенье.
+Согласованная игра не выбирается повторно, пока не завершится текущий цикл.
+
 ## Текущие ограничения
 
 - отправка сотрудникам выключена;
 - публикация в Telegram и VK выключена;
-- запись обратно в Google Sheets пока не выполняется.
+- `Steam Динамика` и `Ошибки Steam Tracker` пока имеют только структуру;
+- формулы legacy-листов нужно перевести с `game_name` на `steam_app_id`.

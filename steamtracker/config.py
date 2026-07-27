@@ -47,6 +47,8 @@ class Settings:
     spreadsheet_id: str
     google_service_account_file: Path
     catalog_sync_enabled: bool
+    google_export_enabled: bool
+    weekly_promo_enabled: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -103,5 +105,11 @@ class Settings:
             ),
             catalog_sync_enabled=_env_bool(
                 "STEAMTRACKER_CATALOG_SYNC_ENABLED"
+            ),
+            google_export_enabled=_env_bool(
+                "STEAMTRACKER_GOOGLE_EXPORT_ENABLED"
+            ),
+            weekly_promo_enabled=_env_bool(
+                "STEAMTRACKER_WEEKLY_PROMO_ENABLED"
             ),
         )

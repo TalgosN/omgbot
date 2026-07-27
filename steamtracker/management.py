@@ -144,10 +144,11 @@ class CatalogManagementService:
                 or f"Steam App {app_id}"
             )
             manager_description = str(
-                row.get("description")
+                row.get("Описание_менеджера")
                 or row.get("Ручное_описание")
                 or ""
             ).strip()
+            legacy_description = str(row.get("description") or "").strip()
             active_games.append(
                 {
                     "app_id": app_id,
@@ -159,13 +160,14 @@ class CatalogManagementService:
                     "official_name": official_name,
                     "player_count": player_count,
                     "base_description": (
-                        manager_description
+                        legacy_description
                         or (
                             known_app["base_description"]
                             if known_app
                             else metadata.description
                         )
                     ),
+                    "manager_description": manager_description or None,
                     "description_source": (
                         "manager"
                         if manager_description
@@ -203,6 +205,7 @@ class CatalogManagementService:
         for metadata in metadata_to_save:
             self.storage.save_game_metadata(
                 metadata.app_id,
+                steam_name=metadata.name,
                 store_description=metadata.description,
                 genres=metadata.genres,
                 categories=metadata.categories,

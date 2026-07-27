@@ -1,7 +1,9 @@
 """Генерация, согласование и dry-run доставка промо-материалов."""
 
 import json
+from datetime import date
 from dataclasses import dataclass
+from html import escape
 from typing import Protocol
 
 from .db import TrackerStorage
@@ -14,26 +16,149 @@ class GeneratedTexts:
     vk: str
 
 
+@dataclass(frozen=True)
+class ContentDraft:
+    employee_description: str
+    employee_audience: str
+    social_headline: str
+    social_paragraphs: tuple[str, ...]
+    social_benefits: tuple[str, ...]
+    social_closing: str
+
+
 class ContentGenerator(Protocol):
     def generate(self, context: dict) -> GeneratedTexts:
         ...
 
 
+MONTHS = (
+    "",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+
 def _period(context: dict) -> str:
-    if context.get("valid_from") and context.get("valid_to"):
-        return f"с {context['valid_from']} по {context['valid_to']}"
-    if context.get("valid_from"):
-        return f"с {context['valid_from']}"
-    if context.get("valid_to"):
-        return f"до {context['valid_to']}"
+    valid_from = context.get("valid_from")
+    valid_to = context.get("valid_to")
+    start = date.fromisoformat(valid_from) if valid_from else None
+    end = date.fromisoformat(valid_to) if valid_to else None
+    if start and end:
+        if start.year == end.year and start.month == end.month:
+            return f"{start.day}-{end.day} {MONTHS[end.month]}"
+        return (
+            f"{start.day} {MONTHS[start.month]} - "
+            f"{end.day} {MONTHS[end.month]}"
+        )
+    if start:
+        return f"с {start.day} {MONTHS[start.month]}"
+    if end:
+        return f"до {end.day} {MONTHS[end.month]}"
     return "в период акции"
 
 
-def _short_description(value: str | None, limit: int = 320) -> str:
-    if not value:
-        return "Базовое описание пока не заполнено менеджером."
+def _discount_phrase(value: str) -> str:
     value = " ".join(value.split())
-    return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+    return value if "скид" in value.casefold() else f"скидка {value}"
+
+
+def _clean_generated(value: str) -> str:
+    return " ".join(value.replace("—", "-").split())
+
+
+def render_content(context: dict, draft: ContentDraft) -> GeneratedTexts:
+    name = str(context["game_name"]).strip()
+    discount = str(context["discount_text"]).strip()
+    players = int(context.get("player_count") or 1)
+    player_text = str(players) if players == 1 else f"до {players}"
+    period = _period(context)
+    discount_phrase = _discount_phrase(discount)
+
+    description = _clean_generated(draft.employee_description)
+    audience = _clean_generated(draft.employee_audience)
+    headline = _clean_generated(draft.social_headline)
+    paragraphs = tuple(
+        _clean_generated(value) for value in draft.social_paragraphs
+    )
+    benefits = tuple(
+        _clean_generated(value) for value in draft.social_benefits
+    )
+    closing = _clean_generated(draft.social_closing)
+
+    employee_actions = [
+        "• самостоятельно запустить игру и сыграть;",
+        "• проверить и выучить управление;",
+    ]
+    if players > 1:
+        employee_actions.append(
+            "• проверить подключение нескольких игроков;"
+        )
+    employee_actions.append(
+        "• понять, каким клиентам рекомендовать игру."
+    )
+    employee = (
+        f"<b>🎮 Игра недели: {escape(name)}</b>\n\n"
+        f"<b>Что это:</b>\n{escape(description)}\n\n"
+        f"<b>Кому рекомендовать:</b>\n{escape(audience)}\n\n"
+        f"<b>Количество игроков:</b> {player_text}\n"
+        f"<b>Акция:</b> {escape(discount_phrase)}\n"
+        f"<b>Период:</b> {period}\n\n"
+        "<b>Что должен сделать администратор:</b>\n"
+        + "\n".join(employee_actions)
+    )
+
+    telegram_blocks = [
+        f"<b>🎮 {escape(name)}: {escape(headline)}</b>",
+        *[escape(value) for value in paragraphs],
+    ]
+    vk_blocks = [
+        f"🎮 {name}: {headline}",
+        *paragraphs,
+    ]
+    if benefits:
+        telegram_blocks.append(
+            "<b>⚔️ Почему стоит попробовать?</b>\n"
+            + "\n".join(f"• {escape(value)};" for value in benefits)
+        )
+        vk_blocks.append(
+            "⚔️ Почему стоит попробовать?\n"
+            + "\n".join(f"• {value};" for value in benefits)
+        )
+    telegram_blocks.extend(
+        [
+            (
+                f"🔥 <b>Игра недели:</b> {escape(name)}\n"
+                f"<b>Акция:</b> {escape(discount_phrase)}\n"
+                f"<b>Период:</b> {period}"
+            ),
+            escape(closing),
+        ]
+    )
+    vk_blocks.extend(
+        [
+            (
+                f"🔥 Игра недели: {name}\n"
+                f"Акция: {discount_phrase}\n"
+                f"Период: {period}"
+            ),
+            closing,
+        ]
+    )
+    return GeneratedTexts(
+        employee=employee,
+        telegram="\n\n".join(telegram_blocks),
+        vk="\n\n".join(vk_blocks),
+    )
 
 
 class FakeGenerator:
@@ -41,48 +166,32 @@ class FakeGenerator:
 
     provider_name = "fake"
     model_name = "deterministic-template"
-    prompt_version = "steamtracker-fake-v1"
+    prompt_version = "steamtracker-fake-v2"
 
     def generate(self, context: dict) -> GeneratedTexts:
-        name = context["game_name"]
-        players = context.get("player_count") or "не указано"
-        discount = context["discount_text"]
-        period = _period(context)
-        description = _short_description(context.get("base_description"))
-        manager_comment = context.get("manager_comment")
-        comment_line = (
-            f"\nКомментарий менеджера: {manager_comment}"
-            if manager_comment
-            else ""
+        description = context.get("base_description") or (
+            "VR-игра из согласованного каталога клуба."
         )
-
-        employee = (
-            f"[DRY RUN] Игра недели для сотрудников: {name}\n"
-            f"Количество игроков: {players}\n"
-            f"Скидка: {discount}, {period}.\n\n"
-            f"Что это за игра: {description}\n"
-            "Задача администратора: самостоятельно изучить запуск и "
-            "предлагать игру подходящим клиентам."
-            f"{comment_line}"
-        )
-        telegram = (
-            f"[DRY RUN] 🎮 {name}\n\n"
-            f"{description}\n\n"
-            f"👥 Игроков: {players}\n"
-            f"🔥 Скидка: {discount}, {period}.\n"
-            "Уточняйте свободное время и приходите играть!"
-        )
-        vk = (
-            f"[DRY RUN] Игра недели — {name}\n\n"
-            f"{description}\n\n"
-            f"Можно играть: {players}. "
-            f"На игру действует скидка {discount} {period}.\n\n"
-            "Собирайте команду и бронируйте удобное время в OMG VR."
-        )
-        return GeneratedTexts(
-            employee=employee,
-            telegram=telegram,
-            vk=vk,
+        return render_content(
+            context,
+            ContentDraft(
+                employee_description=str(description),
+                employee_audience=(
+                    "Гостям, которым подходит жанр и формат этой VR-игры."
+                ),
+                social_headline="пора попробовать что-то новое!",
+                social_paragraphs=(
+                    str(description),
+                    (
+                        "Приходите познакомиться с игрой недели и получить "
+                        "новые впечатления в виртуальной реальности!"
+                    ),
+                ),
+                social_benefits=(),
+                social_closing=(
+                    "Бронируйте удобное время и приходите играть! 👇"
+                ),
+            ),
         )
 
 

@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 from .catalog import read_catalog_csv, resolve_catalog
@@ -15,6 +16,7 @@ from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
 from .steam import LicenseSyncService, SteamClient
 from .store import GameEnrichmentService, SteamStoreClient
+from .weekly import WeeklyPromotionService
 
 
 def _storage(settings: Settings) -> TrackerStorage:
@@ -118,6 +120,40 @@ def command_sync_catalog_sheets(
         print("Каталог проверен. Для применения повторите с --apply.")
 
 
+def command_sync_data_sheets(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> None:
+    storage = _storage(settings)
+    manager = GoogleSheetsManager(settings)
+    setup = manager.setup(apply=args.apply)
+    missing = [
+        action.sheet
+        for action in setup.actions
+        if action.action == "create_sheet"
+    ]
+    if missing and not args.apply:
+        print(
+            json.dumps(
+                {
+                    "applied": False,
+                    "missing_sheets": missing,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        print(
+            "Сначала создайте листы командой "
+            "setup-sheets --apply либо повторите эту команду с --apply."
+        )
+        return
+    result = manager.sync_tracker_data(storage, apply=args.apply)
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    if not args.apply:
+        print("Данные не записаны. Для применения повторите с --apply.")
+
+
 def command_create_promo(
     args: argparse.Namespace,
     settings: Settings,
@@ -166,6 +202,49 @@ def command_approve(args: argparse.Namespace, settings: Settings) -> None:
         f"Промо #{args.promotion_id} согласовано; "
         "созданы только dry-run задания."
     )
+
+
+def command_sync_promo_sheet(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> None:
+    result = GoogleSheetsManager(settings).sync_promotion(
+        _storage(settings),
+        args.promotion_id,
+        apply=args.apply,
+    )
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    if not args.apply:
+        print("Промо не записано. Для применения повторите с --apply.")
+
+
+def command_weekly_promo(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> None:
+    storage = _storage(settings)
+    service = WeeklyPromotionService(
+        storage,
+        _workflow(settings),
+        GoogleSheetsManager(settings),
+    )
+    if not args.apply:
+        print(
+            json.dumps(
+                service.preview(),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        print("Промо не создано. Для применения повторите с --apply.")
+        return
+    result = service.run(
+        reference_date=(
+            date.fromisoformat(args.date) if args.date else None
+        ),
+        force=args.force,
+    )
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 
 def command_status(args: argparse.Namespace, settings: Settings) -> None:
@@ -252,6 +331,10 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     sync_catalog_parser.add_argument("--apply", action="store_true")
     sync_catalog_parser.set_defaults(handler=command_sync_catalog_sheets)
 
+    sync_data_parser = subparsers.add_parser("sync-data-sheets")
+    sync_data_parser.add_argument("--apply", action="store_true")
+    sync_data_parser.set_defaults(handler=command_sync_data_sheets)
+
     promo_parser = subparsers.add_parser("create-promo")
     promo_parser.add_argument("--app-id", type=int, required=True)
     promo_parser.add_argument("--discount", required=True)
@@ -269,6 +352,24 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     approve_parser.add_argument("promotion_id", type=int)
     approve_parser.add_argument("--by", required=True)
     approve_parser.set_defaults(handler=command_approve)
+
+    sync_promo_parser = subparsers.add_parser("sync-promo-sheet")
+    sync_promo_parser.add_argument("promotion_id", type=int)
+    sync_promo_parser.add_argument("--apply", action="store_true")
+    sync_promo_parser.set_defaults(handler=command_sync_promo_sheet)
+
+    weekly_parser = subparsers.add_parser("weekly-promo")
+    weekly_parser.add_argument("--apply", action="store_true")
+    weekly_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Игнорировать weekly_promo_enabled в тестовом запуске",
+    )
+    weekly_parser.add_argument(
+        "--date",
+        help="Дата внутри тестовой недели в формате YYYY-MM-DD",
+    )
+    weekly_parser.set_defaults(handler=command_weekly_promo)
 
     status_parser = subparsers.add_parser("status")
     status_parser.set_defaults(handler=command_status)
@@ -304,6 +405,8 @@ def main() -> None:
         spreadsheet_id=settings.spreadsheet_id,
         google_service_account_file=settings.google_service_account_file,
         catalog_sync_enabled=settings.catalog_sync_enabled,
+        google_export_enabled=settings.google_export_enabled,
+        weekly_promo_enabled=settings.weekly_promo_enabled,
     )
     args.handler(args, settings)
 

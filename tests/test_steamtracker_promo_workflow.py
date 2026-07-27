@@ -48,6 +48,21 @@ class PromotionWorkflowTests(unittest.TestCase):
         self.assertNotEqual(texts.telegram, texts.vk)
         for text in texts.__dict__.values():
             self.assertIn("100 рублей", text)
+            self.assertIn("Test Game", text)
+        self.assertIn(
+            "<b>Что должен сделать администратор:</b>",
+            texts.employee,
+        )
+        self.assertIn(
+            "проверить и выучить управление",
+            texts.employee,
+        )
+        self.assertIn(
+            "проверить подключение нескольких игроков",
+            texts.employee,
+        )
+        self.assertIn("<b>🎮", texts.telegram)
+        self.assertNotIn("<b>", texts.vk)
 
         self.workflow.approve_and_dispatch(
             promotion_id,
