@@ -1097,9 +1097,10 @@ def _collect_payroll_report_data(date_start, date_end):
             shift_clubs[(login_key, shift['shift_date'])].add(shift['club'])
 
         doubles = conn.execute(
-            """SELECT who, date(d_rep) AS report_date, amount
-               FROM double
-               WHERE date(d_rep) >= date(?) AND date(d_rep) < date(?)""",
+            """SELECT telegram AS who, date(event_date) AS report_date, value AS amount
+               FROM hashtag_events
+               WHERE hashtag = '#двойная' AND status = 'applied'
+                 AND date(event_date) >= date(?) AND date(event_date) < date(?)""",
             (start_iso, end_iso),
         ).fetchall()
         for item in doubles:
@@ -1119,22 +1120,31 @@ def _collect_payroll_report_data(date_start, date_end):
                 employee['Двойные без клуба'] += amount
 
         birthdays = conn.execute(
-            """SELECT who, club, COUNT(DISTINCT ID) AS amount
-               FROM birthday
-               WHERE date(dt_rep) >= date(?) AND date(dt_rep) < date(?)
-                 AND status = 'Одобрено'
-               GROUP BY who, club""",
-            (start_iso, end_iso),
+            """SELECT telegram AS who, date(event_date) AS report_date,
+                      club, COALESCE(value, ?) AS amount
+               FROM hashtag_events
+               WHERE hashtag = '#др' AND status = 'applied'
+                 AND date(event_date) >= date(?) AND date(event_date) < date(?)""",
+            (bdays_rate, start_iso, end_iso),
         ).fetchall()
         for item in birthdays:
-            employee_data(item['who'])['Клубы'][item['club']] += _decimal(item['amount']) * _decimal(bdays_rate)
+            employee = employee_data(item['who'])
+            login_key = _canonical_login(item['who'])
+            clubs = shift_clubs.get((login_key, item['report_date']), set())
+            club = item['club'] or (next(iter(clubs)) if len(clubs) == 1 else 'Без клуба')
+            employee['Клубы'][club] += _decimal(item['amount'])
 
-        for table, field in (('autosim', 'Автосим'), ('activation', 'Активации')):
+        for hashtag, field in (
+            ('#автосим', 'Автосим'),
+            ('#активация', 'Активации'),
+        ):
             rows = conn.execute(
-                f"""SELECT who, SUM(amount) AS amount FROM {table}
-                    WHERE date(d_rep) >= date(?) AND date(d_rep) < date(?)
-                    GROUP BY who""",
-                (start_iso, end_iso),
+                """SELECT telegram AS who, SUM(value) AS amount
+                   FROM hashtag_events
+                   WHERE hashtag=? AND status='applied'
+                     AND date(event_date) >= date(?) AND date(event_date) < date(?)
+                   GROUP BY telegram""",
+                (hashtag, start_iso, end_iso),
             ).fetchall()
             for item in rows:
                 employee_data(item['who'])[field] += _decimal(item['amount'])

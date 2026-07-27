@@ -45,10 +45,15 @@ class PayrollReportTests(unittest.TestCase):
                 source TEXT,
                 UNIQUE(login, club, valid_from)
             );
-            CREATE TABLE double (ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE, amount REAL, desc TEXT);
-            CREATE TABLE birthday (ID INTEGER PRIMARY KEY, dt_rep DATE, who TEXT, club TEXT, desc TEXT, status TEXT);
-            CREATE TABLE autosim (ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE, amount REAL);
-            CREATE TABLE activation (ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE, amount REAL);
+            CREATE TABLE hashtag_events (
+                id INTEGER PRIMARY KEY,
+                telegram TEXT,
+                hashtag TEXT,
+                value REAL,
+                event_date DATE,
+                club TEXT,
+                status TEXT
+            );
         ''')
         conn.executemany(
             'INSERT INTO users VALUES (?, ?, ?)',
@@ -75,14 +80,16 @@ class PayrollReportTests(unittest.TestCase):
             ],
         )
         conn.executemany(
-            'INSERT INTO double VALUES (?, ?, ?, ?, ?)',
-            [(1, '@one', '2026-07-20', 1, ''), (2, '@two', '2026-07-20', 2, '')],
+            'INSERT INTO hashtag_events VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [
+                (1, '@one', '#двойная', 1, '2026-07-20', None, 'applied'),
+                (2, '@two', '#двойная', 2, '2026-07-20', None, 'applied'),
+                (3, '@one', '#др', 500, '2026-07-20', 'Ленинский', 'applied'),
+                (4, '@one', '#автосим', 50, '2026-07-20', None, 'applied'),
+                (5, '@one', '#активация', 25.5, '2026-07-21', None, 'applied'),
+                (6, '@one', '#др', 500, '2026-07-21', 'Коллцентр', 'pending'),
+            ],
         )
-        conn.execute(
-            "INSERT INTO birthday VALUES (1, '2026-07-20', '@one', 'Ленинский', '', 'Одобрено')"
-        )
-        conn.execute("INSERT INTO autosim VALUES (1, '@one', '2026-07-20', 50)")
-        conn.execute("INSERT INTO activation VALUES (1, '@one', '2026-07-21', 25.5)")
         conn.commit()
         conn.close()
 

@@ -58,22 +58,7 @@ WITH anki as ( -------времянка по анкетам
 
 
 )
-----ДР
-
-SELECT 		date(br.dt_rep) 			as dt_rep,
-			br.who 						as s_name,
-			'ДР'						as kpi,
-			count(distinct br.id) 		as fact
-			
-FROM birthday br
-
-WHERE br.status = 'Одобрено'
-
-GROUP BY	date(br.dt_rep),
-			br.who,
-			'ДР'
-------------------------------------------------------------------------------------------------------------------------
-UNION -- продления
+----продления
 
 SELECT  date(fp.dt_rep) 				as dt_rep,
 		fp.who 							as s_name,
@@ -81,6 +66,8 @@ SELECT  date(fp.dt_rep) 				as dt_rep,
 		count(distinct fp.id) 			as fact
 
 FROM afterparty fp
+
+WHERE COALESCE(fp.status, '') <> 'Отклонено'
 
 GROUP BY 	date(fp.dt_rep),
 			fp.who,
@@ -132,7 +119,7 @@ SELECT 		date(nt.dt_rep) 			as dt_rep,
 			
 FROM initiative nt
 
-
+WHERE COALESCE(nt.status, '') <> 'Отклонено'
 
 GROUP BY	date(nt.dt_rep),
 			nt.who,
@@ -278,22 +265,7 @@ WITH all_records AS (
 						date(substr(sh.dt_shift, 1, 10)),
 						sh.club
 	)
-	----ДР
-	
-	SELECT 		date(br.dt_rep) 			as dt_rep,
-				br.who 						as s_name,
-				'ДР'						as kpi,
-				count(distinct br.id) 		as fact
-				
-	FROM birthday br
-	
-	WHERE br.status = 'Одобрено'
-	
-	GROUP BY	date(br.dt_rep),
-				br.who,
-				'ДР'
-	------------------------------------------------------------------------------------------------------------------------
-	UNION -- продления
+	----продления
 	
 	SELECT  date(fp.dt_rep) 				as dt_rep,
 			fp.who 							as s_name,
@@ -301,7 +273,9 @@ WITH all_records AS (
 			count(distinct fp.id) 			as fact
 	
 	FROM afterparty fp
-	
+
+	WHERE COALESCE(fp.status, '') <> 'Отклонено'
+
 	GROUP BY 	date(fp.dt_rep),
 				fp.who,
 				'Продления'
@@ -352,7 +326,7 @@ WITH all_records AS (
 				
 	FROM initiative nt
 	
-	
+	WHERE COALESCE(nt.status, '') <> 'Отклонено'
 	
 	GROUP BY	date(nt.dt_rep),
 				nt.who,

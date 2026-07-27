@@ -9,7 +9,7 @@ import telebot
 
 import sql_scripts
 from constants import funclist_acc
-from sheets import tables, update_status, update_table, update_table_open, update_users
+from sheets import tables, update_table, update_table_open, update_users
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, require_role
 
 
@@ -34,6 +34,7 @@ LOGIN_REFERENCES = {
     'autosim': 'who',
     'activation': 'who',
     'double': 'who',
+    'hashtag_events': 'telegram',
     'penalty': 'name',
     'bs': 'name_bs',
     'consumables_history': 'user_name',
@@ -525,8 +526,6 @@ def get_main_kpi(login):
         'amount': cell(22),
         'zone': cell(23, '—'),
         'rank': cell(24, 'нет'),
-        'birthdays_month': cell(25),
-        'birthdays_week': cell(26),
     }
 
 
@@ -565,23 +564,27 @@ def get_database_stats(login, start=None, end=None):
         result['Часы'] = shift_row[0]
         result['Смены'] = shift_row[1]
 
-        extra_tables = {
-            'Автосимы': ('autosim', 'amount'),
-            'Активации': ('activation', 'amount'),
-            'Двойные часы': ('double', 'amount'),
+        extra_hashtags = {
+            'Автосимы': '#автосим',
+            'Активации': '#активация',
+            'Двойные часы': '#двойная',
         }
-        for label, (table, amount_column) in extra_tables.items():
-            if amount_column not in table_columns(conn, table):
+        hashtag_columns = table_columns(conn, 'hashtag_events')
+        for label, hashtag in extra_hashtags.items():
+            if not {'telegram', 'hashtag', 'value', 'event_date', 'status'}.issubset(hashtag_columns):
                 result[label] = 0
                 continue
             extra_params = [login]
             extra_filter = ''
             if start and end:
-                extra_filter = ' AND date(d_rep) BETWEEN date(?) AND date(?)'
+                extra_filter = ' AND date(event_date) BETWEEN date(?) AND date(?)'
                 extra_params.extend([start, end])
             value = conn.execute(
-                f'SELECT COALESCE(SUM("{amount_column}"),0) FROM "{table}" WHERE lower(who)=lower(?) {extra_filter}',
-                extra_params,
+                f'''SELECT COALESCE(SUM(value),0)
+                    FROM hashtag_events
+                    WHERE lower(telegram)=lower(?)
+                      AND hashtag=? AND status='applied' {extra_filter}''',
+                [extra_params[0], hashtag, *extra_params[1:]],
             ).fetchone()[0]
             result[label] = value or 0
         return result
@@ -643,8 +646,7 @@ def format_main_kpi(data, extras=None):
         f'🎯 Итого KPI: <b>{escape_html(data["total_pct"])}</b> '
         f'<i>({escape_html(data["weighted_pct"])} взв.)</i>\n'
         f'🥇 Рейтинг: <b>{escape_html(data["rank"])}</b>\n'
-        f'🎂 ДР за месяц: <b>{escape_html(data["birthdays_month"])}</b>\n'
-        f'🗓️ ДР за неделю: <b>{escape_html(data["birthdays_week"])}</b>\n\n'
+        '\n'
         f'🚀 <b>Дополнительные показатели</b>\n\n'
         f'🚘 Автосимы: <b>{escape_html(format_number(extras.get("Автосимы", 0)))}</b>\n'
         f'⚡ Активации: <b>{escape_html(format_number(extras.get("Активации", 0)))}</b>\n'
@@ -720,10 +722,6 @@ def send_monthly_stats(message, bot, login, display_name):
 
 
 def send_all_time_stats(message, bot, login, display_name):
-    try:
-        update_status()
-    except Exception:
-        pass
     stats = get_database_stats(login)
     text = format_database_stats(stats, '⭐ Статистика за всё время', display_name)
     bot.send_message(message.chat.id, text, parse_mode='HTML')

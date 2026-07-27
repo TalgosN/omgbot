@@ -6,17 +6,16 @@ import pytz
 import pandas as pd
 
 
-action = {'#продление':'afterparty','#др':'birthday','#инициатива':'initiative'}
+action = {'#продление':'afterparty','#инициатива':'initiative'}
 
-symb = {'#продление':10,'#др':3,'#инициатива':11}
+symb = {'#продление':10,'#инициатива':11}
 
 bonus = {'#серт':'sert','#абик':'abik'}
          
-tables = ['afterparty','birthday','initiative','abik','sert']
+tables = ['afterparty','initiative','abik','sert']
 allowed_tables = set(tables + ['reviews'])
 table_date_columns = {
     'afterparty': 'dt_rep',
-    'birthday': 'dt_rep',
     'initiative': 'dt_rep',
     'abik': 'd_rep',
     'sert': 'd_rep',
@@ -33,7 +32,7 @@ def Insert(table,date,user,club,desc):
     table = validate_table(table)
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute(f'INSERT INTO "{table}" (dt_rep, who, club, desc, status) VALUES (?, ?, ?, ?, ?)', (date, user, club, desc, 'На проверке'))
+    cur.execute(f'INSERT INTO "{table}" (dt_rep, who, club, desc, status) VALUES (?, ?, ?, ?, ?)', (date, user, club, desc, 'Одобрено'))
     conn.commit()
     cur.close()
     conn.close()
@@ -87,26 +86,19 @@ def update_table(table):
         pass
     
 
-def update_status():
-    c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
-    sh = c.open('KPI helper')
-    conn=sqlite3.connect('db/omgbot.sql')
-
-    for i in action:
-        table = action[i]
-        validate_table(table)
-        wks = sh.worksheet_by_title(table)
-        ids = wks.get_values(start='A', end='A', returnas='matrix')
-        statuses = wks.get_values(start='F', end='F', returnas='matrix')
-        
-        for k in range (len (ids)):
-           
-            if (statuses[k]!="") and (statuses[k]!="В обработке"):
-                cur = conn.cursor()
-                cur.execute(f'UPDATE "{table}" SET status=? WHERE id=?', (statuses[k][0], ids[k][0]))
-                
-    conn.commit()
-    conn.close()
+def finalize_legacy_kpi_approval():
+    """Однократно одобряет старые ожидающие записи, сохраняя отклонённые."""
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            for table in action.values():
+                validate_table(table)
+                conn.execute(
+                    f'''UPDATE "{table}" SET status='Одобрено'
+                        WHERE status='На проверке' '''
+                )
+    finally:
+        conn.close()
 
 ########################################################   
 
@@ -121,7 +113,7 @@ def def_count (table,user_name,begin,today):
     cur = conn.cursor()
     cur.execute(f'''SELECT COUNT (*) FROM "{table}"
                     WHERE who=? AND dt_rep BETWEEN ? AND datetime(?, '+1 day')
-                    AND status='Одобрено' ''', (user_name, begin, today))
+                    AND COALESCE(status, '') <> 'Отклонено' ''', (user_name, begin, today))
     count = cur.fetchall()[0][0]
     cur.close()
     conn.close() 

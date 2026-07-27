@@ -18,10 +18,14 @@ class SqlScriptsTest(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE birthday (id INTEGER, dt_rep TEXT, who TEXT, status TEXT)"
         )
-        self.conn.execute("CREATE TABLE afterparty (id INTEGER, dt_rep TEXT, who TEXT)")
+        self.conn.execute(
+            "CREATE TABLE afterparty (id INTEGER, dt_rep TEXT, who TEXT, status TEXT)"
+        )
         self.conn.execute("CREATE TABLE sert (d_rep TEXT, who TEXT, bonus REAL)")
         self.conn.execute("CREATE TABLE abik (d_rep TEXT, who TEXT, bonus REAL)")
-        self.conn.execute("CREATE TABLE initiative (id INTEGER, dt_rep TEXT, who TEXT)")
+        self.conn.execute(
+            "CREATE TABLE initiative (id INTEGER, dt_rep TEXT, who TEXT, status TEXT)"
+        )
         self.conn.execute("CREATE TABLE bs (id_bs INTEGER, dt_bs TEXT, name_bs TEXT)")
         self.conn.execute("CREATE TABLE penalty (ID INTEGER, dt TEXT, name TEXT)")
         self.conn.execute("CREATE TABLE reviews (d_rep TEXT, who TEXT, amount REAL)")
@@ -54,6 +58,16 @@ class SqlScriptsTest(unittest.TestCase):
         self.assertEqual(raw_rows, [("@maxon", "Анкеты", 1.0)])
         self.assertEqual(shift_rows, [("2026-07-31", "@maxon", 12.0, 2.0)])
 
+    def test_birthday_is_not_part_of_kpi_data(self):
+        self.conn.execute(
+            "INSERT INTO birthday VALUES (?, ?, ?, ?)",
+            (1, "2026-07-20", "@employee", "Одобрено"),
+        )
+
+        data_rows = self.conn.execute(sql_scripts.union).fetchall()
+
+        self.assertFalse(any(row[2] == "ДР" for row in data_rows))
+
     def test_google_sheet_queries_keep_only_last_three_months(self):
         old_date, recent_date = self.conn.execute(
             "SELECT date('now', '+3 hours', '-4 months'), "
@@ -71,10 +85,10 @@ class SqlScriptsTest(unittest.TestCase):
             ],
         )
         self.conn.executemany(
-            "INSERT INTO afterparty VALUES (?, ?, ?)",
+            "INSERT INTO afterparty VALUES (?, ?, ?, ?)",
             [
-                (1, old_date, "@employee"),
-                (2, recent_date, "@employee"),
+                (1, old_date, "@employee", "Одобрено"),
+                (2, recent_date, "@employee", "Одобрено"),
             ],
         )
 
@@ -98,6 +112,28 @@ class SqlScriptsTest(unittest.TestCase):
         }
         self.assertEqual(all_shift_dates, {old_date, recent_date})
         self.assertEqual(all_kpi_dates, {old_date, recent_date})
+
+    def test_rejected_local_actions_are_excluded_from_kpi(self):
+        self.conn.executemany(
+            "INSERT INTO afterparty VALUES (?, ?, ?, ?)",
+            [
+                (1, "2026-07-20", "@employee", "Одобрено"),
+                (2, "2026-07-20", "@employee", "Отклонено"),
+            ],
+        )
+        self.conn.executemany(
+            "INSERT INTO initiative VALUES (?, ?, ?, ?)",
+            [
+                (1, "2026-07-20", "@employee", "Одобрено"),
+                (2, "2026-07-20", "@employee", "Отклонено"),
+            ],
+        )
+
+        rows = self.conn.execute(sql_scripts.union).fetchall()
+        values = {row[2]: row[3] for row in rows}
+
+        self.assertEqual(values["Продления"], 1)
+        self.assertEqual(values["Инициативы"], 1)
 
 
 if __name__ == "__main__":

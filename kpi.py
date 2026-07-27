@@ -7,22 +7,31 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import json
-import math
 from permissions import ROLE_OWNER, role_of
 import sql_scripts
 from sheets import *
 import random
 import os
+import re
+import time
 
 
 # Словари
-action = {'#продление':'afterparty', '#др':'birthday', '#инициатива':'initiative'}
+action = {'#продление':'afterparty', '#инициатива':'initiative'}
 bonus = {'#серт':'sert', '#абик':'abik'}
 
 KPI_SUCCESS = "success"
+KPI_REMOTE_SUCCESS = "remote_success"
+KPI_IGNORED = "ignored"
 KPI_INVALID = "invalid"
 KPI_ERROR = "error"
 KPI_SAVED_ERROR = "saved_error"
+
+NUMBER_RE = re.compile(r"^\s*([0-9]+(?:[,.][0-9]+)?)(?=\s|$)")
+LEGACY_BIRTHDAY_AMOUNT = 500
+HASHTAG_RULES_CACHE_SECONDS = 60
+_hashtag_rules_cache = {}
+_hashtag_rules_cache_until = 0.0
 
 # ==========================================
 # 1. ЗАГРУЗКА И ВЫГРУЗКА ДАННЫХ И СМЕН
@@ -219,12 +228,311 @@ def get_user_club_today(username, date_iso=None):
         print(f"Ошибка получения расписания: {e}")
     return None
 
+
+def ensure_hashtag_events_table():
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS hashtag_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram TEXT NOT NULL,
+                    hashtag TEXT NOT NULL,
+                    value REAL,
+                    value_unit TEXT,
+                    comment TEXT NOT NULL DEFAULT '',
+                    event_date DATE NOT NULL,
+                    club TEXT,
+                    status TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_id INTEGER,
+                    chat_id TEXT,
+                    message_id INTEGER,
+                    hashtag_index INTEGER NOT NULL DEFAULT 0,
+                    api_error TEXT,
+                    api_response TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    applied_at DATETIME,
+                    UNIQUE(source, source_id),
+                    UNIQUE(chat_id, message_id, hashtag_index)
+                )
+                '''
+            )
+            conn.execute(
+                '''CREATE INDEX IF NOT EXISTS idx_hashtag_events_payroll
+                   ON hashtag_events(hashtag, status, event_date, telegram)'''
+            )
+    finally:
+        conn.close()
+
+
+def initialize_hashtag_events():
+    """Создаёт единое хранилище начислений и переносит в него старые записи."""
+    ensure_hashtag_events_table()
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, comment, event_date,
+                    status, source, source_id, applied_at
+                )
+                SELECT who, '#двойная', amount, 'hours', COALESCE(desc, ''),
+                       date(d_rep), 'applied', 'legacy_double', ID, datetime('now')
+                FROM double
+                '''
+            )
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, event_date,
+                    status, source, source_id, applied_at
+                )
+                SELECT who, '#автосим', amount, 'rubles', date(d_rep),
+                       'applied', 'legacy_autosim', ID, datetime('now')
+                FROM autosim
+                '''
+            )
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, event_date,
+                    status, source, source_id, applied_at
+                )
+                SELECT who, '#активация', amount, 'rubles', date(d_rep),
+                       'applied', 'legacy_activation', ID, datetime('now')
+                FROM activation
+                '''
+            )
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, comment, event_date,
+                    club, status, source, source_id, applied_at
+                )
+                SELECT who, '#др', ?, 'rubles', COALESCE(desc, ''), date(dt_rep),
+                       club,
+                       CASE status
+                           WHEN 'Одобрено' THEN 'applied'
+                           WHEN 'Отклонено' THEN 'rejected'
+                           ELSE 'pending'
+                       END,
+                       'legacy_birthday', ID,
+                       CASE WHEN status = 'Одобрено' THEN datetime('now') END
+                FROM birthday
+                ''',
+                (LEGACY_BIRTHDAY_AMOUNT,),
+            )
+    finally:
+        conn.close()
+
+
+def _message_identity(message):
+    chat = getattr(message, 'chat', None)
+    chat_id = getattr(chat, 'id', None)
+    message_id = getattr(message, 'message_id', None)
+    if message_id is None:
+        message_id = getattr(message, 'id', None)
+    return (
+        str(chat_id) if chat_id is not None else None,
+        message_id,
+    )
+
+
+def _extract_remote_value(text_args):
+    match = NUMBER_RE.match(text_args)
+    if not match:
+        return "", text_args.strip()
+    value_text = match.group(1).replace(',', '.')
+    return value_text, text_args[match.end():].strip()
+
+
+def get_remote_hashtag_rules():
+    """Возвращает правила OMG Shift с коротким кешем для справки и метаданных."""
+    global _hashtag_rules_cache, _hashtag_rules_cache_until
+    now = time.monotonic()
+    if now < _hashtag_rules_cache_until:
+        return list(_hashtag_rules_cache.values())
+
+    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
+    response = requests.get(
+        f"{SHIFTON_API_URL}/api/bot/hashtags",
+        headers=headers,
+        timeout=5,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return []
+    _hashtag_rules_cache = {
+        str(rule.get("hashtag", "")).lower(): rule
+        for rule in payload.get("hashtags", [])
+        if rule.get("hashtag")
+    }
+    _hashtag_rules_cache_until = now + HASHTAG_RULES_CACHE_SECONDS
+    return list(_hashtag_rules_cache.values())
+
+
+def _get_hashtag_rule(hashtag):
+    """Получает метаданные правила; окончательное решение всё равно принимает POST."""
+    return next(
+        (
+            rule for rule in get_remote_hashtag_rules()
+            if str(rule.get("hashtag", "")).lower() == hashtag
+        ),
+        None,
+    )
+
+
+def _save_pending_hashtag(message, hashtag, value, value_unit, comment, event_date):
+    ensure_hashtag_events_table()
+    chat_id, message_id = _message_identity(message)
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            existing = None
+            if chat_id is not None and message_id is not None:
+                existing = conn.execute(
+                    '''SELECT id, status FROM hashtag_events
+                       WHERE chat_id=? AND message_id=? AND hashtag_index=0''',
+                    (chat_id, message_id),
+                ).fetchone()
+            if existing:
+                return existing[0], existing[1], False
+            cursor = conn.execute(
+                '''
+                INSERT INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, comment, event_date,
+                    status, source, chat_id, message_id, hashtag_index
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'omg_shift', ?, ?, 0)
+                ''',
+                (
+                    f"@{message.from_user.username}",
+                    hashtag,
+                    value,
+                    value_unit,
+                    comment,
+                    event_date,
+                    chat_id,
+                    message_id,
+                ),
+            )
+            return cursor.lastrowid, 'pending', True
+    finally:
+        conn.close()
+
+
+def _finish_hashtag_event(event_id, status, response, error=None):
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            conn.execute(
+                '''
+                UPDATE hashtag_events
+                SET status=?, api_error=?, api_response=?,
+                    applied_at=CASE WHEN ?='applied' THEN datetime('now') ELSE applied_at END
+                WHERE id=?
+                ''',
+                (
+                    status,
+                    error,
+                    json.dumps(response, ensure_ascii=False),
+                    status,
+                    event_id,
+                ),
+            )
+    finally:
+        conn.close()
+
+
+def do_remote_hashtag(hashtag, message, text_args):
+    """Передаёт начисление в OMG Shift и сохраняет подтверждённый результат."""
+    username = getattr(message.from_user, 'username', None)
+    if not username:
+        return KPI_ERROR, "Не вижу Telegram username отправителя.", ""
+
+    value_text, comment = _extract_remote_value(text_args)
+    rule = None
+    try:
+        rule = _get_hashtag_rule(hashtag)
+    except Exception as error:
+        print(f"Не удалось получить правило {hashtag}: {error}")
+
+    stored_value = float(value_text) if value_text else None
+    value_unit = rule.get("valueUnit") if rule else None
+    if rule and rule.get("type") == "fixed_bonus":
+        stored_value = rule.get("amount")
+
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    event_id, previous_status, created = _save_pending_hashtag(
+        message,
+        hashtag,
+        stored_value,
+        value_unit,
+        comment,
+        today,
+    )
+    if not created:
+        if previous_status == 'applied':
+            return KPI_REMOTE_SUCCESS, "", ""
+        if previous_status == 'ignored':
+            return KPI_IGNORED, "", ""
+        return KPI_ERROR, "Это сообщение уже обрабатывалось, но начисление не было подтверждено.", ""
+
+    headers = {
+        "Authorization": f"Bearer {SHIFTON_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "telegram": f"@{username}",
+        "hashtag": hashtag,
+        "value": value_text,
+        "comment": comment,
+        "date": today,
+    }
+    try:
+        response = requests.post(
+            f"{SHIFTON_API_URL}/api/bot/hashtag",
+            json=payload,
+            headers=headers,
+            timeout=5,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception as error:
+        _finish_hashtag_event(event_id, 'failed', {"error": str(error)}, "request_failed")
+        return KPI_ERROR, "Не удалось передать хештег в OMG Shift. Попробуйте позже.", ""
+
+    if not isinstance(result, dict):
+        _finish_hashtag_event(event_id, 'failed', {"error": "invalid_response"}, "invalid_response")
+        return KPI_ERROR, "OMG Shift вернул некорректный ответ.", ""
+
+    if result.get("ok"):
+        _finish_hashtag_event(event_id, 'applied', result)
+        return KPI_REMOTE_SUCCESS, "", ""
+
+    error = result.get("error", "unknown_error")
+    status = 'ignored' if error == "hashtag_not_configured" else 'failed'
+    _finish_hashtag_event(event_id, status, result, error)
+    if error == "hashtag_not_configured":
+        return KPI_IGNORED, "", ""
+
+    messages = {
+        "employee_not_found": f"Сотрудник с тегом @{username} не найден в OMG Shift.",
+        "shift_not_found": f"На сегодня не найдена смена для @{username}.",
+        "multiple_shifts_found": f"У @{username} найдено несколько смен за день, нужна ручная проверка.",
+        "value_required": f"После {hashtag} необходимо указать положительное число.",
+    }
+    return KPI_ERROR, messages.get(error, f"OMG Shift не обработал {hashtag}: {error}."), ""
+
 # ==========================================
 # 3. МОДУЛЬНЫЕ ОБРАБОТЧИКИ ХЕШТЕГОВ
 # ==========================================
 
 def do_club_action(hashtag, message, text_args):
-    """Обработчик для #др, #продление, #инициатива (автоматически тянет клуб)"""
+    """Обработчик для #продление и #инициатива (автоматически тянет клуб)."""
     if "факт" in message.text.lower():
         return KPI_INVALID, 'Даже у меня есть имя, значит и у него есть!',  "```Правильно!\nНикаких 'фактов'!```"
     if len(text_args) > 1024:
@@ -239,123 +547,15 @@ def do_club_action(hashtag, message, text_args):
     if shift_not_found:
         club = "Неизвестно"
 
-    api_error = None
-    if hashtag == "#др":
-        try:
-            headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
-            payload = {"telegram": user_name, "comment": text_args}
-            res = requests.post(f"{SHIFTON_API_URL}/api/bot/birthday", json=payload, headers=headers, timeout=5).json()
-            if not res.get("ok"):
-                api_error = res.get("error")
-        except Exception as e:
-            print(f"Ошибка API при отправке ДР: {e}")
-            api_error = "request_failed"
-
     # Запись в локальную базу
     table = action[hashtag]
-    update_status() # Функция из твоего старого кода (возможно в sheets.py)
     Insert(table, today, user_name, club, text_args)
     update_table(table)
 
     # Формируем красивый ответ
-    if api_error and api_error != "shift_not_found":
-        return KPI_SAVED_ERROR, f"Запись сохранена локально, но OMG Shift вернул ошибку: {api_error}.", ""
-    if shift_not_found or api_error == "shift_not_found":
+    if shift_not_found:
         return KPI_SAVED_ERROR, "Запись сохранена локально, но смена сотрудника на сегодня не найдена в OMG Shift.", ""
     return KPI_SUCCESS, random.choice(TEXTS['aff']) + f" (Клуб: {club})", ""
-
-
-def do_double(message, text_args):
-    """Обработчик для #двойная"""
-    parts = text_args.split(maxsplit=1)
-    if not parts:
-        return KPI_INVALID, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
-        
-    hours_str = parts[0].strip().replace(',', '.')
-    desc = parts[1].strip() if len(parts) > 1 else ""
-
-    if not hours_str.replace('.', '', 1).isnumeric():
-        return KPI_INVALID, "Неверно написан хештег! Формат:", "```Правильно!\n#двойная *часов* *описание*```"
-
-    user_name = "@" + message.from_user.username
-    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-    hours = float(hours_str)
-
-    api_error = None
-    try:
-        headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
-        payload = {"telegram": user_name, "hours": hours}
-        res = requests.post(f"{SHIFTON_API_URL}/api/bot/double", json=payload, headers=headers, timeout=5).json()
-        if not res.get("ok"):
-            api_error = res.get("error")
-    except Exception as e:
-        print(f"Ошибка API при отправке двойной: {e}")
-        api_error = "request_failed"
-
-    conn = sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute("INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)", (user_name, today, hours, desc))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    club = get_user_club_today(message.from_user.username)
-    if api_error and api_error != "shift_not_found":
-        return KPI_SAVED_ERROR, f"Запись сохранена локально, но OMG Shift вернул ошибку: {api_error}.", ""
-    if club is None or api_error == "shift_not_found":
-        return KPI_SAVED_ERROR, "Запись сохранена локально, но смена сотрудника на сегодня не найдена в OMG Shift.", ""
-    
-    return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
-
-
-def do_simple_amount(hashtag, message, text_args):
-    """Обработчик для #автосим (10%) и #активация (100%)"""
-    autosim_coeff=1
-    amount_text = text_args.strip().replace(',', '.')
-    if not amount_text or not amount_text.replace('.', '', 1).isnumeric():
-        return KPI_INVALID, "Неверный формат хештега!", f"```Правильно!\n{hashtag} *сумма оплаты*```"
-    
-    user_name = "@" + message.from_user.username
-    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-    raw_amount = float(amount_text)
-    if not math.isfinite(raw_amount) or raw_amount <= 0:
-        return KPI_INVALID, "Сумма должна быть больше нуля!", f"```Правильно!\n{hashtag} *сумма оплаты*```"
-    
-    # Математика в зависимости от тега
-    if hashtag == '#автосим':
-        amount = raw_amount * autosim_coeff
-        api_endpoint = "/api/bot/autosim"
-    else:
-        amount = raw_amount
-        api_endpoint = "/api/bot/activation"
-
-    api_error = None
-    try:
-        headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}", "Content-Type": "application/json"}
-        payload = {"telegram": user_name, "amount": amount}
-        res = requests.post(f"{SHIFTON_API_URL}{api_endpoint}", json=payload, headers=headers, timeout=5).json()
-        if not res.get("ok"):
-            api_error = res.get("error")
-    except Exception as e:
-        print(f"Ошибка API при отправке {hashtag}: {e}")
-        api_error = "request_failed"
-
-    table_name = 'autosim' if hashtag == '#автосим' else 'activation'
-
-    conn = sqlite3.connect('db/omgbot.sql')
-    cur = conn.cursor()
-    cur.execute(f"INSERT INTO {table_name} (who, d_rep, amount) VALUES (?, ?, ?)", (user_name, today, amount))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    club = get_user_club_today(message.from_user.username)
-    if api_error and api_error != "shift_not_found":
-        return KPI_SAVED_ERROR, f"Запись на {amount:g} руб. сохранена локально, но OMG Shift вернул ошибку: {api_error}.", ""
-    if club is None or api_error == "shift_not_found":
-        return KPI_SAVED_ERROR, f"Запись на {amount:g} руб. сохранена локально, но смена сотрудника на сегодня не найдена в OMG Shift.", ""
-    
-    return KPI_SUCCESS, random.choice(TEXTS['aff']) + f" (Сумма бонуса: {amount:g} руб)", ""
 
 
 def do_bonus(hashtag, message, text_args):
@@ -440,13 +640,9 @@ kpi_dict = {
     '#серт': lambda m, args: do_bonus('#серт', m, args),
     '#абик': lambda m, args: do_bonus('#абик', m, args),
     '#штраф': lambda m, args: do_penalty(m, args),
-    '#двойная': do_double,
     '#продление': lambda m, args: do_club_action('#продление', m, args),
-    '#др': lambda m, args: do_club_action('#др', m, args),
     '#инициатива': lambda m, args: do_club_action('#инициатива', m, args),
     '#отзывы': do_review,
-    '#автосим': lambda m, args: do_simple_amount('#автосим', m, args),
-    '#активация': lambda m, args: do_simple_amount('#активация', m, args)
 }
 
 def hash_handle(message):
@@ -462,8 +658,7 @@ def hash_handle(message):
         if hashtag in kpi_dict:
             flag, answer, desc = kpi_dict[hashtag](message, text_args)
             return flag, answer, desc
-        else:
-            return KPI_INVALID, "Не понимаю о чем ты 🙈", "```Правильно!\nЕсли не знаешь как написать хештег, пиши /help```"
+        return do_remote_hashtag(hashtag, message, text_args)
     except Exception as e:
         print(f"Ошибка в hash_handle: {e}")
         return KPI_ERROR, "Не удалось обработать хештег. Попробуйте ещё раз или обратитесь к администратору.", ""

@@ -27,6 +27,8 @@ class KpiResponsePolicyTest(unittest.TestCase):
 
         kpi = types.ModuleType("kpi")
         kpi.KPI_SUCCESS = "success"
+        kpi.KPI_REMOTE_SUCCESS = "remote_success"
+        kpi.KPI_IGNORED = "ignored"
         kpi.KPI_INVALID = "invalid"
         kpi.KPI_ERROR = "error"
         kpi.KPI_SAVED_ERROR = "saved_error"
@@ -59,6 +61,18 @@ class KpiResponsePolicyTest(unittest.TestCase):
         bot, send_react, update_kpi = self.run_status("invalid")
         update_kpi.assert_not_called()
         self.assertEqual(send_react.call_args.args[1], "👎")
+        bot.reply_to.assert_not_called()
+
+    def test_remote_success_uses_reaction_without_kpi_sync(self):
+        bot, send_react, update_kpi = self.run_status("remote_success")
+        update_kpi.assert_not_called()
+        send_react.assert_called_once()
+        bot.reply_to.assert_not_called()
+
+    def test_unconfigured_hashtag_is_silent(self):
+        bot, send_react, update_kpi = self.run_status("ignored")
+        update_kpi.assert_not_called()
+        send_react.assert_not_called()
         bot.reply_to.assert_not_called()
 
     def test_error_sends_message_without_reaction(self):

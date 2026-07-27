@@ -90,7 +90,7 @@ def help(bot, message):
                      'Ну, так уж и быть, помогу! Смотри, какие у меня есть команды!\n\n*/start* - Начать работу со мной (только в ЛС!)\n*/weather* - Показать погоду\n*/today* - Показать расписание на сегодня\n*/repair* - Показать список проблем\n*/roll* - Разрешу любой спор', parse_mode="Markdown")
     
     bot.send_message(message.chat.id,
-                     'Хочешь отличиться? Пиши хештеги!\n\n*#продление*\n*#др*\n*#инициатива*\n\nДобавь чёткое описание. Клуб указывать не нужно — я определю его автоматически по твоей смене на сегодня. Сейчас покажу...', parse_mode="Markdown")
+                     'Хочешь отличиться? Пиши KPI-хештеги!\n\n*#продление*\n*#инициатива*\n\nДобавь чёткое описание. Клуб указывать не нужно - я определю его автоматически по твоей смене на сегодня. Сейчас покажу...', parse_mode="Markdown")
     bot.send_message(message.chat.id,
                      "```Правильно!\n#продление Татьяна 15:00-16:00```", parse_mode='MarkdownV2')
     
@@ -102,13 +102,32 @@ def help(bot, message):
                      'О тебе много пишут в интернете?\n\n*#отзывы* - команда для тебя!\n\nВот например...', parse_mode="Markdown")
     bot.send_message(message.chat.id, "```Правильно!\n#отзывы *количество* *описание* (2гис, яндекс)*```", parse_mode='MarkdownV2')
 
-    bot.send_message(message.chat.id,
-                     'Хотел поесть, но пришло много клиентов?\n\nПиши *#двойная*! Можно указать целое или дробное количество часов.\n\nВот например...', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#двойная *количество часов* *описание*```", parse_mode='MarkdownV2')
-
-    bot.send_message(message.chat.id,
-                     'Продал автосимулятор или провёл активацию?\n\n*#автосим*\n*#активация*\n\nПосле хештега укажи сумму бонуса.', parse_mode="Markdown")
-    bot.send_message(message.chat.id, "```Правильно!\n#автосим *сумма бонуса*\n#активация *сумма бонуса*```", parse_mode='MarkdownV2')
+    try:
+        from kpi import get_remote_hashtag_rules
+        rules = get_remote_hashtag_rules()
+    except Exception:
+        rules = []
+    if rules:
+        lines = []
+        for rule in rules:
+            hashtag = rule.get('hashtag', '')
+            if rule.get('type') == 'double_hours':
+                hint = 'количество часов и описание'
+            elif rule.get('type') == 'message_bonus':
+                hint = 'сумма и комментарий'
+            else:
+                hint = 'комментарий'
+            lines.append(f"*{hashtag}* - {hint}")
+        bot.send_message(
+            message.chat.id,
+            'Начисления OMG Shift:\n\n' + '\n'.join(lines),
+            parse_mode="Markdown",
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            'Список начислений OMG Shift сейчас недоступен. Попробуй открыть /help позже.',
+        )
 
     bot.send_message(message.chat.id,
                      '*#штраф* доступен только руководству. Укажи Telegram-логин сотрудника из базы и причину.', parse_mode="Markdown")

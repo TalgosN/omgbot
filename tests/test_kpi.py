@@ -45,12 +45,18 @@ class KpiTest(unittest.TestCase):
         cls.kpi = load_kpi_module()
 
     def message(self, text):
-        return SimpleNamespace(text=text, from_user=SimpleNamespace(username="employee"))
+        return SimpleNamespace(
+            text=text,
+            id=101,
+            message_id=101,
+            chat=SimpleNamespace(id=-100500),
+            from_user=SimpleNamespace(username="employee"),
+        )
 
     def test_supported_hashtags(self):
         self.assertEqual(set(self.kpi.kpi_dict), {
-            "#серт", "#абик", "#штраф", "#двойная", "#продление",
-            "#др", "#инициатива", "#отзывы", "#автосим", "#активация",
+            "#серт", "#абик", "#штраф", "#продление",
+            "#инициатива", "#отзывы",
         })
 
     def test_write_data_extends_sheet_before_clearing_unused_columns(self):
@@ -112,56 +118,186 @@ class KpiTest(unittest.TestCase):
         self.assertEqual(valid_cert[0], self.kpi.KPI_SUCCESS)
         self.assertEqual(valid_subscription[0], self.kpi.KPI_SUCCESS)
 
-    def test_double_accepts_decimal_comma(self):
-        message = self.message("#двойная 1,5")
-        self.kpi.requests.post = lambda *args, **kwargs: SimpleNamespace(json=lambda: {"ok": True})
-        self.kpi.get_user_club_today = lambda username: "Марьино"
+    def test_remote_hashtag_uses_generic_api_and_saves_applied_event(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
 
-        connection = unittest.mock.Mock()
-        connection.cursor.return_value = unittest.mock.Mock()
-        with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
-            result = self.kpi.do_double(message, "1,5 описание")
+            def raise_for_status(self):
+                return None
 
-        self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
-        connection.cursor.return_value.execute.assert_called_once_with(
-            "INSERT INTO double (who, d_rep, amount, desc) VALUES (?, ?, ?, ?)",
-            ("@employee", unittest.mock.ANY, 1.5, "описание"),
-        )
+            def json(self):
+                return self.payload
 
-    def test_simple_amount_accepts_decimal_dot_and_comma(self):
-        self.kpi.requests.post = lambda *args, **kwargs: SimpleNamespace(json=lambda: {"ok": True})
-        self.kpi.get_user_club_today = lambda username: "Марьино"
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connect = lambda _path: real_connect(db_path)
+            self.kpi._hashtag_rules_cache_until = 0
+            get = unittest.mock.Mock(return_value=Response({
+                "ok": True,
+                "hashtags": [{
+                    "hashtag": "#активация",
+                    "type": "message_bonus",
+                    "valueUnit": "rubles",
+                }],
+            }))
+            post = unittest.mock.Mock(return_value=Response({"ok": True}))
 
-        for value in ("125.50", "125,50"):
-            connection = unittest.mock.Mock()
-            connection.cursor.return_value = unittest.mock.Mock()
-            with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
-                result = self.kpi.do_simple_amount("#активация", self.message(""), value)
+            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+                    patch.object(self.kpi.requests, "get", get), \
+                    patch.object(self.kpi.requests, "post", post):
+                result = self.kpi.hash_handle(
+                    self.message("#активация 125,50 вечерняя продажа")
+                )
 
-            self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
-            connection.cursor.return_value.execute.assert_called_once_with(
-                "INSERT INTO activation (who, d_rep, amount) VALUES (?, ?, ?)",
-                ("@employee", unittest.mock.ANY, 125.5),
+            self.assertEqual(result[0], self.kpi.KPI_REMOTE_SUCCESS)
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual(payload["hashtag"], "#активация")
+            self.assertEqual(payload["value"], "125.50")
+            self.assertEqual(payload["comment"], "вечерняя продажа")
+            connection = real_connect(db_path)
+            row = connection.execute(
+                """SELECT telegram, hashtag, value, value_unit, comment, status
+                   FROM hashtag_events"""
+            ).fetchone()
+            connection.close()
+            self.assertEqual(
+                row,
+                ("@employee", "#активация", 125.5, "rubles", "вечерняя продажа", "applied"),
             )
 
-    def test_simple_amount_rejects_zero_negative_and_malformed_values(self):
-        for value in ("0", "-1", "1..5", "abc"):
-            result = self.kpi.do_simple_amount("#автосим", self.message(""), value)
-            self.assertEqual(result[0], self.kpi.KPI_INVALID)
+    def test_unconfigured_remote_hashtag_is_ignored_but_audited(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
 
-    def test_shifton_error_is_reported_after_local_save(self):
-        self.kpi.requests.post = lambda *args, **kwargs: SimpleNamespace(
-            json=lambda: {"ok": False, "error": "employee_not_found"}
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connect = lambda _path: real_connect(db_path)
+            self.kpi._hashtag_rules_cache_until = 0
+
+            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+                    patch.object(
+                        self.kpi.requests,
+                        "get",
+                        return_value=Response({"ok": True, "hashtags": []}),
+                    ), \
+                    patch.object(
+                        self.kpi.requests,
+                        "post",
+                        return_value=Response({
+                            "ok": False,
+                            "error": "hashtag_not_configured",
+                        }),
+                    ):
+                result = self.kpi.hash_handle(self.message("#неизвестный текст"))
+
+            self.assertEqual(result[0], self.kpi.KPI_IGNORED)
+            connection = real_connect(db_path)
+            status = connection.execute(
+                "SELECT status FROM hashtag_events"
+            ).fetchone()[0]
+            connection.close()
+            self.assertEqual(status, "ignored")
+
+    def test_birthday_uses_fixed_amount_from_omg_shift_rule(self):
+        response = SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"ok": True},
         )
-        self.kpi.get_user_club_today = lambda username: "Марьино"
-        connection = unittest.mock.Mock()
-        connection.cursor.return_value = unittest.mock.Mock()
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connect = lambda _path: real_connect(db_path)
+            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+                    patch.object(
+                        self.kpi,
+                        "_get_hashtag_rule",
+                        return_value={
+                            "hashtag": "#др",
+                            "type": "fixed_bonus",
+                            "valueUnit": "rubles",
+                            "amount": 650,
+                        },
+                    ), \
+                    patch.object(self.kpi.requests, "post", return_value=response) as post:
+                result = self.kpi.hash_handle(self.message("#др Анна"))
 
-        with patch.object(self.kpi.sqlite3, "connect", return_value=connection):
-            result = self.kpi.do_simple_amount("#автосим", self.message(""), "125,5")
+            self.assertEqual(result[0], self.kpi.KPI_REMOTE_SUCCESS)
+            self.assertEqual(post.call_args.kwargs["json"]["value"], "")
+            connection = real_connect(db_path)
+            event = connection.execute(
+                "SELECT value, value_unit, comment, status FROM hashtag_events"
+            ).fetchone()
+            connection.close()
+            self.assertEqual(event, (650, "rubles", "Анна", "applied"))
 
-        self.assertEqual(result[0], self.kpi.KPI_SAVED_ERROR)
-        self.assertIn("employee_not_found", result[1])
+    def test_legacy_hashtag_migration_is_idempotent_and_preserves_statuses(self):
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connection = real_connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE double (
+                    ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE,
+                    amount REAL, desc TEXT
+                );
+                CREATE TABLE autosim (
+                    ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE, amount REAL
+                );
+                CREATE TABLE activation (
+                    ID INTEGER PRIMARY KEY, who TEXT, d_rep DATE, amount REAL
+                );
+                CREATE TABLE birthday (
+                    ID INTEGER PRIMARY KEY, dt_rep DATE, who TEXT,
+                    club TEXT, desc TEXT, status TEXT
+                );
+                INSERT INTO double VALUES
+                    (1, '@employee', '2026-07-20', 1.5, 'вечер');
+                INSERT INTO autosim VALUES
+                    (1, '@employee', '2026-07-20', 50);
+                INSERT INTO birthday VALUES
+                    (1, '2026-07-20', '@employee', 'Марьино', '', 'Одобрено'),
+                    (2, '2026-07-21', '@employee', 'Марьино', '', 'На проверке'),
+                    (3, '2026-07-22', '@employee', 'Марьино', '', 'Отклонено');
+                """
+            )
+            connection.commit()
+            connection.close()
+            connect = lambda _path: real_connect(db_path)
+
+            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect):
+                self.kpi.initialize_hashtag_events()
+                self.kpi.initialize_hashtag_events()
+
+            connection = real_connect(db_path)
+            rows = connection.execute(
+                """SELECT hashtag, status, COUNT(*)
+                   FROM hashtag_events
+                   GROUP BY hashtag, status
+                   ORDER BY hashtag, status"""
+            ).fetchall()
+            connection.close()
+
+            self.assertEqual(
+                rows,
+                [
+                    ("#автосим", "applied", 1),
+                    ("#двойная", "applied", 1),
+                    ("#др", "applied", 1),
+                    ("#др", "pending", 1),
+                    ("#др", "rejected", 1),
+                ],
+            )
 
     def test_shift_sync_does_not_open_database_when_api_fetch_fails(self):
         timestamp = SimpleNamespace(now=lambda tz=None: datetime(2026, 7, 21))

@@ -15,8 +15,7 @@ def load_account_module():
     constants.TEXTS = {'hey': ['Привет']}
     constants.funclist_acc = ()
     sheets = types.ModuleType('sheets')
-    sheets.tables = ['afterparty', 'birthday', 'initiative', 'abik', 'sert']
-    sheets.update_status = lambda: None
+    sheets.tables = ['afterparty', 'initiative', 'abik', 'sert']
     sheets.update_table = lambda _table: None
     sheets.update_table_open = lambda: None
     sheets.update_users = lambda: None
@@ -230,8 +229,6 @@ class AccountTest(unittest.TestCase):
         self.assertEqual(result['total_pct'], '55%')
         self.assertEqual(result['weighted_pct'], '46%')
         self.assertEqual(result['rank'], '2')
-        self.assertEqual(result['birthdays_month'], '5')
-        self.assertEqual(result['birthdays_week'], '2')
 
     def test_monthly_kpi_uses_approved_telegram_format(self):
         data = {
@@ -260,8 +257,6 @@ class AccountTest(unittest.TestCase):
             'amount': '2 020 ₽',
             'zone': '◉',
             'rank': '8',
-            'birthdays_month': '0',
-            'birthdays_week': '0',
         }
 
         text = self.account.format_main_kpi(
@@ -274,6 +269,7 @@ class AccountTest(unittest.TestCase):
         self.assertIn('🕒 Смены: <b>38</b> <i>(57 взв.)</i>', text)
         self.assertIn('🎯 Итого KPI: <b>38%</b> <i>(26% взв.)</i>', text)
         self.assertIn('🚘 Автосимы: <b>1.5</b>', text)
+        self.assertNotIn('ДР за', text)
         for removed_label in ('БС:', 'Сумма:', 'Трансляция:', 'Зона:', '—'):
             self.assertNotIn(removed_label, text)
 
@@ -312,6 +308,9 @@ class AccountTest(unittest.TestCase):
             'autosim': ['d_rep TEXT', 'amount REAL'],
             'activation': ['d_rep TEXT', 'amount REAL'],
             'double': ['d_rep TEXT', 'amount REAL', 'desc TEXT'],
+            'hashtag_events': [
+                'hashtag TEXT', 'value REAL', 'event_date TEXT', 'status TEXT',
+            ],
         }
         for table, columns in additions.items():
             for column in columns:
@@ -329,8 +328,10 @@ class AccountTest(unittest.TestCase):
             ('@old_login', 1, '2026-07-11', 3),
         )
         conn.execute(
-            'INSERT INTO double (who, d_rep, amount) VALUES (?, ?, ?)',
-            ('@old_login', '2026-07-12', 2.5),
+            '''INSERT INTO hashtag_events
+               (telegram, hashtag, value, event_date, status)
+               VALUES (?, ?, ?, ?, ?)''',
+            ('@old_login', '#двойная', 2.5, '2026-07-12', 'applied'),
         )
         conn.execute(
             'INSERT INTO shifts VALUES (?, ?, ?, ?, ?, ?, ?)',

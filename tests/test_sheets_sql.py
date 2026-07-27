@@ -37,6 +37,10 @@ class SheetsSqlTest(unittest.TestCase):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             dt_rep TEXT, who TEXT, club TEXT, desc TEXT, status TEXT
         )""")
+        conn.execute("""CREATE TABLE initiative (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dt_rep TEXT, who TEXT, club TEXT, desc TEXT, status TEXT
+        )""")
         conn.commit()
         conn.close()
 
@@ -51,11 +55,47 @@ class SheetsSqlTest(unittest.TestCase):
             self.sheets.Insert("afterparty", "2026-07-21", "@employee", "Марьино", description)
 
         conn = real_connect(self.db_path)
-        row = conn.execute("SELECT desc FROM afterparty").fetchone()
+        row = conn.execute("SELECT desc, status FROM afterparty").fetchone()
         table = conn.execute("SELECT name FROM sqlite_master WHERE name='afterparty'").fetchone()
         conn.close()
         self.assertEqual(row[0], description)
+        self.assertEqual(row[1], "Одобрено")
         self.assertEqual(table[0], "afterparty")
+
+    def test_legacy_pending_records_are_approved_but_rejected_are_preserved(self):
+        real_connect = sqlite3.connect
+        conn = real_connect(self.db_path)
+        conn.executemany(
+            """INSERT INTO afterparty
+               (dt_rep, who, club, desc, status) VALUES (?, ?, ?, ?, ?)""",
+            [
+                ("2026-07-20", "@one", "Марьино", "", "На проверке"),
+                ("2026-07-20", "@two", "Марьино", "", "Отклонено"),
+            ],
+        )
+        conn.execute(
+            """INSERT INTO initiative
+               (dt_rep, who, club, desc, status) VALUES (?, ?, ?, ?, ?)""",
+            ("2026-07-20", "@one", "Марьино", "", "На проверке"),
+        )
+        conn.commit()
+        conn.close()
+
+        with patch.object(
+            self.sheets.sqlite3,
+            "connect",
+            side_effect=lambda _path: real_connect(self.db_path),
+        ):
+            self.sheets.finalize_legacy_kpi_approval()
+
+        conn = real_connect(self.db_path)
+        afterparty = conn.execute(
+            "SELECT status, COUNT(*) FROM afterparty GROUP BY status ORDER BY status"
+        ).fetchall()
+        initiative = conn.execute("SELECT status FROM initiative").fetchone()[0]
+        conn.close()
+        self.assertEqual(afterparty, [("Одобрено", 1), ("Отклонено", 1)])
+        self.assertEqual(initiative, "Одобрено")
 
     def test_unknown_table_is_rejected(self):
         with self.assertRaises(ValueError):
