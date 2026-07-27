@@ -479,7 +479,6 @@ def handle_data(message, bot):
         
         bot.send_message(message.chat.id, 'Выбери нужную неделю кнопкой или пришли любую дату в формате 15.04.2024 📆', reply_markup=markup)
         bot.register_next_step_handler(message, get_week, sched_type, bot)
-        
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
@@ -531,12 +530,6 @@ def get_week(message, sched_type, bot):
         # Используем новую функцию отправки для защиты от лимитов Телеграма
         send_long_text(message.chat.id, mess_text, bot)
         
-        # Обновляем БД (опционально, если хочешь чтобы база тоже заполнялась)
-        try:
-            update_schedule(user_date)
-        except Exception as e:
-            print(f"Ошибка обновления базы расписания: {e}")
-        
         # Возвращаем меню
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         markup.add(*funclist_rasp)
@@ -550,36 +543,3 @@ def get_week(message, sched_type, bot):
         markup.add('Текущая неделя', 'Следующая неделя', 'Прошлая неделя', '⬅️ Вернуться')
         bot.send_message(message.chat.id, 'Попробуйте нажать кнопку или прислать дату в формате 15.04.2024:', reply_markup=markup)
         bot.register_next_step_handler(message, get_week, sched_type, bot)
-        
-# --- ИНТЕГРАЦИЯ В БАЗУ ДАННЫХ (ТАБЛИЦЫ) ---
-
-def update_schedule(date_user):
-    """
-    Теперь эта функция запрашивает только ту неделю (7 дней), 
-    к которой относится переданная дата.
-    """
-    date_start_dt = datetime.strptime(date_user, '%d.%m.%Y')
-    start_dt = last_monday(date_start_dt.strftime('%Y-%m-%d 00:00:00'))
-    
-    # Делаем 7 запросов
-    week_shifts = get_week_data(start_dt)
-    schedule_list = []  
-
-    for s in week_shifts:
-        if s["employee"] != "СВОБОДНАЯ СМЕНА":
-            str_day = s["date_dt"].strftime('%d.%m.%Y')
-            duration = calculate_duration(s["start"], s["end"])
-            
-            # Формат: [name, str_day, shift_start, shift_end, location_title, duration_in_hours]
-            schedule_list.append([
-                s["employee"], 
-                str_day, 
-                s["start"], 
-                s["end"], 
-                s["location"], 
-                duration
-            ])
-            
-    # Отправляем в Google Sheets
-    if schedule_list:
-        update_schedule_table(schedule_list)

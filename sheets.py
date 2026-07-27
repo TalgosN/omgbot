@@ -155,34 +155,6 @@ def update_users():
     rng.clear()
     wks.update_values('A2', list1)
 
-####################
-def update_schedule_table(data):
-    c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
-    sh = c.open('Расписание')
-    
-    
-    
-    wks = sh.worksheet_by_title('ShiftON')
-
-
-    list1 =[]
-
-    for i in range(len(data)):
-        list2=[]
-        for k in range(len(data[i])):
-            list2.append(data[i][k])
-        list1.append(list2)
-    
-    rng = wks.get_values(start='A2', end=f'F{wks.rows}', returnas='range')
-    rng.clear()
-    try:
-        wks.update_values('A2', list1)
-    except pygsheets.InvalidArgumentValue:
-        pass
-    except:
-        pass
-
-
 def update_table_open():
     c = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
     sh = c.open('Открытия и закрытия')
