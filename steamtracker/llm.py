@@ -16,7 +16,7 @@ from .promo import (
 )
 
 
-PROMPT_VERSION = "steamtracker-promo-v2"
+PROMPT_VERSION = "steamtracker-promo-v3"
 
 
 def _json_list(value: Any) -> list[str]:

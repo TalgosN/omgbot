@@ -38,8 +38,8 @@ class PromotionWorkflowTests(unittest.TestCase):
         promotion_id = self.storage.create_promotion(
             app_id=10,
             discount_text="100 рублей",
-            valid_from="2026-08-01",
-            valid_to="2026-08-07",
+            valid_from="2026-07-27",
+            valid_to="2026-08-02",
             manager_comment="Проверить кооперативный режим",
             image_url="https://example.test/header.jpg",
         )
@@ -64,6 +64,30 @@ class PromotionWorkflowTests(unittest.TestCase):
         )
         self.assertIn("<b>🎮", texts.telegram)
         self.assertNotIn("<b>", texts.vk)
+        self.assertIn(
+            "<b>Количество игроков:</b> до 4",
+            texts.employee,
+        )
+        self.assertIn(
+            "<b>Акция:</b> скидка 100 рублей",
+            texts.employee,
+        )
+        self.assertIn(
+            "<b>Период:</b> 27 июля - 2 августа",
+            texts.employee,
+        )
+        self.assertIn(
+            "На игру действует <b>скидка 100 рублей</b>. "
+            "Предложение актуально с 27 июля по 2 августа.",
+            texts.telegram,
+        )
+        self.assertIn(
+            "На игру действует скидка 100 рублей. "
+            "Предложение актуально с 27 июля по 2 августа.",
+            texts.vk,
+        )
+        self.assertNotIn("<b>Акция:</b>", texts.telegram)
+        self.assertNotIn("\nАкция:", texts.vk)
 
         self.workflow.approve_and_dispatch(
             promotion_id,

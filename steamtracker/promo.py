@@ -67,6 +67,25 @@ def _period(context: dict) -> str:
     return "в период акции"
 
 
+def _social_period(context: dict) -> str:
+    valid_from = context.get("valid_from")
+    valid_to = context.get("valid_to")
+    start = date.fromisoformat(valid_from) if valid_from else None
+    end = date.fromisoformat(valid_to) if valid_to else None
+    if start and end:
+        if start.year == end.year and start.month == end.month:
+            return f"с {start.day} по {end.day} {MONTHS[end.month]}"
+        return (
+            f"с {start.day} {MONTHS[start.month]} "
+            f"по {end.day} {MONTHS[end.month]}"
+        )
+    if start:
+        return f"с {start.day} {MONTHS[start.month]}"
+    if end:
+        return f"до {end.day} {MONTHS[end.month]}"
+    return "в период акции"
+
+
 def _discount_phrase(value: str) -> str:
     value = " ".join(value.split())
     return value if "скид" in value.casefold() else f"скидка {value}"
@@ -82,6 +101,7 @@ def render_content(context: dict, draft: ContentDraft) -> GeneratedTexts:
     players = int(context.get("player_count") or 1)
     player_text = str(players) if players == 1 else f"до {players}"
     period = _period(context)
+    social_period = _social_period(context)
     discount_phrase = _discount_phrase(discount)
 
     description = _clean_generated(draft.employee_description)
@@ -137,9 +157,8 @@ def render_content(context: dict, draft: ContentDraft) -> GeneratedTexts:
     telegram_blocks.extend(
         [
             (
-                f"🔥 <b>Игра недели:</b> {escape(name)}\n"
-                f"<b>Акция:</b> {escape(discount_phrase)}\n"
-                f"<b>Период:</b> {period}"
+                f"На игру действует <b>{escape(discount_phrase)}</b>. "
+                f"Предложение актуально {social_period}."
             ),
             escape(closing),
         ]
@@ -147,9 +166,8 @@ def render_content(context: dict, draft: ContentDraft) -> GeneratedTexts:
     vk_blocks.extend(
         [
             (
-                f"🔥 Игра недели: {name}\n"
-                f"Акция: {discount_phrase}\n"
-                f"Период: {period}"
+                f"На игру действует {discount_phrase}. "
+                f"Предложение актуально {social_period}."
             ),
             closing,
         ]
@@ -166,7 +184,7 @@ class FakeGenerator:
 
     provider_name = "fake"
     model_name = "deterministic-template"
-    prompt_version = "steamtracker-fake-v2"
+    prompt_version = "steamtracker-fake-v3"
 
     def generate(self, context: dict) -> GeneratedTexts:
         description = context.get("base_description") or (

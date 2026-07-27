@@ -110,6 +110,10 @@ class StageTwoTests(unittest.TestCase):
         self.assertIn("<b>🎮 Игра недели: Test Game</b>", texts.employee)
         self.assertIn("100 рублей", texts.telegram)
         self.assertIn("Test Game", texts.vk)
+        self.assertEqual(texts.telegram.count("Test Game"), 1)
+        self.assertEqual(texts.vk.count("Test Game"), 1)
+        self.assertNotIn("<b>Акция:</b>", texts.telegram)
+        self.assertNotIn("\nАкция:", texts.vk)
         request_body = session.post.call_args.kwargs["json"]
         self.assertEqual(
             request_body["response_format"],
