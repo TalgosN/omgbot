@@ -1,10 +1,11 @@
+import calendar
 import hashlib
 import hmac
 import json
 import os
 import sqlite3
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 from urllib.parse import parse_qsl
 
@@ -16,6 +17,7 @@ from kpi_calculator import (
     calculate_monthly_kpi,
     cancel_penalty,
     get_month_status,
+    get_metric_entries,
     initialize_kpi_calculation_schema,
     list_penalties,
     set_month_status,
@@ -43,6 +45,27 @@ def _validate_month(value):
         return datetime.strptime(raw, '%Y-%m').date().replace(day=1).isoformat()
     except ValueError as error:
         raise ValueError('Месяц должен быть в формате YYYY-MM') from error
+
+
+def _validate_day(value, month):
+    raw = str(value or '').strip()
+    try:
+        selected = datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError as error:
+        raise ValueError('Дата должна быть в формате YYYY-MM-DD') from error
+    if selected.strftime('%Y-%m') != month[:7]:
+        raise ValueError('Выбранная дата должна относиться к выбранному месяцу')
+    return selected.isoformat()
+
+
+def _default_day(month):
+    month_start = datetime.strptime(month, '%Y-%m-%d').date()
+    today = date.today()
+    if (today.year, today.month) == (month_start.year, month_start.month):
+        return today.isoformat()
+    return month_start.replace(
+        day=calendar.monthrange(month_start.year, month_start.month)[1],
+    ).isoformat()
 
 
 def _validate_init_data(init_data, bot_token, now=None):
@@ -194,16 +217,70 @@ def api_kpi():
     month = _validate_month(
         request.args.get('month') or date.today().strftime('%Y-%m')
     )
+    selected_day = _validate_day(
+        request.args.get('date') or _default_day(month),
+        month,
+    )
+    employee_logins = _active_employee_logins()
     rows = calculate_monthly_kpi(
         month,
-        employee_logins=_active_employee_logins(),
+        employee_logins=employee_logins,
+        period_end=selected_day,
     )
+    previous_rows = []
+    selected_date = datetime.strptime(selected_day, '%Y-%m-%d').date()
+    if selected_date.day > 1:
+        previous_rows = calculate_monthly_kpi(
+            month,
+            employee_logins=employee_logins,
+            period_end=selected_date - timedelta(days=1),
+        )
+    previous_by_login = {row['login']: row for row in previous_rows}
+    for row in rows:
+        previous = previous_by_login.get(row['login'])
+        row['kpi_change'] = (
+            row['total_pct'] - previous['total_pct']
+            if previous else None
+        )
+        row['rank_change'] = (
+            previous['rank'] - row['rank']
+            if (
+                previous
+                and previous['rank'] is not None
+                and row['rank'] is not None
+            )
+            else None
+        )
     penalties = list_penalties(month)
     return jsonify({
         'month': month[:7],
+        'date': selected_day,
         'month_status': get_month_status(month),
         'employees': rows,
         'penalties': penalties,
+    })
+
+
+@app.get('/api/kpi/details')
+@require_user
+def api_kpi_details():
+    month = _validate_month(request.args.get('month'))
+    selected_day = _validate_day(request.args.get('date'), month)
+    employee_login = str(request.args.get('employee_login') or '').strip()
+    metric = str(request.args.get('metric') or '').strip()
+    if employee_login.lower() not in set(_active_employee_logins()):
+        raise ValueError('Сотрудник не найден или неактивен')
+    entries = get_metric_entries(
+        employee_login,
+        month,
+        metric,
+        period_end=selected_day,
+    )
+    return jsonify({
+        'employee_login': employee_login.lower(),
+        'metric': metric,
+        'date': selected_day,
+        'entries': entries,
     })
 
 

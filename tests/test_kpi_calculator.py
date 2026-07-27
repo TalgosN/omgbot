@@ -173,9 +173,91 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertAlmostEqual(row['initiatives_pct'], 0.1)
         self.assertAlmostEqual(row['total_pct'], 2.4133333333)
         self.assertAlmostEqual(row['weighted_pct'], row['total_pct'] * 2.5 / 3.5)
-        self.assertAlmostEqual(row['amount'], 1345)
+        self.assertNotIn('amount', row)
         self.assertEqual(row['rank'], 1)
         self.assertEqual(row['zone'], '🟢')
+
+    def test_selected_day_limits_facts_and_shifts_only(self):
+        club = next(iter(kpi_calculator.DEFAULT_CLUB_WEIGHTS))
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO users VALUES (1, '@employee', 'Test', 'User', 'Tester', 0)"
+        )
+        conn.executemany(
+            "INSERT INTO shifts VALUES ('User', 'Test', ?, ?, 6, 'test', '@employee')",
+            [
+                ('2026-07-05', club),
+                ('2026-07-20', club),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO reviews VALUES (?, '@employee', ?, 1, ?)",
+            [
+                (1, '2026-07-05', 'Первый отзыв'),
+                (2, '2026-07-20', 'Второй отзыв'),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        kpi_calculator.initialize_kpi_calculation_schema(self.db_path)
+        kpi_calculator.add_penalty(
+            '@employee',
+            '2026-07',
+            'Штраф месяца',
+            '@manager',
+            db_path=self.db_path,
+        )
+        kpi_calculator.set_monthly_stream(
+            '@employee',
+            '2026-07',
+            True,
+            '@manager',
+            db_path=self.db_path,
+        )
+
+        early = kpi_calculator.calculate_monthly_kpi(
+            '2026-07',
+            db_path=self.db_path,
+            employee_logins=['@employee'],
+            period_end='2026-07-10',
+        )[0]
+        full = kpi_calculator.calculate_monthly_kpi(
+            '2026-07',
+            db_path=self.db_path,
+            employee_logins=['@employee'],
+            period_end='2026-07-31',
+        )[0]
+
+        self.assertEqual(early['reviews'], 1)
+        self.assertEqual(early['shifts'], 1)
+        self.assertEqual(full['reviews'], 2)
+        self.assertEqual(full['shifts'], 2)
+        self.assertEqual(early['penalty_impact'], 0.10)
+        self.assertEqual(early['stream_bonus'], 0.05)
+
+    def test_metric_entries_return_records_up_to_selected_day(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO reviews VALUES (1, '@employee', '2026-07-05', 2, 'Хороший отзыв')"
+        )
+        conn.execute(
+            "INSERT INTO reviews VALUES (2, '@employee', '2026-07-20', 1, 'Поздний отзыв')"
+        )
+        conn.commit()
+        conn.close()
+
+        entries = kpi_calculator.get_metric_entries(
+            '@employee',
+            '2026-07',
+            'reviews',
+            period_end='2026-07-10',
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['date'], '2026-07-05')
+        self.assertEqual(entries[0]['description'], 'Хороший отзыв')
 
     def test_zones_are_relative_to_average_for_employees_with_shifts(self):
         conn = sqlite3.connect(self.db_path)

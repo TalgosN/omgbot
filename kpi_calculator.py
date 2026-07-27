@@ -63,6 +63,20 @@ def _month_end(month):
     return month.replace(day=calendar.monthrange(month.year, month.month)[1])
 
 
+def _day(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    raw = str(value or '').strip()
+    for date_format in ('%Y-%m-%d', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(raw, date_format).date()
+        except ValueError:
+            continue
+    raise ValueError(f'Unsupported KPI date: {value}')
+
+
 def _normalize_login(value):
     login = str(value or '').strip()
     if login and not login.startswith('@'):
@@ -611,9 +625,12 @@ def calculate_monthly_kpi(
     db_path=DB_PATH,
     employee_logins=None,
     ensure_schema=True,
+    period_end=None,
 ):
     month = _month_start(period_month)
-    end = _month_end(month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
     if ensure_schema:
         initialize_kpi_calculation_schema(db_path)
     conn = sqlite3.connect(db_path)
@@ -691,10 +708,6 @@ def calculate_monthly_kpi(
         row['weighted_pct'] = (
             row['total_pct'] * shifts / weighted if weighted else 0.0
         )
-        row['amount'] = sum(
-            row[FACT_FIELDS[metric]] * metric_settings[metric][0]
-            for metric in DEFAULT_METRIC_SETTINGS
-        )
         result.append(row)
 
     participants = [row for row in result if row['shifts'] > 0]
@@ -752,7 +765,6 @@ def compare_with_sheet(server_rows, sheet_rows):
         'penalties',
         'total_pct',
         'weighted_pct',
-        'amount',
         'rank',
     )
     server_by_login = {
@@ -785,6 +797,117 @@ def compare_with_sheet(server_rows, sheet_rows):
                     'sheet': sheet_value,
                 })
     return differences
+
+
+def get_metric_entries(
+    employee_login,
+    period_month,
+    metric,
+    period_end=None,
+    db_path=DB_PATH,
+):
+    month = _month_start(period_month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+    login = _normalize_login(employee_login)
+    start = month.isoformat()
+    finish = end.isoformat()
+
+    direct_queries = {
+        'reviews': '''
+            SELECT ID, date(d_rep), amount, desc, NULL, NULL
+            FROM reviews
+            WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
+        ''',
+        'extensions': '''
+            SELECT ID, date(dt_rep), 1, desc, club, status
+            FROM afterparty
+            WHERE lower(who)=? AND date(dt_rep) BETWEEN date(?) AND date(?)
+              AND COALESCE(status, '') <> 'Отклонено'
+        ''',
+        'certificates': '''
+            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'), NULL, NULL
+            FROM sert
+            WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
+        ''',
+        'subscriptions': '''
+            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'), NULL, NULL
+            FROM abik
+            WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
+        ''',
+        'initiatives': '''
+            SELECT ID, date(dt_rep), 1, desc, club, status
+            FROM initiative
+            WHERE lower(who)=? AND date(dt_rep) BETWEEN date(?) AND date(?)
+              AND COALESCE(status, '') <> 'Отклонено'
+        ''',
+        'bs': '''
+            SELECT ID, date(dt_bs), 1, 'Запись № ' || id_bs, NULL, NULL
+            FROM bs
+            WHERE lower(name_bs)=? AND date(dt_bs) BETWEEN date(?) AND date(?)
+        ''',
+    }
+
+    conn = sqlite3.connect(db_path)
+    try:
+        if metric == 'forms':
+            union_sql = sql_scripts.union.strip().rstrip(';')
+            rows = conn.execute(
+                f'''
+                SELECT NULL, date(dt_rep), fact,
+                       'Распределено по сменам', NULL, NULL
+                FROM ({union_sql}) source
+                WHERE lower(s_name)=? AND kpi='Анкеты'
+                  AND date(dt_rep) BETWEEN date(?) AND date(?)
+                ORDER BY date(dt_rep) DESC
+                ''',
+                (login, start, finish),
+            ).fetchall()
+        elif metric == 'shifts':
+            rows = conn.execute(
+                '''
+                SELECT sh.rowid, date(substr(sh.dt_shift, 1, 10)),
+                       sh.dur / 6.0,
+                       printf('%g ч · %s', sh.dur, COALESCE(sh.source, 'смена')),
+                       sh.club, NULL
+                FROM shifts sh
+                JOIN users ns ON (
+                    sh.shift_login IS NOT NULL
+                    AND lower(sh.shift_login)=lower(ns.login)
+                ) OR (
+                    sh.shift_login IS NULL
+                    AND sh.shift_second_name=ns.second_name
+                    AND sh.shift_first_name=ns.first_name
+                )
+                WHERE lower(ns.login)=?
+                  AND date(substr(sh.dt_shift, 1, 10))
+                      BETWEEN date(?) AND date(?)
+                ORDER BY date(substr(sh.dt_shift, 1, 10)) DESC, sh.rowid DESC
+                ''',
+                (login, start, finish),
+            ).fetchall()
+        elif metric in direct_queries:
+            rows = conn.execute(
+                direct_queries[metric] + ' ORDER BY 2 DESC, 1 DESC',
+                (login, start, finish),
+            ).fetchall()
+        else:
+            raise ValueError('Unsupported KPI metric')
+    finally:
+        conn.close()
+
+    return [
+        {
+            'id': row[0],
+            'date': row[1],
+            'value': float(row[2] or 0),
+            'description': row[3],
+            'club': row[4],
+            'status': row[5],
+        }
+        for row in rows
+    ]
 
 
 def get_kpi_control_status(period_month, db_path=DB_PATH):

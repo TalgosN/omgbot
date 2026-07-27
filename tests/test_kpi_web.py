@@ -74,6 +74,7 @@ class KpiWebTest(unittest.TestCase):
                 'nickname': 'Первый',
                 'shifts': 2,
                 'rank': 1,
+                'total_pct': 0.8,
             }]),
             patch.object(kpi_web, 'list_penalties', return_value=[]),
             patch.object(kpi_web, 'get_month_status', return_value={
@@ -82,12 +83,42 @@ class KpiWebTest(unittest.TestCase):
             }),
         ):
             response = self.client.get(
-                '/api/kpi?month=2026-07',
+                '/api/kpi?month=2026-07&date=2026-07-15',
                 headers=self.headers,
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['employees'][0]['login'], '@one')
+        self.assertEqual(response.get_json()['date'], '2026-07-15')
+
+    def test_metric_details_are_available_to_employee(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_active_employee_logins', return_value=['@one']),
+            patch.object(kpi_web, 'get_metric_entries', return_value=[{
+                'id': 1,
+                'date': '2026-07-05',
+                'value': 1,
+                'description': 'Отзыв',
+                'club': None,
+                'status': None,
+            }]) as get_entries,
+        ):
+            response = self.client.get(
+                '/api/kpi/details?month=2026-07&date=2026-07-15'
+                '&employee_login=@one&metric=reviews',
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['entries'][0]['date'], '2026-07-05')
+        get_entries.assert_called_once_with(
+            '@one',
+            '2026-07-01',
+            'reviews',
+            period_end='2026-07-15',
+        )
 
     def test_employee_cannot_add_penalty(self):
         with (

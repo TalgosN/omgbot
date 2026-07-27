@@ -3,8 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f1720">
+  <meta name="theme-color" content="#01032b">
   <title>KPI OMG VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -12,19 +15,19 @@
   <main class="shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">OMG VR · команда</p>
-        <h1>KPI</h1>
+        <p class="eyebrow">Команда OMG VR</p>
+        <h1>OMG KPI</h1>
       </div>
       <div id="userBadge" class="user-badge skeleton">Загрузка…</div>
     </header>
 
     <section class="period-panel">
-      <button id="previousMonth" class="icon-button" aria-label="Предыдущий месяц">‹</button>
-      <label class="month-label">
-        <span>Период</span>
-        <input id="monthPicker" type="month">
+      <button id="previousDay" class="icon-button" aria-label="Предыдущий день">‹</button>
+      <label class="date-label">
+        <span>Рейтинг на дату</span>
+        <input id="datePicker" type="date">
       </label>
-      <button id="nextMonth" class="icon-button" aria-label="Следующий месяц">›</button>
+      <button id="nextDay" class="icon-button" aria-label="Следующий день">›</button>
       <button id="monthStatusButton" class="status-button" hidden></button>
     </section>
 
@@ -71,6 +74,18 @@
       </label>
       <button class="primary-button" type="submit">Добавить штраф</button>
     </form>
+  </dialog>
+
+  <dialog id="entriesDialog" class="dialog dialog-small">
+    <div class="dialog-header">
+      <div>
+        <p id="entriesEmployee" class="eyebrow"></p>
+        <h2 id="entriesTitle"></h2>
+      </div>
+      <button class="icon-button close-dialog" aria-label="Закрыть">×</button>
+    </div>
+    <p id="entriesPeriod" class="entries-period"></p>
+    <div id="entriesContent" class="entries-list"></div>
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>
