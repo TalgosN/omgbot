@@ -81,7 +81,10 @@ def read_ank_table():
     return df_combined
 
 def write_data(data, table, sheet):
-    rows = [list(row) for row in data]
+    rows = [
+        ['' if value is None else value for value in row]
+        for row in data
+    ]
     row_width = len(rows[0]) if rows else 0
     if any(len(row) != row_width for row in rows):
         raise ValueError(f'Cannot write non-rectangular data to {table}/{sheet}')
@@ -90,6 +93,8 @@ def write_data(data, table, sheet):
     sh = c.open(table)
     wks = sh.worksheet_by_title(sheet)
     old_rows = wks.rows
+    sheet_range_prefix = f"'{sheet.replace(chr(39), chr(39) * 2)}'!"
+    clear_ranges = []
 
     if rows:
         # extend=True не даёт выгрузке оборваться, когда данных стало больше,
@@ -99,20 +104,19 @@ def write_data(data, table, sheet):
         last_data_row = len(rows) + 1
         if row_width < 6:
             start_column = chr(ord('A') + row_width)
-            wks.get_values(
-                start=f'{start_column}2',
-                end=f'F{last_data_row}',
-                returnas='range',
-            ).clear()
+            clear_ranges.append(
+                f'{sheet_range_prefix}{start_column}2:F{last_data_row}'
+            )
 
         if old_rows > last_data_row:
-            wks.get_values(
-                start=f'A{last_data_row + 1}',
-                end=f'F{old_rows}',
-                returnas='range',
-            ).clear()
+            clear_ranges.append(
+                f'{sheet_range_prefix}A{last_data_row + 1}:F{old_rows}'
+            )
     elif old_rows >= 2:
-        wks.get_values(start='A2', end=f'F{old_rows}', returnas='range').clear()
+        clear_ranges.append(f'{sheet_range_prefix}A2:F{old_rows}')
+
+    if clear_ranges:
+        c.sheet.values_batch_clear(sh.id, clear_ranges)
 
 def fetch_omg_shift_rows(start_date):
     """Сначала целиком получает окно расписания, не изменяя локальную БД."""

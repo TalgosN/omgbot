@@ -244,7 +244,7 @@ def build_kpi_shadow_report(comparison, controls):
 
     lines = [
         '🧪 <b>Диагностика теневого KPI</b>',
-        f"📅 Период: <b>{html.escape(str(comparison.get('period_month', '—')))}</b>",
+        f"📅 Проверяется только месяц: <b>{html.escape(str(comparison.get('period_month', '—')))}</b>",
         f"👥 Сотрудников проверено: <b>{comparison.get('employees', 0)}</b>",
         '',
     ]

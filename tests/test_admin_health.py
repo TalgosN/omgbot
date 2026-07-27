@@ -203,6 +203,7 @@ class AdminHealthTest(unittest.TestCase):
         )
 
         self.assertIn('Расхождений: <b>3</b>', report)
+        self.assertIn('Проверяется только месяц: <b>2026-07-01</b>', report)
         self.assertIn('Затронуто сотрудников: <b>2</b>', report)
         self.assertIn('Анкеты: <b>2</b>', report)
         self.assertIn('Рейтинг: <b>1</b>', report)

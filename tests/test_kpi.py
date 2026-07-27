@@ -61,15 +61,14 @@ class KpiTest(unittest.TestCase):
 
     def test_write_data_extends_sheet_before_clearing_unused_columns(self):
         events = []
-        unused_range = unittest.mock.Mock()
-        unused_range.clear.side_effect = lambda: events.append("clear")
         worksheet = unittest.mock.Mock(rows=607)
         worksheet.update_values.side_effect = lambda *args, **kwargs: events.append("update")
-        worksheet.get_values.return_value = unused_range
         spreadsheet = unittest.mock.Mock()
+        spreadsheet.id = "spreadsheet-id"
         spreadsheet.worksheet_by_title.return_value = worksheet
         client = unittest.mock.Mock()
         client.open.return_value = spreadsheet
+        client.sheet.values_batch_clear.side_effect = lambda *args, **kwargs: events.append("clear")
         rows = [(f"2026-07-{index:02d}", "@employee", "KPI", index) for index in range(1, 701)]
 
         with patch.object(self.kpi.pygsheets, "authorize", return_value=client, create=True):
@@ -78,10 +77,30 @@ class KpiTest(unittest.TestCase):
         worksheet.update_values.assert_called_once_with(
             "A2", [list(row) for row in rows], extend=True
         )
-        worksheet.get_values.assert_called_once_with(
-            start="E2", end="F701", returnas="range"
+        client.sheet.values_batch_clear.assert_called_once_with(
+            "spreadsheet-id", ["'data'!E2:F701"]
         )
         self.assertEqual(events, ["update", "clear"])
+
+    def test_write_data_clears_rows_left_after_shorter_export(self):
+        worksheet = unittest.mock.Mock(rows=10000)
+        spreadsheet = unittest.mock.Mock()
+        spreadsheet.id = "spreadsheet-id"
+        spreadsheet.worksheet_by_title.return_value = worksheet
+        client = unittest.mock.Mock()
+        client.open.return_value = spreadsheet
+        rows = [("2026-07-27", "@employee", "Анкеты", None)]
+
+        with patch.object(self.kpi.pygsheets, "authorize", return_value=client, create=True):
+            self.kpi.write_data(rows, "KPI OMG VR", "data")
+
+        worksheet.update_values.assert_called_once_with(
+            "A2", [["2026-07-27", "@employee", "Анкеты", ""]], extend=True
+        )
+        client.sheet.values_batch_clear.assert_called_once_with(
+            "spreadsheet-id",
+            ["'data'!E2:F2", "'data'!A3:F10000"],
+        )
 
     def test_write_data_rejects_ragged_rows_before_google_request(self):
         authorize = unittest.mock.Mock()
