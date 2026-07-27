@@ -116,6 +116,58 @@ class AdminHealthTest(unittest.TestCase):
         self.assertLess(report.index('Первый'), report.index('Второй'))
         self.assertNotIn('—', report)
 
+    def test_extra_menu_keeps_owner_only_report_out_of_manager_menu(self):
+        manager_buttons = [
+            '⚙️ Обновить настройки',
+            '🩺 Статус систем',
+            '📦 Тест отчета по расходникам',
+            '⬅️ Назад в админку',
+        ]
+        owner_buttons = [
+            '⚙️ Обновить настройки',
+            '🩺 Статус систем',
+            '📊 Тест недельного отчета',
+            '📦 Тест отчета по расходникам',
+            '⬅️ Назад в админку',
+        ]
+        constants = types.ModuleType("constants")
+        constants.admin_extra_funclist = manager_buttons
+        constants.owner_admin_extra_funclist = owner_buttons
+        markup = Mock()
+        self.admin.types.ReplyKeyboardMarkup = Mock(return_value=markup)
+        bot = Mock()
+        bot.send_message.return_value = Mock()
+        message = types.SimpleNamespace(
+            chat=types.SimpleNamespace(id=10),
+        )
+
+        with patch.object(
+            self.admin,
+            "require_role",
+            return_value={"status": self.admin.ROLE_MANAGER},
+        ), patch.dict(sys.modules, {"constants": constants}):
+            self.admin.admin_extra_menu(message, bot)
+
+        markup.add.assert_called_once_with(*manager_buttons)
+        bot.register_next_step_handler.assert_called_once_with(
+            bot.send_message.return_value,
+            self.admin.admin_extra_menu_handler,
+            bot,
+        )
+
+    def test_extra_menu_routes_service_action_to_existing_handler(self):
+        message = types.SimpleNamespace(text='🩺 Статус систем')
+        bot = Mock()
+
+        with patch.object(
+            self.admin,
+            "require_role",
+            return_value={"status": self.admin.ROLE_MANAGER},
+        ), patch.object(self.admin, "admin_func_handler") as handler:
+            self.admin.admin_extra_menu_handler(message, bot)
+
+        handler.assert_called_once_with(message, bot)
+
 
 if __name__ == "__main__":
     unittest.main()

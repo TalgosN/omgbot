@@ -101,6 +101,9 @@ def admin_func_handler(message, bot):
     elif a == '📣 Промо':
         from steamtracker.admin import promotion_admin_menu
         promotion_admin_menu(message, bot)
+
+    elif a == '🧰 Дополнительно':
+        admin_extra_menu(message, bot)
         
     elif a == '⚙️ Обновить настройки':
         handle_update_config(message, bot)
@@ -129,8 +132,7 @@ def admin_func_handler(message, bot):
         except Exception as e:
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка генерации: {e}")
             
-        from menu import admin_menu
-        admin_menu(message, bot)    
+        admin_extra_menu(message, bot)
   
     elif a == '📦 Тест отчета по расходникам':
             msg = bot.send_message(message.chat.id, "⏳ Анализирую остатки по клубам...")
@@ -142,8 +144,7 @@ def admin_func_handler(message, bot):
             except Exception as e:
                 bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка отчета расходников: {e}")
             
-            from menu import admin_menu
-            admin_menu(message, bot)
+            admin_extra_menu(message, bot)
 
     elif a == '📦 Расходники (Админ)':
         admin_consumables_menu(message, bot)
@@ -154,6 +155,41 @@ def admin_func_handler(message, bot):
     else:
         from menu import admin_menu
         admin_menu(message, bot)
+
+
+def admin_extra_menu(message, bot):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    from constants import admin_extra_funclist, owner_admin_extra_funclist
+
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    buttons = owner_admin_extra_funclist if user['status'] >= ROLE_OWNER else admin_extra_funclist
+    markup.add(*buttons)
+    msg = bot.send_message(
+        message.chat.id,
+        '🧰 Дополнительные функции',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(msg, admin_extra_menu_handler, bot)
+
+
+def admin_extra_menu_handler(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if message.text == '⬅️ Назад в админку':
+        from menu import admin_menu
+        admin_menu(message, bot)
+        return
+    if message.text in {
+        '⚙️ Обновить настройки',
+        '🩺 Статус систем',
+        '📊 Тест недельного отчета',
+        '📦 Тест отчета по расходникам',
+    }:
+        admin_func_handler(message, bot)
+        return
+    admin_extra_menu(message, bot)
 
 
 def parse_report_number(value):
@@ -449,6 +485,7 @@ def handle_system_health(message, bot):
         return
     if not health_check_lock.acquire(blocking=False):
         bot.send_message(message.chat.id, "⏳ Проверка систем уже выполняется.")
+        admin_extra_menu(message, bot)
         return
 
     msg = bot.send_message(message.chat.id, "⏳ Проверяю Telegram, SQLite, OMG Shift и Google Sheets...")
@@ -461,8 +498,7 @@ def handle_system_health(message, bot):
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка проверки систем: {e}")
         finally:
             health_check_lock.release()
-            from menu import admin_menu
-            admin_menu(message, bot)
+            admin_extra_menu(message, bot)
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -471,6 +507,7 @@ def handle_update_config(message, bot):
         return
     if not config_sync_lock.acquire(blocking=False):
         bot.send_message(message.chat.id, "⏳ Синхронизация настроек уже выполняется.")
+        admin_extra_menu(message, bot)
         return
 
     msg = bot.send_message(message.chat.id, "⏳ Подключаюсь к таблице 'Виарыч'...")
@@ -494,8 +531,7 @@ def handle_update_config(message, bot):
                 bot.send_message(message.chat.id, f"❌ Ошибка синхронизации: {error}")
         finally:
             config_sync_lock.release()
-            from menu import hello
-            hello(message.chat.id, bot)
+            admin_extra_menu(message, bot)
 
     threading.Thread(target=worker, daemon=True).start()
 

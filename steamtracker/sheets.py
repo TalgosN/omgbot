@@ -633,3 +633,14 @@ class GoogleSheetsManager:
             return False
         self._replace_table(worksheet, headers, filtered)
         return True
+
+    def clear_promotions(self) -> int:
+        spreadsheet = self.open()
+        worksheet = spreadsheet.worksheet_by_title("Промо-план")
+        headers, _ = self._current_headers(worksheet, "Промо-план")
+        for header in SHEET_SCHEMAS["Промо-план"]:
+            if header not in headers:
+                headers.append(header)
+        records = worksheet.get_all_records()
+        self._replace_table(worksheet, headers, [])
+        return len(records)

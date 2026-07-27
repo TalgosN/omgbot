@@ -1374,6 +1374,44 @@ class TrackerStorage:
                 )
             )
 
+    def promotion_reset_summary(self) -> dict[str, int]:
+        with self.connect() as conn:
+            return {
+                "promotions": conn.execute(
+                    "SELECT COUNT(*) FROM promotions"
+                ).fetchone()[0],
+                "content_generations": conn.execute(
+                    "SELECT COUNT(*) FROM content_generations"
+                ).fetchone()[0],
+                "outbox": conn.execute(
+                    "SELECT COUNT(*) FROM outbox"
+                ).fetchone()[0],
+                "game_rotation": conn.execute(
+                    "SELECT COUNT(*) FROM game_rotation"
+                ).fetchone()[0],
+            }
+
+    def reset_all_promotions(self) -> dict[str, int]:
+        counts = self.promotion_reset_summary()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM outbox")
+            conn.execute("DELETE FROM content_generations")
+            conn.execute("DELETE FROM game_rotation")
+            conn.execute("DELETE FROM promotions")
+            conn.execute(
+                """
+                DELETE FROM sqlite_sequence
+                WHERE name IN (
+                    'promotions',
+                    'content_generations',
+                    'outbox',
+                    'game_rotation'
+                )
+                """
+            )
+        return counts
+
     def approved_games_for_enrichment(self) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return list(

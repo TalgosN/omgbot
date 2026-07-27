@@ -109,6 +109,15 @@ def _admin_reply_keyboard():
     return markup
 
 
+def _remove_reply_keyboard(chat_id: int, bot, text: str) -> None:
+    types = _telegram_types()
+    bot.send_message(
+        chat_id,
+        text,
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
+
+
 def promotion_admin_menu(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
@@ -126,18 +135,48 @@ def promotion_admin_handler(message, bot):
         return
     action = message.text
     if action == "⭐ Текущее промо":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Управление — кнопками под карточкой 👇",
+        )
         show_current_promotion(message, bot)
     elif action == "➕ Создать промо":
         show_create_menu(message, bot)
     elif action == "📋 Все промо":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Выберите промо в списке 👇",
+        )
         show_promotion_list(message, bot, scope="all", page=0)
     elif action == "🧪 Тестовые варианты":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Выберите тестовый вариант 👇",
+        )
         show_promotion_list(message, bot, scope="test", page=0)
     elif action == "📦 Очередь отправки":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Открываю состояние очереди.",
+        )
         show_outbox(message, bot)
     elif action == "🎮 Каталог игр":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Открываю управление каталогом.",
+        )
         show_catalog(message, bot)
     elif action == "⚙️ Настройки промо":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Открываю настройки промо.",
+        )
         show_promo_settings(message, bot)
     elif action == "⬅️ Назад в админку":
         from menu import admin_menu
@@ -385,7 +424,10 @@ def show_promotion_list(message, bot, *, scope: str, page: int):
     filters = types.InlineKeyboardButton
     markup.row(
         filters("🟡 В работе", callback_data=f"{CALLBACK_PREFIX}:list:review:0"),
-        filters("🟢 Готовые", callback_data=f"{CALLBACK_PREFIX}:list:approved:0"),
+        filters(
+            "🟢 Согласованные",
+            callback_data=f"{CALLBACK_PREFIX}:list:approved:0",
+        ),
     )
     markup.row(
         filters("🗄 Архив", callback_data=f"{CALLBACK_PREFIX}:list:archive:0"),
@@ -473,7 +515,12 @@ def create_menu_handler(message, bot):
 def create_weekly_promotion(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    wait = bot.send_message(message.chat.id, "⏳ Формирую игру недели...")
+    types = _telegram_types()
+    wait = bot.send_message(
+        message.chat.id,
+        "⏳ Формирую игру недели...",
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
     try:
         settings, storage = _runtime()
         result = _weekly_service(settings, storage).run(force=True)
@@ -489,6 +536,7 @@ def create_weekly_promotion(message, bot):
             message.chat.id,
             wait.message_id,
         )
+        promotion_admin_menu(message, bot)
 
 
 def _promotion_defaults(settings: Settings) -> tuple[str, str, str]:
@@ -512,7 +560,12 @@ def create_manual_promotion(message, bot):
         bot.send_message(message.chat.id, "AppID должен состоять из цифр.")
         show_create_menu(message, bot)
         return
-    wait = bot.send_message(message.chat.id, "⏳ Создаю промо...")
+    types = _telegram_types()
+    wait = bot.send_message(
+        message.chat.id,
+        "⏳ Создаю промо...",
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
     try:
         settings, storage = _runtime()
         discount, valid_from, valid_to = _promotion_defaults(settings)
@@ -545,12 +598,18 @@ def create_manual_promotion(message, bot):
             message.chat.id,
             wait.message_id,
         )
+        promotion_admin_menu(message, bot)
 
 
 def create_test_promotion(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    wait = bot.send_message(message.chat.id, "⏳ Создаю тестовый вариант...")
+    types = _telegram_types()
+    wait = bot.send_message(
+        message.chat.id,
+        "⏳ Создаю тестовый вариант...",
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
     try:
         settings, storage = _runtime()
         discount, valid_from, valid_to = _promotion_defaults(settings)
@@ -584,6 +643,7 @@ def create_test_promotion(message, bot):
             message.chat.id,
             wait.message_id,
         )
+        promotion_admin_menu(message, bot)
 
 
 def _send_promotion_texts(chat_id: int, promotion_id: int, bot) -> None:
@@ -656,6 +716,11 @@ def save_manual_text(message, promotion_id: int, channel: str, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     if message.text == "Отмена":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Редактирование отменено.",
+        )
         send_promotion_card(message.chat.id, promotion_id, bot)
         return
     text = str(message.text or "").strip()
@@ -664,6 +729,11 @@ def save_manual_text(message, promotion_id: int, channel: str, bot):
         bot.send_message(
             message.chat.id,
             f"Текст должен содержать от 1 до {limits[channel]} символов.",
+        )
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Возвращаюсь к карточке промо.",
         )
         send_promotion_card(message.chat.id, promotion_id, bot)
         return
@@ -675,12 +745,22 @@ def save_manual_text(message, promotion_id: int, channel: str, bot):
             message.chat.id,
             "Название игры должно присутствовать без изменений.",
         )
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Возвращаюсь к карточке промо.",
+        )
         send_promotion_card(message.chat.id, promotion_id, bot)
         return
     if promotion["discount_text"] not in plain_text:
         bot.send_message(
             message.chat.id,
             "Точное значение скидки должно присутствовать в тексте.",
+        )
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Возвращаюсь к карточке промо.",
         )
         send_promotion_card(message.chat.id, promotion_id, bot)
         return
@@ -716,6 +796,11 @@ def save_manual_text(message, promotion_id: int, channel: str, bot):
         bot.send_message(message.chat.id, response)
     except Exception as error:
         bot.send_message(message.chat.id, f"❌ {error}")
+    _remove_reply_keyboard(
+        message.chat.id,
+        bot,
+        "Возвращаюсь к карточке промо.",
+    )
     send_promotion_card(message.chat.id, promotion_id, bot)
 
 
@@ -822,6 +907,7 @@ def show_promo_settings(message, bot):
             message.chat.id,
             f"❌ Не удалось прочитать настройки: {error}",
         )
+        promotion_admin_menu(message, bot)
         return
     sheet_enabled = str(
         values.get("weekly_promo_enabled") or ""
@@ -857,6 +943,8 @@ def show_promo_settings(message, bot):
             f"{'да' if settings.weekly_promo_enabled else 'нет'}\n"
             f"Включено менеджером: {'да' if sheet_enabled else 'нет'}\n"
             f"Итог: {'🟢 включено' if fully_enabled else '⏸ выключено'}\n"
+            f"Режим: "
+            f"{'автоматический' if fully_enabled else 'ручной'}\n"
             f"Генератор: {escape(settings.generator_provider)}\n"
             "Публикация: dry-run"
         ),
@@ -901,6 +989,11 @@ def save_discount(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     if message.text == "Отмена":
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Изменение скидки отменено.",
+        )
         show_promo_settings(message, bot)
         return
     value = str(message.text or "").strip()
@@ -908,6 +1001,11 @@ def save_discount(message, bot):
         bot.send_message(
             message.chat.id,
             "Скидка должна содержать от 1 до 80 символов.",
+        )
+        _remove_reply_keyboard(
+            message.chat.id,
+            bot,
+            "Возвращаюсь к настройкам.",
         )
         show_promo_settings(message, bot)
         return
@@ -920,6 +1018,11 @@ def save_discount(message, bot):
         bot.send_message(message.chat.id, "✅ Скидка обновлена.")
     except Exception as error:
         bot.send_message(message.chat.id, f"❌ {error}")
+    _remove_reply_keyboard(
+        message.chat.id,
+        bot,
+        "Возвращаюсь к настройкам.",
+    )
     show_promo_settings(message, bot)
 
 
@@ -1249,6 +1352,13 @@ def register_promo_admin_callbacks(bot) -> None:
                     "on",
                     "да",
                 }
+                if not enabled and not settings.weekly_promo_enabled:
+                    raise ValueError(
+                        "Автоматический режим запрещён на сервере. "
+                        "Сначала задайте "
+                        "STEAMTRACKER_WEEKLY_PROMO_ENABLED=true "
+                        "и перезапустите bot"
+                    )
                 manager.update_tracker_setting(
                     "weekly_promo_enabled",
                     "false" if enabled else "true",

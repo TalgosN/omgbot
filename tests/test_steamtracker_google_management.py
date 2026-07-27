@@ -301,6 +301,24 @@ class GoogleDataSyncTests(unittest.TestCase):
         self.assertTrue(removed)
         self.assertEqual(promo_sheet.records, [])
 
+        second_id = self.storage.create_promotion(
+            app_id=20,
+            discount_text="150 рублей",
+            valid_from="2026-08-03",
+            valid_to="2026-08-09",
+            manager_comment="Ещё один тест",
+            image_url=None,
+            is_test=True,
+        )
+        self.manager.sync_promotion(
+            self.storage,
+            second_id,
+            apply=True,
+        )
+        cleared = self.manager.clear_promotions()
+        self.assertEqual(cleared, 1)
+        self.assertEqual(promo_sheet.records, [])
+
 
 class CatalogManagementTests(unittest.TestCase):
     def setUp(self):
