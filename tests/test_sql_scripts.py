@@ -26,7 +26,6 @@ class SqlScriptsTest(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE initiative (id INTEGER, dt_rep TEXT, who TEXT, status TEXT)"
         )
-        self.conn.execute("CREATE TABLE bs (id_bs INTEGER, dt_bs TEXT, name_bs TEXT)")
         self.conn.execute("CREATE TABLE penalty (ID INTEGER, dt TEXT, name TEXT)")
         self.conn.execute("CREATE TABLE reviews (d_rep TEXT, who TEXT, amount REAL)")
 

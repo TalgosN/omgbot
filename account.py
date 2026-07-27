@@ -36,7 +36,6 @@ LOGIN_REFERENCES = {
     'double': 'who',
     'hashtag_events': 'telegram',
     'penalty': 'name',
-    'bs': 'name_bs',
     'consumables_history': 'user_name',
     'shifts': 'shift_login',
 }
@@ -517,13 +516,11 @@ def get_main_kpi(login):
         'extensions': cell(8), 'extensions_pct': cell(9),
         'certificates': cell(10), 'certificates_pct': cell(11),
         'subscriptions': cell(12), 'subscriptions_pct': cell(13),
-        'bs': cell(14), 'bs_pct': cell(15),
         'initiatives': cell(16), 'initiatives_pct': cell(17),
         'stream': cell(18, 'FALSE'),
         'penalties': cell(19),
         'total_pct': cell(20),
         'weighted_pct': cell(21),
-        'amount': cell(22),
         'zone': cell(23, '—'),
         'rank': cell(24, 'нет'),
     }

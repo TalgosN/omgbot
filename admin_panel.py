@@ -219,14 +219,11 @@ KPI_SHADOW_FIELD_LABELS = {
     'certificates_pct': 'Сертификаты, %',
     'subscriptions': 'Абонементы',
     'subscriptions_pct': 'Абонементы, %',
-    'bs': 'БС',
-    'bs_pct': 'БС, %',
     'initiatives': 'Инициативы',
     'initiatives_pct': 'Инициативы, %',
     'penalties': 'Штрафы',
     'total_pct': 'Итоговый KPI',
     'weighted_pct': 'Взвешенный KPI',
-    'amount': 'Сумма',
     'rank': 'Рейтинг',
 }
 
@@ -270,12 +267,12 @@ def build_kpi_shadow_report(comparison, controls):
             )
         derived_fields = {
             'reviews_pct', 'forms_pct', 'extensions_pct',
-            'certificates_pct', 'subscriptions_pct', 'bs_pct',
-            'initiatives_pct', 'total_pct', 'weighted_pct', 'amount', 'rank',
+            'certificates_pct', 'subscriptions_pct',
+            'initiatives_pct', 'total_pct', 'weighted_pct', 'rank',
         }
         if any(field in field_counts for field in derived_fields):
             lines.append(
-                'ℹ️ Проценты, сумма, итоговый KPI и рейтинг расходятся '
+                'ℹ️ Проценты, итоговый KPI и рейтинг расходятся '
                 'как следствие исходных фактов и смен.'
             )
 
@@ -289,7 +286,7 @@ def build_kpi_shadow_report(comparison, controls):
 
         source_fields = {
             'shifts', 'weighted_shifts', 'reviews', 'forms', 'extensions',
-            'certificates', 'subscriptions', 'bs', 'initiatives', 'penalties',
+            'certificates', 'subscriptions', 'initiatives', 'penalties',
         }
         examples = [
             difference

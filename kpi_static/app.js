@@ -15,8 +15,12 @@ const state = {
   penalties: [],
   monthStatus: null,
   selected: null,
+  analytics: null,
+  analyticsEmployees: new Set(),
 };
 
+const analyticsCache = new Map();
+const chartColors = ['#9b72ff', '#5ee7c4', '#ff78aa', '#ffd166', '#5ab8ff'];
 const metricLabels = {
   reviews: 'Отзывы',
   forms: 'Анкеты',
@@ -24,7 +28,6 @@ const metricLabels = {
   certificates: 'Сертификаты',
   subscriptions: 'Абонементы',
   initiatives: 'Инициативы',
-  bs: 'БС',
   shifts: 'Смены',
 };
 
@@ -68,6 +71,11 @@ function dayLabel(day, options = {}) {
     month: 'long',
     year: options.year ? 'numeric' : undefined,
   }).format(new Date(year, month - 1, date));
+}
+
+function numericDayLabel(day) {
+  const [year, month, date] = day.split('-');
+  return `${date}.${month}.${year}`;
 }
 
 function monthLabel(month) {
@@ -234,7 +242,6 @@ function renderDialog(employee) {
     ${metric('Сертификаты', 'certificates', employee.certificates, employee.certificates_pct)}
     ${metric('Абонементы', 'subscriptions', employee.subscriptions, employee.subscriptions_pct)}
     ${metric('Инициативы', 'initiatives', employee.initiatives, employee.initiatives_pct)}
-    ${metric('БС', 'bs', employee.bs, employee.bs_pct)}
     <h3 class="section-title">Штрафы</h3>
     <div class="penalty-list">
       ${penalties.length ? penalties.map((item) => `
@@ -306,6 +313,7 @@ async function loadData() {
     state.penalties = payload.penalties;
     state.monthStatus = payload.month_status;
     $('#datePicker').value = state.day;
+    $('#dateDisplay').textContent = numericDayLabel(state.day);
     renderSummary();
     renderStatus();
     renderEmployees();
@@ -315,8 +323,354 @@ async function loadData() {
   }
 }
 
+function chartOptions() {
+  const individual = $('#analyticsScope').value === 'individual';
+  return individual
+    ? [
+      ['kpi', 'KPI'],
+      ['rank', 'Место в рейтинге'],
+      ['shifts', 'Смены'],
+      ['metric', 'Показатель'],
+    ]
+    : [
+      ['kpi', 'Средний KPI'],
+      ['shifts', 'Смены команды'],
+      ['metric', 'Показатель команды'],
+      ['zones', 'Зоны рейтинга'],
+      ['top', 'Топ сотрудников'],
+    ];
+}
+
+function updateChartOptions() {
+  const select = $('#analyticsChart');
+  const previous = select.value;
+  const options = chartOptions();
+  select.innerHTML = options
+    .map(([value, label]) => `<option value="${value}">${label}</option>`)
+    .join('');
+  if (options.some(([value]) => value === previous)) select.value = previous;
+  $('#employeePicker').hidden = $('#analyticsScope').value !== 'individual';
+  renderAnalytics();
+}
+
+function analyticsLabel(value, mode) {
+  if (mode === 'daily') {
+    const [, month, day] = value.split('-');
+    return `${day}.${month}`;
+  }
+  const [year, month] = value.split('-');
+  return `${month}.${year.slice(2)}`;
+}
+
+function employeeAt(point, login) {
+  return point.employees.find((employee) => employee.login === login);
+}
+
+function selectedAnalyticsEmployees() {
+  return state.analytics?.employees.filter(
+    (employee) => state.analyticsEmployees.has(employee.login),
+  ) || [];
+}
+
+function renderEmployeeChips() {
+  const employees = state.analytics?.employees || [];
+  if (!state.analyticsEmployees.size && employees.length) {
+    const ownLogin = String(state.me?.login || '').toLowerCase();
+    const initial = employees.find((employee) => employee.login === ownLogin) || employees[0];
+    state.analyticsEmployees.add(initial.login);
+  }
+  $('#employeeChips').innerHTML = employees.map((employee) => `
+    <button
+      type="button"
+      class="employee-chip${state.analyticsEmployees.has(employee.login) ? ' selected' : ''}"
+      data-login="${escapeHtml(employee.login)}"
+    >${escapeHtml(employee.nickname)}</button>
+  `).join('');
+}
+
+function lineChart(series, labels, options = {}) {
+  const width = 720;
+  const height = 310;
+  const pad = { left: 48, right: 18, top: 20, bottom: 38 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const values = series.flatMap((item) => item.values)
+    .filter((value) => value != null && Number.isFinite(Number(value)))
+    .map(Number);
+  if (!values.length) return '<div class="empty">За период нет данных</div>';
+
+  let min = options.rank ? Math.min(...values) : Math.min(0, ...values);
+  let max = Math.max(...values);
+  if (min === max) {
+    min = options.rank ? Math.max(0, min - 1) : 0;
+    max += 1;
+  }
+  const x = (index) => pad.left + (
+    labels.length > 1 ? index * plotWidth / (labels.length - 1) : plotWidth / 2
+  );
+  const y = (value) => {
+    const ratio = (Number(value) - min) / (max - min);
+    return options.rank
+      ? pad.top + ratio * plotHeight
+      : pad.top + (1 - ratio) * plotHeight;
+  };
+  const format = options.percent ? percent : (value) => number(value);
+
+  const grid = Array.from({ length: 5 }, (_, index) => {
+    const ratio = index / 4;
+    const gridY = pad.top + ratio * plotHeight;
+    const value = options.rank
+      ? min + ratio * (max - min)
+      : max - ratio * (max - min);
+    return `
+      <line x1="${pad.left}" y1="${gridY}" x2="${width - pad.right}" y2="${gridY}" />
+      <text x="${pad.left - 8}" y="${gridY + 4}" text-anchor="end">${escapeHtml(format(value))}</text>
+    `;
+  }).join('');
+
+  const paths = series.map((item, seriesIndex) => {
+    const points = item.values
+      .map((value, index) => (
+        value == null ? null : `${x(index)},${y(value)}`
+      ))
+      .filter(Boolean);
+    if (!points.length) return '';
+    const lastIndex = [...item.values].map((value, index) => (
+      value == null ? null : index
+    )).filter((value) => value != null).at(-1);
+    const color = chartColors[seriesIndex % chartColors.length];
+    const flags = (item.flags || []).map((flag, index) => {
+      if (!flag || item.values[index] == null) return '';
+      return `
+        ${flag.penalties ? `<circle cx="${x(index)}" cy="${y(item.values[index])}" r="8" fill="none" stroke="#ff5c8a" stroke-width="2" />` : ''}
+        ${flag.stream ? `<circle cx="${x(index)}" cy="${y(item.values[index])}" r="11" fill="none" stroke="#6ef2b2" stroke-width="2" />` : ''}
+      `;
+    }).join('');
+    return `
+      <polyline points="${points.join(' ')}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+      ${flags}
+      <circle cx="${x(lastIndex)}" cy="${y(item.values[lastIndex])}" r="5" fill="${color}" stroke="#08083b" stroke-width="3" />
+    `;
+  }).join('');
+
+  const labelIndexes = [...new Set([0, Math.floor((labels.length - 1) / 2), labels.length - 1])];
+  const xLabels = labelIndexes.map((index) => `
+    <text x="${x(index)}" y="${height - 10}" text-anchor="${index === 0 ? 'start' : index === labels.length - 1 ? 'end' : 'middle'}">
+      ${escapeHtml(labels[index])}
+    </text>
+  `).join('');
+
+  return `
+    <svg class="analytics-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.title || 'График')}">
+      <g class="chart-grid">${grid}${xLabels}</g>
+      <g>${paths}</g>
+    </svg>
+  `;
+}
+
+function barChart(items) {
+  const max = Math.max(...items.map((item) => item.value), 0.01);
+  return `
+    <div class="ranking-bars">
+      ${items.map((item, index) => `
+        <div class="ranking-bar">
+          <div><span>#${index + 1} ${escapeHtml(item.name)}</span><strong>${percent(item.value)}</strong></div>
+          <i><b style="width:${Math.max(2, item.value / max * 100)}%"></b></i>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderChartLegend(series, showFlags = false) {
+  const flags = showFlags ? `
+    <span><i class="penalty-ring"></i>штраф</span>
+    <span><i class="stream-ring"></i>трансляция</span>
+  ` : '';
+  $('#chartLegend').innerHTML = series.map((item, index) => `
+    <span><i style="background:${chartColors[index % chartColors.length]}"></i>${escapeHtml(item.name)}</span>
+  `).join('') + flags;
+}
+
+function renderAnalyticsSummary(scope, latest, selected) {
+  if (!latest) {
+    $('#analyticsSummary').innerHTML = '';
+    return;
+  }
+  if (scope === 'team') {
+    $('#analyticsSummary').innerHTML = `
+      <div><span>Сотрудников</span><strong>${latest.team.employees}</strong></div>
+      <div><span>Средний KPI</span><strong>${percent(latest.team.kpi)}</strong></div>
+      <div><span>Смен</span><strong>${number(latest.team.shifts)}</strong></div>
+      <div><span>Зоны</span><strong>🟢 ${latest.team.zones['🟢']} · 🟡 ${latest.team.zones['🟡']} · 🔴 ${latest.team.zones['🔴']}</strong></div>
+    `;
+    return;
+  }
+  const cards = selected.map((employee) => {
+    const row = employeeAt(latest, employee.login);
+    if (!row) return '';
+    const controls = [
+      row.penalties ? `−${row.penalties * 10}%` : '',
+      row.stream ? '+5% трансляция' : '',
+    ].filter(Boolean).join(' · ');
+    return `
+      <div>
+        <span>${escapeHtml(employee.nickname)}</span>
+        <strong>${percent(row.kpi)} · #${row.rank ?? '—'}</strong>
+        ${controls ? `<small>${controls}</small>` : ''}
+      </div>
+    `;
+  }).join('');
+  $('#analyticsSummary').innerHTML = cards || '<div class="empty">Выберите сотрудника</div>';
+}
+
+function renderAnalytics() {
+  if (!state.analytics) return;
+  const scope = $('#analyticsScope').value;
+  const chart = $('#analyticsChart').value || 'kpi';
+  const weighted = $('#analyticsWeighted').checked;
+  const metric = $('#analyticsMetric').value;
+  const labels = state.analytics.points.map(
+    (point) => analyticsLabel(point.label, state.analytics.mode),
+  );
+  const selected = selectedAnalyticsEmployees();
+  let series = [];
+  let title = '';
+  let percentValues = false;
+  let rankValues = false;
+  let customChart = '';
+
+  $('#metricField').hidden = chart !== 'metric';
+  $('#weightedField').hidden = !['kpi', 'shifts'].includes(chart);
+  $('#chartEyebrow').textContent = scope === 'team' ? 'Команда' : 'Сравнение сотрудников';
+
+  if (scope === 'team') {
+    if (chart === 'kpi') {
+      title = weighted ? 'Средний взвешенный KPI' : 'Средний KPI';
+      percentValues = true;
+      series = [{
+        name: title,
+        values: state.analytics.points.map(
+          (point) => point.team[weighted ? 'weighted_kpi' : 'kpi'],
+        ),
+      }];
+    } else if (chart === 'shifts') {
+      title = weighted ? 'Взвешенные смены команды' : 'Смены команды';
+      series = [{
+        name: title,
+        values: state.analytics.points.map(
+          (point) => point.team[weighted ? 'weighted_shifts' : 'shifts'],
+        ),
+      }];
+    } else if (chart === 'metric') {
+      title = `${metricLabels[metric]} команды`;
+      series = [{
+        name: metricLabels[metric],
+        values: state.analytics.points.map((point) => point.team[metric]),
+      }];
+    } else if (chart === 'zones') {
+      title = 'Распределение по зонам';
+      series = ['🟢', '🟡', '🔴'].map((zone) => ({
+        name: zone,
+        values: state.analytics.points.map((point) => point.team.zones[zone]),
+      }));
+    } else {
+      title = 'Топ сотрудников';
+      const latest = state.analytics.points.at(-1);
+      const top = [...(latest?.employees || [])]
+        .filter((employee) => employee.shifts > 0)
+        .sort((left, right) => right.kpi - left.kpi)
+        .slice(0, 5)
+        .map((employee) => ({ name: employee.nickname, value: employee.kpi }));
+      customChart = top.length
+        ? barChart(top)
+        : '<div class="empty">За период нет данных</div>';
+    }
+  } else {
+    if (chart === 'kpi') {
+      title = weighted ? 'Взвешенный KPI' : 'KPI';
+      percentValues = true;
+    } else if (chart === 'rank') {
+      title = 'Место в рейтинге';
+      rankValues = true;
+    } else if (chart === 'shifts') {
+      title = weighted ? 'Взвешенные смены' : 'Смены';
+    } else {
+      title = metricLabels[metric];
+    }
+    series = selected.map((employee) => ({
+      name: employee.nickname,
+      values: state.analytics.points.map((point) => {
+        const row = employeeAt(point, employee.login);
+        if (!row) return null;
+        if (chart === 'kpi') return row[weighted ? 'weighted_kpi' : 'kpi'];
+        if (chart === 'rank') return row.rank;
+        if (chart === 'shifts') return row[weighted ? 'weighted_shifts' : 'shifts'];
+        return row[metric];
+      }),
+      flags: state.analytics.points.map((point) => {
+        if (state.analytics.mode !== 'monthly') return null;
+        const row = employeeAt(point, employee.login);
+        return row ? { penalties: row.penalties, stream: row.stream } : null;
+      }),
+    }));
+  }
+
+  $('#chartTitle').textContent = title;
+  const latestValues = series
+    .map((item) => [...item.values].reverse().find((value) => value != null))
+    .filter((value) => value != null);
+  $('#chartCurrent').textContent = series.length === 1 && latestValues.length
+    ? (percentValues ? percent(latestValues[0]) : number(latestValues[0]))
+    : '';
+  $('#analyticsChartArea').innerHTML = customChart || lineChart(series, labels, {
+    percent: percentValues,
+    rank: rankValues,
+    title,
+  });
+  renderChartLegend(
+    series,
+    scope === 'individual' && state.analytics.mode === 'monthly',
+  );
+  renderAnalyticsSummary(
+    scope,
+    state.analytics.points.at(-1),
+    selected,
+  );
+}
+
+async function loadAnalytics(force = false) {
+  const mode = $('#analyticsMode').value;
+  const month = $('#analyticsMonth').value || state.month;
+  const selectedDate = mode === 'daily' && month === state.month ? state.day : '';
+  const cacheKey = `${mode}:${month}:${selectedDate}`;
+  $('#analyticsChartArea').innerHTML = '<div class="loading-card chart-loading"></div>';
+  try {
+    if (!force && analyticsCache.has(cacheKey)) {
+      state.analytics = analyticsCache.get(cacheKey);
+    } else {
+      const params = new URLSearchParams({ mode, month });
+      if (selectedDate) params.set('date', selectedDate);
+      state.analytics = await api(`/api/kpi/analytics?${params}`);
+      analyticsCache.set(cacheKey, state.analytics);
+    }
+    const available = new Set(state.analytics.employees.map((employee) => employee.login));
+    state.analyticsEmployees = new Set(
+      [...state.analyticsEmployees].filter((login) => available.has(login)),
+    );
+    renderEmployeeChips();
+    renderAnalytics();
+  } catch (error) {
+    $('#analyticsChartArea').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    showToast(error.message, true);
+  }
+}
+
 async function initialize() {
   $('#datePicker').value = state.day;
+  $('#dateDisplay').textContent = numericDayLabel(state.day);
+  $('#analyticsMonth').value = state.month;
+  updateChartOptions();
   try {
     state.me = await api('/api/me');
     $('#userBadge').textContent = `${state.me.name} · ${state.me.role_name}`;
@@ -334,6 +688,9 @@ function moveDay(offset) {
   state.day = localIsoDate(next);
   state.month = state.day.slice(0, 7);
   $('#datePicker').value = state.day;
+  $('#dateDisplay').textContent = numericDayLabel(state.day);
+  $('#analyticsMonth').value = state.month;
+  state.analytics = null;
   loadData();
 }
 
@@ -343,9 +700,52 @@ $('#datePicker').addEventListener('change', (event) => {
   if (!event.target.value) return;
   state.day = event.target.value;
   state.month = state.day.slice(0, 7);
+  $('#dateDisplay').textContent = numericDayLabel(state.day);
+  $('#analyticsMonth').value = state.month;
+  state.analytics = null;
   loadData();
 });
 $('#searchInput').addEventListener('input', renderEmployees);
+
+document.querySelector('.view-tabs').addEventListener('click', async (event) => {
+  const tab = event.target.closest('[data-view]');
+  if (!tab) return;
+  document.querySelectorAll('.view-tab').forEach(
+    (button) => button.classList.toggle('active', button === tab),
+  );
+  const analytics = tab.dataset.view === 'analytics';
+  $('#ratingView').hidden = analytics;
+  $('#analyticsView').hidden = !analytics;
+  if (analytics && !state.analytics) await loadAnalytics();
+});
+
+$('#analyticsMode').addEventListener('change', () => loadAnalytics());
+$('#analyticsMonth').addEventListener('change', (event) => {
+  if (event.target.value) loadAnalytics();
+});
+$('#analyticsScope').addEventListener('change', updateChartOptions);
+$('#analyticsChart').addEventListener('change', renderAnalytics);
+$('#analyticsMetric').addEventListener('change', renderAnalytics);
+$('#analyticsWeighted').addEventListener('change', renderAnalytics);
+$('#employeeChips').addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-login]');
+  if (!chip) return;
+  const login = chip.dataset.login;
+  if (state.analyticsEmployees.has(login)) {
+    if (state.analyticsEmployees.size === 1) {
+      showToast('Оставьте хотя бы одного сотрудника', true);
+      return;
+    }
+    state.analyticsEmployees.delete(login);
+  } else if (state.analyticsEmployees.size >= 5) {
+    showToast('Можно сравнить не больше пяти сотрудников', true);
+    return;
+  } else {
+    state.analyticsEmployees.add(login);
+  }
+  renderEmployeeChips();
+  renderAnalytics();
+});
 
 employeeList.addEventListener('click', (event) => {
   const card = event.target.closest('.employee-card');
@@ -382,6 +782,8 @@ employeeDialog.addEventListener('click', async (event) => {
         }),
       });
       showToast('Отметка трансляции сохранена');
+      analyticsCache.clear();
+      state.analytics = null;
       employeeDialog.close();
       await loadData();
     } catch (error) {
@@ -399,6 +801,8 @@ employeeDialog.addEventListener('click', async (event) => {
         body: JSON.stringify({ reason }),
       });
       showToast('Штраф отменён');
+      analyticsCache.clear();
+      state.analytics = null;
       employeeDialog.close();
       await loadData();
     } catch (error) {
@@ -421,6 +825,8 @@ $('#penaltyForm').addEventListener('submit', async (event) => {
     penaltyDialog.close();
     employeeDialog.close();
     showToast('Штраф −10% добавлен');
+    analyticsCache.clear();
+    state.analytics = null;
     await loadData();
   } catch (error) {
     showToast(error.message, true);

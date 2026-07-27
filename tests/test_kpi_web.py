@@ -69,13 +69,18 @@ class KpiWebTest(unittest.TestCase):
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'get_user', return_value=user(0)),
             patch.object(kpi_web, '_active_employee_logins', return_value=['@one']),
+            patch.object(
+                kpi_web,
+                '_employee_logins_with_month_shifts',
+                return_value=['@one'],
+            ),
             patch.object(kpi_web, 'calculate_monthly_kpi', return_value=[{
                 'login': '@one',
                 'nickname': 'Первый',
                 'shifts': 2,
                 'rank': 1,
                 'total_pct': 0.8,
-            }]),
+            }]) as calculate,
             patch.object(kpi_web, 'list_penalties', return_value=[]),
             patch.object(kpi_web, 'get_month_status', return_value={
                 'period_month': '2026-07-01',
@@ -90,6 +95,10 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['employees'][0]['login'], '@one')
         self.assertEqual(response.get_json()['date'], '2026-07-15')
+        self.assertTrue(all(
+            call.kwargs['employee_logins'] == ['@one']
+            for call in calculate.call_args_list
+        ))
 
     def test_metric_details_are_available_to_employee(self):
         with (
@@ -118,6 +127,67 @@ class KpiWebTest(unittest.TestCase):
             '2026-07-01',
             'reviews',
             period_end='2026-07-15',
+        )
+
+    def test_daily_analytics_are_available_to_employee(self):
+        kpi_web._analytics_cache.clear()
+        analytics_row = {
+            'login': '@one',
+            'nickname': 'Первый',
+            'total_pct': 0.8,
+            'weighted_pct': 0.6,
+            'rank': 1,
+            'zone': '🟢',
+            'shifts': 2,
+            'weighted_shifts': 3,
+            'reviews': 1,
+            'forms': 2,
+            'extensions': 1,
+            'certificates': 0,
+            'subscriptions': 0,
+            'initiatives': 1,
+            'penalties': 0,
+            'stream': False,
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_active_employee_logins', return_value=['@one']),
+            patch.object(
+                kpi_web,
+                '_employee_logins_with_month_shifts',
+                return_value=['@one'],
+            ),
+            patch.object(kpi_web, 'initialize_kpi_calculation_schema'),
+            patch.object(
+                kpi_web,
+                'calculate_daily_kpi_series',
+                return_value=[
+                    {'date': '2026-07-01', 'employees': [analytics_row]},
+                    {'date': '2026-07-02', 'employees': [analytics_row]},
+                ],
+            ) as calculate,
+        ):
+            response = self.client.get(
+                '/api/kpi/analytics?mode=daily&month=2026-07&date=2026-07-02',
+                headers=self.headers,
+            )
+            cached_response = self.client.get(
+                '/api/kpi/analytics?mode=daily&month=2026-07&date=2026-07-02',
+                headers=self.headers,
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(cached_response.status_code, 200)
+        self.assertEqual(len(payload['points']), 2)
+        self.assertEqual(payload['points'][-1]['team']['kpi'], 0.8)
+        self.assertEqual(payload['employees'][0]['login'], '@one')
+        calculate.assert_called_once_with(
+            '2026-07-01',
+            '2026-07-02',
+            employee_logins=['@one'],
+            ensure_schema=False,
         )
 
     def test_employee_cannot_add_penalty(self):

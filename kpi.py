@@ -877,14 +877,11 @@ def _sheet_shadow_rows(main_values, nickname_to_login):
             'certificates_pct': _sheet_number(cell(11), percent=True),
             'subscriptions': _sheet_number(cell(12)),
             'subscriptions_pct': _sheet_number(cell(13), percent=True),
-            'bs': _sheet_number(cell(14)),
-            'bs_pct': _sheet_number(cell(15), percent=True),
             'initiatives': _sheet_number(cell(16)),
             'initiatives_pct': _sheet_number(cell(17), percent=True),
             'penalties': _sheet_number(cell(19)),
             'total_pct': _sheet_number(cell(20), percent=True),
             'weighted_pct': _sheet_number(cell(21), percent=True),
-            'amount': _sheet_number(cell(22)),
             'rank': _sheet_number(cell(24)),
         })
     return rows

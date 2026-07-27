@@ -279,7 +279,6 @@ def create_tables():
 def create_tables_KPI():
     conn=sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS bs (ID INTEGER PRIMARY KEY AUTOINCREMENT, id_bs integer, dt_bs date, name_bs varchar(50))')
     conn.commit()
     cur.close()
 

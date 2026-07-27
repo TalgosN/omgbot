@@ -21,30 +21,104 @@
       <div id="userBadge" class="user-badge skeleton">Загрузка…</div>
     </header>
 
-    <section class="period-panel">
-      <button id="previousDay" class="icon-button" aria-label="Предыдущий день">‹</button>
-      <label class="date-label">
-        <span>Рейтинг на дату</span>
-        <input id="datePicker" type="date">
-      </label>
-      <button id="nextDay" class="icon-button" aria-label="Следующий день">›</button>
-      <button id="monthStatusButton" class="status-button" hidden></button>
+    <nav class="view-tabs" aria-label="Разделы KPI">
+      <button class="view-tab active" type="button" data-view="rating">Рейтинг</button>
+      <button class="view-tab" type="button" data-view="analytics">Аналитика</button>
+    </nav>
+
+    <section id="ratingView">
+      <section class="period-panel">
+        <button id="previousDay" class="icon-button" aria-label="Предыдущий день">‹</button>
+        <label class="date-label">
+          <span>Рейтинг на дату</span>
+          <strong id="dateDisplay">28.07.2026</strong>
+          <input id="datePicker" type="date" aria-label="Выбрать дату">
+        </label>
+        <button id="nextDay" class="icon-button" aria-label="Следующий день">›</button>
+        <button id="monthStatusButton" class="status-button" hidden></button>
+      </section>
+
+      <section id="summary" class="summary-grid" aria-live="polite"></section>
+
+      <section class="toolbar">
+        <label class="search">
+          <span>⌕</span>
+          <input id="searchInput" type="search" placeholder="Найти сотрудника">
+        </label>
+        <span id="resultCount" class="result-count"></span>
+      </section>
+
+      <section id="employeeList" class="employee-list" aria-live="polite">
+        <div class="loading-card"></div>
+        <div class="loading-card"></div>
+        <div class="loading-card"></div>
+      </section>
     </section>
 
-    <section id="summary" class="summary-grid" aria-live="polite"></section>
+    <section id="analyticsView" class="analytics-view" hidden>
+      <section class="analytics-controls">
+        <label class="control-field">
+          <span>Период</span>
+          <select id="analyticsMode">
+            <option value="daily">По дням месяца</option>
+            <option value="monthly">По месяцам за год</option>
+          </select>
+        </label>
+        <label class="control-field">
+          <span>Месяц</span>
+          <input id="analyticsMonth" type="month">
+        </label>
+        <label class="control-field">
+          <span>Данные</span>
+          <select id="analyticsScope">
+            <option value="team">Общие</option>
+            <option value="individual">Сотрудники</option>
+          </select>
+        </label>
+        <label class="control-field">
+          <span>График</span>
+          <select id="analyticsChart"></select>
+        </label>
+        <label id="metricField" class="control-field" hidden>
+          <span>Показатель</span>
+          <select id="analyticsMetric">
+            <option value="reviews">Отзывы</option>
+            <option value="forms">Анкеты</option>
+            <option value="extensions">Продления</option>
+            <option value="certificates">Сертификаты</option>
+            <option value="subscriptions">Абонементы</option>
+            <option value="initiatives">Инициативы</option>
+          </select>
+        </label>
+        <label id="weightedField" class="toggle-field">
+          <input id="analyticsWeighted" type="checkbox">
+          <span>Взвешенные значения</span>
+        </label>
+      </section>
 
-    <section class="toolbar">
-      <label class="search">
-        <span>⌕</span>
-        <input id="searchInput" type="search" placeholder="Найти сотрудника">
-      </label>
-      <span id="resultCount" class="result-count"></span>
-    </section>
+      <section id="employeePicker" class="employee-picker" hidden>
+        <div class="picker-heading">
+          <span>Сравнить сотрудников</span>
+          <small>Можно выбрать до 5</small>
+        </div>
+        <div id="employeeChips" class="employee-chips"></div>
+      </section>
 
-    <section id="employeeList" class="employee-list" aria-live="polite">
-      <div class="loading-card"></div>
-      <div class="loading-card"></div>
-      <div class="loading-card"></div>
+      <section class="chart-card">
+        <div class="chart-heading">
+          <div>
+            <p id="chartEyebrow" class="eyebrow">Команда</p>
+            <h2 id="chartTitle">Средний KPI</h2>
+          </div>
+          <strong id="chartCurrent" class="chart-current"></strong>
+        </div>
+        <div id="analyticsChartArea" class="chart-area">
+          <div class="loading-card chart-loading"></div>
+        </div>
+        <div id="chartLegend" class="chart-legend"></div>
+      </section>
+
+      <section id="analyticsSummary" class="analytics-summary"></section>
     </section>
   </main>
 

@@ -124,19 +124,6 @@ WHERE COALESCE(nt.status, '') <> 'Отклонено'
 GROUP BY	date(nt.dt_rep),
 			nt.who,
 			'Инициативы'
-----------------------------------------------------------------------------------------------------------------------------------------
-UNION --БС
-
-SELECT 		date(bs.dt_bs) 				as dt_rep,
-			bs.name_bs					as s_name,
-			'БС'						as kpi,
-			count(distinct bs.id_bs)	as fact
-FROM bs
-
-GROUP BY	date(bs.dt_bs),
-			bs.name_bs,
-			'БС'
-------------------------------------------------------------------------------------------------------------------------------------------
 UNION --штрафы
 
 SELECT		date(pn.dt)					as dt_rep,

@@ -246,15 +246,12 @@ class AccountTest(unittest.TestCase):
             'certificates_pct': '0%',
             'subscriptions': '0',
             'subscriptions_pct': '0%',
-            'bs': '5',
-            'bs_pct': '50%',
             'initiatives': '3',
             'initiatives_pct': '30%',
             'stream': 'FALSE',
             'penalties': '0',
             'total_pct': '38%',
             'weighted_pct': '26%',
-            'amount': '2 020 ₽',
             'zone': '◉',
             'rank': '8',
         }
@@ -270,16 +267,15 @@ class AccountTest(unittest.TestCase):
         self.assertIn('🎯 Итого KPI: <b>38%</b> <i>(26% взв.)</i>', text)
         self.assertIn('🚘 Автосимы: <b>1.5</b>', text)
         self.assertNotIn('ДР за', text)
-        for removed_label in ('БС:', 'Сумма:', 'Трансляция:', 'Зона:', '—'):
+        for removed_label in ('Сумма:', 'Трансляция:', 'Зона:', '—'):
             self.assertNotIn(removed_label, text)
 
-    def test_all_time_format_has_sections_and_omits_bs(self):
+    def test_all_time_format_has_sections(self):
         stats = {
             'Часы': 228,
             'Смены': 38,
             'Отзывы': 1,
             'Анкеты': 32,
-            'БС': 7,
             'Автосимы': 2,
         }
 
@@ -291,7 +287,6 @@ class AccountTest(unittest.TestCase):
         self.assertIn('⏱️ <b>Рабочее время</b>', text)
         self.assertIn('📈 <b>Показатели KPI</b>', text)
         self.assertIn('🚀 <b>Дополнительные показатели</b>', text)
-        self.assertNotIn('БС:', text)
         self.assertNotIn('—', text)
 
     def test_database_statistics_include_history_and_new_kpi_tables(self):
@@ -303,7 +298,6 @@ class AccountTest(unittest.TestCase):
             'sert': ['ID INTEGER', 'num TEXT', 'd_rep TEXT', 'bonus REAL'],
             'abik': ['ID INTEGER', 'num TEXT', 'd_rep TEXT', 'bonus REAL'],
             'reviews': ['ID INTEGER', 'd_rep TEXT', 'amount REAL', 'desc TEXT'],
-            'bs': ['id_bs INTEGER', 'dt_bs TEXT'],
             'penalty': ['ID INTEGER', 'dt TEXT', 'desc TEXT'],
             'autosim': ['d_rep TEXT', 'amount REAL'],
             'activation': ['d_rep TEXT', 'amount REAL'],

@@ -71,12 +71,6 @@ def create_legacy_schema(db_path):
             who TEXT,
             bonus REAL
         );
-        CREATE TABLE bs (
-            ID INTEGER PRIMARY KEY,
-            id_bs INTEGER,
-            dt_bs TEXT,
-            name_bs TEXT
-        );
         CREATE TABLE penalty (
             ID INTEGER PRIMARY KEY,
             dt TEXT,
@@ -140,7 +134,6 @@ class KpiCalculatorTest(unittest.TestCase):
         conn.execute(
             "INSERT INTO abik VALUES (1, '100', '2026-07-06', '@Alice', 5000)"
         )
-        conn.execute("INSERT INTO bs VALUES (1, 1, '2026-07-06', '@Alice')")
         conn.execute(
             "INSERT INTO reviews VALUES (1, '@Alice', '2026-07-06', 1, '')"
         )
@@ -163,6 +156,12 @@ class KpiCalculatorTest(unittest.TestCase):
             db_path=self.db_path,
             employee_logins=['@Alice'],
         )[0]
+        daily_row = kpi_calculator.calculate_daily_kpi_series(
+            '2026-07',
+            '2026-07-31',
+            db_path=self.db_path,
+            employee_logins=['@Alice'],
+        )[-1]['employees'][0]
 
         self.assertAlmostEqual(row['shifts'], 2.5)
         self.assertAlmostEqual(row['weighted_shifts'], 3.5)
@@ -176,6 +175,8 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertNotIn('amount', row)
         self.assertEqual(row['rank'], 1)
         self.assertEqual(row['zone'], '🟢')
+        self.assertAlmostEqual(daily_row['total_pct'], row['total_pct'])
+        self.assertAlmostEqual(daily_row['weighted_shifts'], row['weighted_shifts'])
 
     def test_selected_day_limits_facts_and_shifts_only(self):
         club = next(iter(kpi_calculator.DEFAULT_CLUB_WEIGHTS))
@@ -235,6 +236,38 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertEqual(full['shifts'], 2)
         self.assertEqual(early['penalty_impact'], 0.10)
         self.assertEqual(early['stream_bonus'], 0.05)
+
+    def test_legacy_metric_price_column_is_removed(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''
+            CREATE TABLE kpi_metric_settings (
+                metric TEXT NOT NULL,
+                effective_month DATE NOT NULL,
+                price REAL NOT NULL,
+                plan REAL NOT NULL,
+                updated_by TEXT,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (metric, effective_month)
+            )
+            '''
+        )
+        conn.execute(
+            "INSERT INTO kpi_metric_settings "
+            "(metric, effective_month, price, plan) VALUES ('Отзывы', '1970-01-01', 100, 0.25)"
+        )
+        conn.commit()
+        conn.close()
+
+        kpi_calculator.initialize_kpi_calculation_schema(self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        columns = {
+            row[1]
+            for row in conn.execute('PRAGMA table_info(kpi_metric_settings)')
+        }
+        conn.close()
+        self.assertNotIn('price', columns)
 
     def test_metric_entries_return_records_up_to_selected_day(self):
         conn = sqlite3.connect(self.db_path)

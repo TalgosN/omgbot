@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import sqlite3
+import threading
 import time
 from datetime import date, datetime, timedelta
 from functools import wraps
@@ -14,6 +15,7 @@ from flask import Flask, g, jsonify, request, send_from_directory
 from constants import TELEGRAM_API_KEY
 from kpi_calculator import (
     add_penalty,
+    calculate_daily_kpi_series,
     calculate_monthly_kpi,
     cancel_penalty,
     get_month_status,
@@ -34,9 +36,17 @@ from permissions import (
 DB_PATH = 'db/omgbot.sql'
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'kpi_static')
 AUTH_MAX_AGE_SECONDS = int(os.getenv('KPI_WEBAPP_AUTH_MAX_AGE', '86400'))
+ANALYTICS_CACHE_SECONDS = 60
+_analytics_cache = {}
+_analytics_cache_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024
+
+
+def _clear_analytics_cache():
+    with _analytics_cache_lock:
+        _analytics_cache.clear()
 
 
 def _validate_month(value):
@@ -66,6 +76,77 @@ def _default_day(month):
     return month_start.replace(
         day=calendar.monthrange(month_start.year, month_start.month)[1],
     ).isoformat()
+
+
+def _shift_month(month, offset):
+    month_start = datetime.strptime(month, '%Y-%m-%d').date()
+    absolute_month = month_start.year * 12 + month_start.month - 1 + offset
+    return date(
+        absolute_month // 12,
+        absolute_month % 12 + 1,
+        1,
+    ).isoformat()
+
+
+def _analytics_employee(row):
+    return {
+        'login': row['login'],
+        'nickname': row['nickname'],
+        'kpi': row['total_pct'],
+        'weighted_kpi': row['weighted_pct'],
+        'rank': row['rank'],
+        'shifts': row['shifts'],
+        'weighted_shifts': row['weighted_shifts'],
+        'reviews': row['reviews'],
+        'forms': row['forms'],
+        'extensions': row['extensions'],
+        'certificates': row['certificates'],
+        'subscriptions': row['subscriptions'],
+        'initiatives': row['initiatives'],
+        'penalties': row['penalties'],
+        'stream': row['stream'],
+    }
+
+
+def _analytics_point(label, rows):
+    participants = [row for row in rows if row['shifts'] > 0]
+    count = len(participants)
+    totals = {
+        metric: sum(row[metric] for row in participants)
+        for metric in (
+            'shifts',
+            'weighted_shifts',
+            'reviews',
+            'forms',
+            'extensions',
+            'certificates',
+            'subscriptions',
+            'initiatives',
+        )
+    }
+    return {
+        'label': label,
+        'team': {
+            'employees': count,
+            'kpi': (
+                sum(row['total_pct'] for row in participants) / count
+                if count else 0
+            ),
+            'weighted_kpi': (
+                sum(row['weighted_pct'] for row in participants) / count
+                if count else 0
+            ),
+            'zones': {
+                zone: sum(row['zone'] == zone for row in participants)
+                for zone in ('🟢', '🟡', '🔴')
+            },
+            **totals,
+        },
+        'employees': [
+            _analytics_employee(row)
+            for row in rows
+        ],
+    }
 
 
 def _validate_init_data(init_data, bot_token, now=None):
@@ -161,6 +242,38 @@ def _active_employee_logins():
         conn.close()
 
 
+def _employee_logins_with_month_shifts(employee_logins, month):
+    active_logins = set(employee_logins)
+    if not active_logins:
+        return []
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            '''
+            SELECT DISTINCT lower(ns.login)
+            FROM shifts sh
+            JOIN users ns ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(ns.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=ns.second_name
+                AND sh.shift_first_name=ns.first_name
+            )
+            WHERE date(substr(sh.dt_shift, 1, 10)) >= date(?)
+              AND date(substr(sh.dt_shift, 1, 10)) < date(?, '+1 month')
+            ''',
+            (month, month),
+        ).fetchall()
+        return [
+            row[0]
+            for row in rows
+            if row[0] in active_logins
+        ]
+    finally:
+        conn.close()
+
+
 def _actor_login():
     return str(g.kpi_user.get('login') or '').strip().lower()
 
@@ -221,7 +334,10 @@ def api_kpi():
         request.args.get('date') or _default_day(month),
         month,
     )
-    employee_logins = _active_employee_logins()
+    employee_logins = _employee_logins_with_month_shifts(
+        _active_employee_logins(),
+        month,
+    )
     rows = calculate_monthly_kpi(
         month,
         employee_logins=employee_logins,
@@ -284,6 +400,132 @@ def api_kpi_details():
     })
 
 
+@app.get('/api/kpi/analytics')
+@require_user
+def api_kpi_analytics():
+    month = _validate_month(
+        request.args.get('month') or date.today().strftime('%Y-%m')
+    )
+    mode = str(request.args.get('mode') or 'daily').strip().lower()
+    if mode not in {'daily', 'monthly'}:
+        raise ValueError('Режим аналитики должен быть daily или monthly')
+
+    initialize_kpi_calculation_schema()
+    selected_end = (
+        _validate_day(
+            request.args.get('date') or _default_day(month),
+            month,
+        )
+        if mode == 'daily' else ''
+    )
+    cache_key = (
+        mode,
+        month,
+        selected_end,
+    )
+    with _analytics_cache_lock:
+        cached = _analytics_cache.get(cache_key)
+    if cached and time.monotonic() - cached['created_at'] < ANALYTICS_CACHE_SECONDS:
+        return jsonify(cached['payload'])
+
+    active_logins = _active_employee_logins()
+    periods = []
+    if mode == 'daily':
+        end_date = datetime.strptime(selected_end, '%Y-%m-%d').date()
+        periods = [
+            (month, date(month_date.year, month_date.month, day).isoformat())
+            for month_date in [datetime.strptime(month, '%Y-%m-%d').date()]
+            for day in range(1, end_date.day + 1)
+        ]
+    else:
+        periods = [
+            (period_month, calendar.monthrange(
+                int(period_month[:4]),
+                int(period_month[5:7]),
+            )[1])
+            for period_month in (
+                _shift_month(month, offset)
+                for offset in range(-11, 1)
+            )
+        ]
+        periods = [
+            (
+                period_month,
+                f'{period_month[:7]}-{month_day:02d}',
+            )
+            for period_month, month_day in periods
+        ]
+
+    points = []
+    employees = {}
+    if mode == 'daily':
+        employee_logins = _employee_logins_with_month_shifts(
+            active_logins,
+            month,
+        )
+        daily_series = calculate_daily_kpi_series(
+            month,
+            periods[-1][1],
+            employee_logins=employee_logins,
+            ensure_schema=False,
+        )
+        period_rows = [
+            (snapshot['date'], snapshot['employees'])
+            for snapshot in daily_series
+        ]
+    else:
+        period_rows = []
+        for period_month, period_end in periods:
+            employee_logins = _employee_logins_with_month_shifts(
+                active_logins,
+                period_month,
+            )
+            rows = calculate_monthly_kpi(
+                period_month,
+                employee_logins=employee_logins,
+                period_end=period_end,
+                ensure_schema=False,
+            )
+            period_rows.append((period_end, rows))
+
+    for period_end, rows in period_rows:
+        for row in rows:
+            employees[row['login']] = {
+                'login': row['login'],
+                'nickname': row['nickname'],
+            }
+        points.append(_analytics_point(period_end, rows))
+
+    payload = {
+        'mode': mode,
+        'month': month[:7],
+        'employees': sorted(
+            employees.values(),
+            key=lambda employee: employee['nickname'].lower(),
+        ),
+        'points': points,
+    }
+    with _analytics_cache_lock:
+        expired_keys = [
+            key
+            for key, value in _analytics_cache.items()
+            if time.monotonic() - value['created_at'] >= ANALYTICS_CACHE_SECONDS
+        ]
+        for key in expired_keys:
+            _analytics_cache.pop(key, None)
+        _analytics_cache[cache_key] = {
+            'created_at': time.monotonic(),
+            'payload': payload,
+        }
+        while len(_analytics_cache) > 12:
+            oldest_key = min(
+                _analytics_cache,
+                key=lambda key: _analytics_cache[key]['created_at'],
+            )
+            _analytics_cache.pop(oldest_key, None)
+    return jsonify(payload)
+
+
 @app.post('/api/penalties')
 @require_manager
 def api_add_penalty():
@@ -302,6 +544,7 @@ def api_add_penalty():
         _actor_login(),
         source='telegram_mini_app',
     )
+    _clear_analytics_cache()
     return jsonify({'id': penalty_id, 'impact_pct': 0.10}), 201
 
 
@@ -312,6 +555,7 @@ def api_cancel_penalty(penalty_id):
     reason = str(payload.get('reason') or '').strip()
     if not cancel_penalty(penalty_id, _actor_login(), reason):
         return jsonify({'error': 'Активный штраф не найден.'}), 404
+    _clear_analytics_cache()
     return jsonify({'status': 'cancelled'})
 
 
@@ -332,6 +576,7 @@ def api_set_stream():
         _actor_login(),
         source='telegram_mini_app',
     )
+    _clear_analytics_cache()
     return jsonify({'status': 'saved'})
 
 

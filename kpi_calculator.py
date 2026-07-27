@@ -1,6 +1,7 @@
 import calendar
 import math
 import sqlite3
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import sql_scripts
@@ -11,13 +12,12 @@ PENALTY_IMPACT = 0.10
 STREAM_BONUS = 0.05
 
 DEFAULT_METRIC_SETTINGS = {
-    'Отзывы': (100.0, 0.25),
-    'Анкеты': (10.0, 1.0),
-    'Продления': (100.0, 0.25),
-    'Сертификаты': (0.1, 125.0),
-    'Абонементы': (0.1, 250.0),
-    'БС': (25.0, 0.15),
-    'Инициативы': (500.0, 0.025),
+    'Отзывы': 0.25,
+    'Анкеты': 1.0,
+    'Продления': 0.25,
+    'Сертификаты': 125.0,
+    'Абонементы': 250.0,
+    'Инициативы': 0.025,
 }
 
 DEFAULT_CLUB_WEIGHTS = {
@@ -35,7 +35,6 @@ FACT_FIELDS = {
     'Продления': 'extensions',
     'Сертификаты': 'certificates',
     'Абонементы': 'subscriptions',
-    'БС': 'bs',
     'Инициативы': 'initiatives',
     'ДР': 'birthdays',
 }
@@ -99,7 +98,6 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                 CREATE TABLE IF NOT EXISTS kpi_metric_settings (
                     metric TEXT NOT NULL,
                     effective_month DATE NOT NULL,
-                    price REAL NOT NULL,
                     plan REAL NOT NULL,
                     updated_by TEXT,
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -154,17 +152,37 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                 );
                 '''
             )
+            metric_columns = {
+                row[1]
+                for row in conn.execute(
+                    'PRAGMA table_info(kpi_metric_settings)'
+                )
+            }
+            if 'price' in metric_columns:
+                conn.execute(
+                    'ALTER TABLE kpi_metric_settings DROP COLUMN price'
+                )
             seed_month = '1970-01-01'
             conn.executemany(
                 '''
                 INSERT OR IGNORE INTO kpi_metric_settings (
-                    metric, effective_month, price, plan, updated_by
-                ) VALUES (?, ?, ?, ?, 'system')
+                    metric, effective_month, plan, updated_by
+                ) VALUES (?, ?, ?, 'system')
                 ''',
                 [
-                    (metric, seed_month, price, plan)
-                    for metric, (price, plan) in DEFAULT_METRIC_SETTINGS.items()
+                    (metric, seed_month, plan)
+                    for metric, plan in DEFAULT_METRIC_SETTINGS.items()
                 ],
+            )
+            supported_metrics = tuple(DEFAULT_METRIC_SETTINGS)
+            conn.execute(
+                f'''
+                DELETE FROM kpi_metric_settings
+                WHERE metric NOT IN ({
+                    ','.join('?' for _ in supported_metrics)
+                })
+                ''',
+                supported_metrics,
             )
             conn.executemany(
                 '''
@@ -620,47 +638,17 @@ def _streams(conn, month):
     }
 
 
-def calculate_monthly_kpi(
-    period_month,
-    db_path=DB_PATH,
-    employee_logins=None,
-    ensure_schema=True,
-    period_end=None,
+def _build_kpi_rows(
+    month,
+    employees,
+    metric_settings,
+    facts,
+    birthdays,
+    ordinary_shifts,
+    weighted_shifts,
+    penalties,
+    streams,
 ):
-    month = _month_start(period_month)
-    end = _day(period_end) if period_end is not None else _month_end(month)
-    if end.replace(day=1) != month:
-        raise ValueError('KPI period end must belong to the selected month')
-    if ensure_schema:
-        initialize_kpi_calculation_schema(db_path)
-    conn = sqlite3.connect(db_path)
-    try:
-        employees = _employees(conn, employee_logins)
-        metric_settings = _settings_for_month(
-            conn,
-            'kpi_metric_settings',
-            month,
-            ('price', 'plan'),
-        )
-        club_weights = _settings_for_month(
-            conn,
-            'kpi_club_weights',
-            month,
-            ('weekday_weight', 'weekend_weight'),
-        )
-        facts = _metric_facts(conn, month, end)
-        birthdays = _birthday_facts(conn, month, end)
-        ordinary_shifts, weighted_shifts = _shift_totals(
-            conn,
-            month,
-            end,
-            club_weights,
-        )
-        penalties = _penalties(conn, month)
-        streams = _streams(conn, month)
-    finally:
-        conn.close()
-
     result = []
     for login, nickname in employees:
         employee_facts = facts.get(login, {})
@@ -683,9 +671,8 @@ def calculate_monthly_kpi(
             ('Продления', 'extensions'),
             ('Сертификаты', 'certificates'),
             ('Абонементы', 'subscriptions'),
-            ('БС', 'bs'),
         ):
-            plan = metric_settings[metric][1]
+            plan = metric_settings[metric][0]
             denominator = shifts * plan
             row[f'{field}_pct'] = row[field] / denominator if denominator else 0.0
         row['initiatives_pct'] = row['initiatives'] * 0.10
@@ -744,6 +731,201 @@ def calculate_monthly_kpi(
     return result
 
 
+def calculate_monthly_kpi(
+    period_month,
+    db_path=DB_PATH,
+    employee_logins=None,
+    ensure_schema=True,
+    period_end=None,
+):
+    month = _month_start(period_month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+    if ensure_schema:
+        initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        employees = _employees(conn, employee_logins)
+        metric_settings = _settings_for_month(
+            conn,
+            'kpi_metric_settings',
+            month,
+            ('plan',),
+        )
+        club_weights = _settings_for_month(
+            conn,
+            'kpi_club_weights',
+            month,
+            ('weekday_weight', 'weekend_weight'),
+        )
+        facts = _metric_facts(conn, month, end)
+        birthdays = _birthday_facts(conn, month, end)
+        ordinary_shifts, weighted_shifts = _shift_totals(
+            conn,
+            month,
+            end,
+            club_weights,
+        )
+        penalties = _penalties(conn, month)
+        streams = _streams(conn, month)
+    finally:
+        conn.close()
+
+    return _build_kpi_rows(
+        month,
+        employees,
+        metric_settings,
+        facts,
+        birthdays,
+        ordinary_shifts,
+        weighted_shifts,
+        penalties,
+        streams,
+    )
+
+
+def calculate_daily_kpi_series(
+    period_month,
+    period_end,
+    db_path=DB_PATH,
+    employee_logins=None,
+    ensure_schema=True,
+):
+    month = _month_start(period_month)
+    end = _day(period_end)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+    if ensure_schema:
+        initialize_kpi_calculation_schema(db_path)
+
+    union_sql = sql_scripts.union.strip().rstrip(';')
+    conn = sqlite3.connect(db_path)
+    try:
+        employees = _employees(conn, employee_logins)
+        metric_settings = _settings_for_month(
+            conn,
+            'kpi_metric_settings',
+            month,
+            ('plan',),
+        )
+        club_weights = _settings_for_month(
+            conn,
+            'kpi_club_weights',
+            month,
+            ('weekday_weight', 'weekend_weight'),
+        )
+        metric_rows = conn.execute(
+            f'''
+            SELECT date(dt_rep), lower(s_name), kpi, SUM(fact)
+            FROM ({union_sql}) source
+            WHERE date(dt_rep) BETWEEN date(?) AND date(?)
+              AND kpi <> 'Штрафы'
+            GROUP BY date(dt_rep), lower(s_name), kpi
+            ORDER BY date(dt_rep)
+            ''',
+            (month.isoformat(), end.isoformat()),
+        ).fetchall()
+        birthday_rows = []
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='birthday'"
+        ).fetchone():
+            birthday_rows = conn.execute(
+                '''
+                SELECT date(dt_rep), lower(who), COUNT(DISTINCT ID)
+                FROM birthday
+                WHERE date(dt_rep) BETWEEN date(?) AND date(?)
+                  AND COALESCE(status, '') <> 'Отклонено'
+                GROUP BY date(dt_rep), lower(who)
+                ORDER BY date(dt_rep)
+                ''',
+                (month.isoformat(), end.isoformat()),
+            ).fetchall()
+        shift_rows = conn.execute(
+            '''
+            SELECT date(substr(sh.dt_shift, 1, 10)), lower(ns.login),
+                   sh.club, sh.dur
+            FROM shifts sh
+            JOIN users ns ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(ns.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=ns.second_name
+                AND sh.shift_first_name=ns.first_name
+            )
+            WHERE date(substr(sh.dt_shift, 1, 10))
+                  BETWEEN date(?) AND date(?)
+            ORDER BY date(substr(sh.dt_shift, 1, 10))
+            ''',
+            (month.isoformat(), end.isoformat()),
+        ).fetchall()
+        penalties = _penalties(conn, month)
+        streams = _streams(conn, month)
+    finally:
+        conn.close()
+
+    metrics_by_day = defaultdict(list)
+    for raw_day, login, metric, value in metric_rows:
+        metrics_by_day[raw_day].append((login, metric, float(value or 0)))
+    birthdays_by_day = defaultdict(list)
+    for raw_day, login, value in birthday_rows:
+        birthdays_by_day[raw_day].append((login, float(value or 0)))
+    shifts_by_day = defaultdict(list)
+    for raw_day, login, club, duration in shift_rows:
+        shifts_by_day[raw_day].append((login, club, float(duration or 0)))
+
+    facts = {}
+    birthdays = {}
+    ordinary_shifts = {}
+    grouped_shift_duration = {}
+    series = []
+    current = month
+    while current <= end:
+        raw_day = current.isoformat()
+        for login, metric, value in metrics_by_day[raw_day]:
+            employee_facts = facts.setdefault(login, {})
+            employee_facts[metric] = employee_facts.get(metric, 0.0) + value
+        for login, value in birthdays_by_day[raw_day]:
+            birthdays[login] = birthdays.get(login, 0.0) + value
+        for login, club, duration in shifts_by_day[raw_day]:
+            ordinary_shifts[login] = (
+                ordinary_shifts.get(login, 0.0) + round(duration / 6.0, 3)
+            )
+            key = (login, club, current.weekday() >= 5)
+            grouped_shift_duration[key] = (
+                grouped_shift_duration.get(key, 0.0) + duration
+            )
+
+        weighted_shifts = {}
+        for (login, club, weekend), duration in grouped_shift_duration.items():
+            weekday_weight, weekend_weight = club_weights.get(
+                club,
+                (0.0, 0.0),
+            )
+            weight = weekend_weight if weekend else weekday_weight
+            weighted_shifts[login] = weighted_shifts.get(login, 0.0) + (
+                _sheet_round(duration / 6.0) * weight
+            )
+
+        series.append({
+            'date': raw_day,
+            'employees': _build_kpi_rows(
+                month,
+                employees,
+                metric_settings,
+                facts,
+                birthdays,
+                ordinary_shifts,
+                weighted_shifts,
+                penalties,
+                streams,
+            ),
+        })
+        current += timedelta(days=1)
+    return series
+
+
 def compare_with_sheet(server_rows, sheet_rows):
     numeric_fields = (
         'shifts',
@@ -758,8 +940,6 @@ def compare_with_sheet(server_rows, sheet_rows):
         'certificates_pct',
         'subscriptions',
         'subscriptions_pct',
-        'bs',
-        'bs_pct',
         'initiatives',
         'initiatives_pct',
         'penalties',
@@ -841,11 +1021,6 @@ def get_metric_entries(
             FROM initiative
             WHERE lower(who)=? AND date(dt_rep) BETWEEN date(?) AND date(?)
               AND COALESCE(status, '') <> 'Отклонено'
-        ''',
-        'bs': '''
-            SELECT ID, date(dt_bs), 1, 'Запись № ' || id_bs, NULL, NULL
-            FROM bs
-            WHERE lower(name_bs)=? AND date(dt_bs) BETWEEN date(?) AND date(?)
         ''',
     }
 
