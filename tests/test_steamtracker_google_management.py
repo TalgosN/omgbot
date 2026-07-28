@@ -230,7 +230,7 @@ class GoogleDataSyncTests(unittest.TestCase):
     def test_sync_writes_full_app_id_matrix_and_steam_catalog(self):
         preview = self.manager.sync_tracker_data(self.storage)
         self.assertFalse(preview.applied)
-        self.assertEqual(preview.current_state_rows, 4)
+        self.assertEqual(preview.current_state_rows, 2)
         self.assertEqual(preview.dynamics_rows, 1)
         self.assertEqual(self.current.records, [])
         self.assertEqual(self.dynamics.records, [])
@@ -239,7 +239,7 @@ class GoogleDataSyncTests(unittest.TestCase):
 
         self.assertTrue(result.applied)
         self.assertEqual(self.current.headers, CURRENT_STATE_HEADERS)
-        self.assertEqual(len(self.current.records), 4)
+        self.assertEqual(len(self.current.records), 2)
         self.assertEqual(
             {row["owned"] for row in self.current.records},
             {0, 1},
@@ -247,7 +247,7 @@ class GoogleDataSyncTests(unittest.TestCase):
         self.assertNotIn("game_name", self.current.headers)
         self.assertEqual(
             {row["steam_app_id"] for row in self.current.records},
-            {10, 20},
+            {10},
         )
         game_one = next(
             row
@@ -265,7 +265,8 @@ class GoogleDataSyncTests(unittest.TestCase):
             for row in self.games.records
             if row["steam_app_id"] == 20
         )
-        self.assertEqual(game_two["description"], "")
+        self.assertEqual(game_two["description"], "Старое описание 2")
+        self.assertEqual(game_two["Статус"], "Приостановлена")
         for worksheet in (
             self.games,
             self.current,
@@ -331,10 +332,13 @@ class GoogleDataSyncTests(unittest.TestCase):
         )
 
     def test_settings_and_test_promotions_can_be_managed(self):
-        self.manager.update_tracker_setting(
+        self.storage.update_tracker_setting(
             "weekly_discount",
             "150 рублей",
+            actor_id="owner",
+            actor_name="Owner",
         )
+        self.manager.sync_tracker_data(self.storage, apply=True)
         settings = {
             row["Параметр"]: row["Значение"]
             for row in self.settings_sheet.records
@@ -379,7 +383,7 @@ class GoogleDataSyncTests(unittest.TestCase):
         self.assertEqual(promo_sheet.records, [])
 
         second_id = self.storage.create_promotion(
-            app_id=20,
+            app_id=10,
             discount_text="150 рублей",
             valid_from="2026-08-03",
             valid_to="2026-08-09",

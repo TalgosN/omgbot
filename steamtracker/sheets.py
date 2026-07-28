@@ -7,7 +7,7 @@ from typing import Iterable
 
 from .catalog import EXCLUDED_GAMES, normalize_name
 from .config import Settings
-from .db import TrackerStorage
+from .db import TRACKER_SETTING_DEFAULTS, TrackerStorage
 
 
 CURRENT_STATE_HEADERS = [
@@ -22,30 +22,11 @@ CURRENT_STATE_HEADERS = [
 
 DEFAULT_TRACKER_SETTINGS = [
     {
-        "Параметр": "weekly_discount",
-        "Значение": "100 рублей",
-        "Комментарий": "Точное значение скидки для игры недели",
-    },
-    {
-        "Параметр": "generation_day",
-        "Значение": "monday",
-        "Комментарий": "День автоматического выбора игры",
-    },
-    {
-        "Параметр": "generation_time",
-        "Значение": "10:30",
-        "Комментарий": "Время по часовому поясу Steam Tracker",
-    },
-    {
-        "Параметр": "timezone",
-        "Значение": "Europe/Moscow",
-        "Комментарий": "Часовой пояс автоматического задания",
-    },
-    {
-        "Параметр": "weekly_promo_enabled",
-        "Значение": "false",
-        "Комментарий": "Включить после проверки полного dry-run процесса",
-    },
+        "Параметр": key,
+        "Значение": value,
+        "Комментарий": comment,
+    }
+    for key, (value, comment) in TRACKER_SETTING_DEFAULTS.items()
 ]
 
 SHEET_SCHEMAS: dict[str, list[str]] = {
@@ -404,11 +385,10 @@ class GoogleSheetsManager:
         database_games = [
             dict(row) for row in storage.approved_game_sheet_rows()
         ]
-        existing_game_rows = games_sheet.get_all_records()
-        game_records, unmatched = self._merge_game_records(
-            existing_game_rows,
-            database_games,
-        )
+        game_records = [
+            self._managed_game_record(row)
+            for row in database_games
+        ]
         current_records = [
             {
                 "steam_app_id": row["app_id"],
@@ -432,16 +412,21 @@ class GoogleSheetsManager:
             }
             for row in storage.playtime_dynamics()
         ]
-        settings_records = self._merge_settings_records(
-            settings_sheet.get_all_records()
-        )
+        settings_records = [
+            {
+                "Параметр": row["setting_key"],
+                "Значение": row["setting_value"],
+                "Комментарий": row["comment"] or "",
+            }
+            for row in storage.tracker_setting_rows()
+        ]
 
         if apply:
-            game_headers, _ = self._current_headers(games_sheet, "Игры")
-            for header in SHEET_SCHEMAS["Игры"]:
-                if header not in game_headers:
-                    game_headers.append(header)
-            self._replace_table(games_sheet, game_headers, game_records)
+            self._replace_table(
+                games_sheet,
+                SHEET_SCHEMAS["Игры"],
+                game_records,
+            )
             self._replace_table(
                 current_sheet,
                 CURRENT_STATE_HEADERS,
@@ -464,8 +449,36 @@ class GoogleSheetsManager:
             dynamics_rows=len(dynamics_records),
             game_rows=len(game_records),
             settings_rows=len(settings_records),
-            unmatched_game_rows=unmatched,
+            unmatched_game_rows=0,
         )
+
+    @staticmethod
+    def _managed_game_record(game: dict) -> dict:
+        statuses = {
+            "active": "Активна",
+            "draft": "Черновик",
+            "paused": "Приостановлена",
+            "excluded": "Исключена",
+        }
+        record = {
+            "name": game.get("official_name")
+            or game.get("steam_name")
+            or "",
+            "player_count": game.get("player_count") or "",
+            "description": game.get("base_description") or "",
+            "Статус": statuses.get(
+                str(game.get("catalog_status") or ""),
+                game.get("catalog_status") or "",
+            ),
+            "Комментарий_менеджера": (
+                game.get("manager_comment") or ""
+            ),
+            "Описание_менеджера": (
+                game.get("manager_description") or ""
+            ),
+        }
+        record.update(GoogleSheetsManager._automatic_game_values(game))
+        return record
 
     @staticmethod
     def _merge_settings_records(existing: list[dict]) -> list[dict]:

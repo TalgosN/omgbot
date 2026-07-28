@@ -11,7 +11,6 @@ from .catalog import read_catalog_csv, resolve_catalog
 from .config import Settings
 from .db import TrackerStorage
 from .llm import build_generator
-from .management import CatalogManagementService
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
 from .steam import LicenseSyncService, SteamClient
@@ -102,22 +101,11 @@ def command_sync_catalog_sheets(
     args: argparse.Namespace,
     settings: Settings,
 ) -> None:
-    storage = _storage(settings)
-    manager = GoogleSheetsManager(settings)
-    result = CatalogManagementService(
-        storage,
-        SteamStoreClient(),
-    ).sync(
-        manager.read_catalog_rows(),
-        apply=args.apply,
+    raise RuntimeError(
+        "Импорт каталога из Google Sheets отключён. "
+        "Каталог управляется через «Steam Tracker → Каталог игр» в боте; "
+        "Google Sheets используется только для отчётов."
     )
-    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
-    if result.errors:
-        raise RuntimeError(
-            "Каталог не изменён из-за ошибок в Google Sheets"
-        )
-    if not args.apply:
-        print("Каталог проверен. Для применения повторите с --apply.")
 
 
 def command_sync_data_sheets(

@@ -52,7 +52,7 @@ class WeeklyPromotionService:
         self.rng = rng
 
     def preview(self) -> dict:
-        settings = self.sheets.read_tracker_settings()
+        settings = self.storage.tracker_settings()
         start, end = week_period()
         return {
             **self.storage.rotation_summary(),
@@ -70,17 +70,17 @@ class WeeklyPromotionService:
         reference_date: date | None = None,
         force: bool = False,
     ) -> WeeklyPromotionResult:
-        settings = self.sheets.read_tracker_settings()
+        settings = self.storage.tracker_settings()
         if not force and not setting_enabled(
             settings.get("weekly_promo_enabled")
         ):
             raise RuntimeError(
-                "weekly_promo_enabled выключен в листе настроек"
+                "Автоматическая игра недели выключена в настройках бота"
             )
         discount = str(settings.get("weekly_discount") or "").strip()
         if not discount:
             raise RuntimeError(
-                "weekly_discount не заполнен в листе настроек"
+                "Размер скидки не заполнен в настройках бота"
             )
 
         start, end = week_period(reference_date)

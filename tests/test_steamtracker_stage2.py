@@ -157,7 +157,7 @@ class StageTwoTests(unittest.TestCase):
 
         bot.callback_query_handler.assert_called_once()
 
-    def test_promo_entry_uses_inline_plane_selector(self):
+    def test_promo_entry_uses_unified_tracker_dashboard(self):
         class Markup:
             def __init__(self, **_kwargs):
                 self.keyboard = []
@@ -206,8 +206,9 @@ class StageTwoTests(unittest.TestCase):
             for row in selector.keyboard
             for button in row
         ]
-        self.assertIn("stpa:plane:real", callbacks)
-        self.assertIn("stpa:plane:test", callbacks)
+        self.assertIn("stpa:menu:0", callbacks)
+        self.assertIn("stpa:catalog:all:0", callbacks)
+        self.assertIn("stpa:audit:0", callbacks)
         bot.register_next_step_handler.assert_not_called()
         bot.delete_message.assert_any_call(100, 11)
         promo_admin._context_messages.clear()

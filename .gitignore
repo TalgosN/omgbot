@@ -6,5 +6,7 @@ __pycache__/
 db/
 key/omgbot-430116-e9a4d9c69b7f.json
 Reports/
-dump/
+dump/*
+!dump/STEAM_TRACKER_ИНСТРУКЦИЯ_МЕНЕДЖЕРА.md
+!dump/STEAM_TRACKER_ИНСТРУКЦИЯ_ВЛАДЕЛЬЦА.md
 data/

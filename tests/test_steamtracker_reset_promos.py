@@ -4,7 +4,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from steamtracker.db import TrackerStorage
+from steamtracker.db import OwnedGame, TrackerStorage
 from steamtracker.promo import (
     DryRunPublisher,
     FakeGenerator,
@@ -29,6 +29,17 @@ class PromotionResetTests(unittest.TestCase):
                     "base_description": "Описание",
                 }
             ]
+        )
+        self.storage.upsert_managed_account(
+            steam_id="76561198000000001",
+            vanity_url="zone-1",
+            club_name="Клуб",
+            actor_id="test",
+            actor_name="Test",
+        )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [OwnedGame(10, "Test Game", 0)],
         )
         self.workflow = PromotionWorkflow(
             self.storage,

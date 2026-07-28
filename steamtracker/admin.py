@@ -4,16 +4,22 @@ import threading
 from datetime import datetime
 from html import escape, unescape
 
+import pytz
 from permissions import ROLE_MANAGER, ROLE_OWNER, require_role
 
 from .config import Settings
 from .db import TrackerStorage
 from .llm import build_generator
-from .management import CatalogManagementService
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
+from .steam import LicenseSyncService, SteamClient
 from .store import SteamStoreClient
-from .weekly import MOSCOW, WeeklyPromotionService, week_period
+from .weekly import (
+    MOSCOW,
+    WeeklyPromotionService,
+    setting_enabled,
+    week_period,
+)
 
 
 CALLBACK_PREFIX = "stpa"
@@ -91,6 +97,22 @@ def _sync_promotion_best_effort(
         GoogleSheetsManager(settings).sync_promotion(
             storage,
             promotion_id,
+            apply=True,
+        )
+    except Exception as error:
+        return f"Google Sheets не обновлён: {error}"
+    return None
+
+
+def _sync_tracker_data_best_effort(
+    settings: Settings,
+    storage: TrackerStorage,
+) -> str | None:
+    if not settings.google_export_enabled:
+        return None
+    try:
+        GoogleSheetsManager(settings).sync_tracker_data(
+            storage,
             apply=True,
         )
     except Exception as error:
@@ -202,7 +224,70 @@ def promotion_admin_menu(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     _hide_reply_keyboard(message.chat.id, bot)
-    show_promo_plane_selector(message, bot)
+    show_tracker_dashboard(message, bot)
+
+
+def show_tracker_dashboard(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "📣 Промо",
+            callback_data=f"{CALLBACK_PREFIX}:menu:0",
+        ),
+        types.InlineKeyboardButton(
+            "🕹 Каталог игр",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        ),
+    )
+    if _is_owner(user):
+        markup.add(
+            types.InlineKeyboardButton(
+                "💻 ПК и аккаунты",
+                callback_data=f"{CALLBACK_PREFIX}:accounts:0",
+            ),
+            types.InlineKeyboardButton(
+                "⚙️ Настройки",
+                callback_data=f"{CALLBACK_PREFIX}:settings:0",
+            ),
+            types.InlineKeyboardButton(
+                "🔄 Синхронизация",
+                callback_data=f"{CALLBACK_PREFIX}:syncmenu:0",
+            ),
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "📜 История изменений",
+            callback_data=f"{CALLBACK_PREFIX}:audit:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Админ-панель",
+            callback_data=f"{CALLBACK_PREFIX}:admin:0",
+        ),
+    )
+    text = (
+        "🎮 <b>Steam Tracker</b>\n\n"
+        "Управление каталогом, лицензиями и игрой недели."
+    )
+    if notice:
+        text = f"{escape(notice)}\n\n{text}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        text,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
 
 def show_promo_plane_selector(message, bot, *, source_message=None):
@@ -220,8 +305,8 @@ def show_promo_plane_selector(message, bot, *, source_message=None):
             callback_data=f"{CALLBACK_PREFIX}:plane:test",
         ),
         types.InlineKeyboardButton(
-            "⬅️ Админ-панель",
-            callback_data=f"{CALLBACK_PREFIX}:admin:0",
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
         ),
     )
     _send_context_message(
@@ -285,7 +370,8 @@ def _claim_required(storage, promotion_id: int, update, user) -> dict:
 
 
 def show_real_dashboard(message, bot, *, source_message=None):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
         return
     _, storage = _runtime()
     today = datetime.now(MOSCOW).date().isoformat()
@@ -318,16 +404,19 @@ def show_real_dashboard(message, bot, *, source_message=None):
             callback_data=f"{CALLBACK_PREFIX}:create:real",
         )
     )
-    markup.row(
+    markup.add(
         types.InlineKeyboardButton(
             "📚 История",
             callback_data=f"{CALLBACK_PREFIX}:history:real",
-        ),
-        types.InlineKeyboardButton(
-            "⚙️ Настройки",
-            callback_data=f"{CALLBACK_PREFIX}:settings:0",
-        ),
+        )
     )
+    if _is_owner(user):
+        markup.add(
+            types.InlineKeyboardButton(
+                "📦 Техническая очередь",
+                callback_data=f"{CALLBACK_PREFIX}:outbox:0",
+            )
+        )
     markup.add(
         types.InlineKeyboardButton(
             "⬅️ Выбор пространства",
@@ -813,8 +902,8 @@ def create_weekly_promotion(
         )
 
 
-def _promotion_defaults(settings: Settings) -> tuple[str, str, str]:
-    values = GoogleSheetsManager(settings).read_tracker_settings()
+def _promotion_defaults(storage: TrackerStorage) -> tuple[str, str, str]:
+    values = storage.tracker_settings()
     discount = str(values.get("weekly_discount") or "").strip()
     if not discount:
         raise ValueError("В настройках не заполнена скидка")
@@ -882,7 +971,7 @@ def create_manual_promotion(message, bot):
     )
     try:
         settings, storage = _runtime()
-        discount, valid_from, valid_to = _promotion_defaults(settings)
+        discount, valid_from, valid_to = _promotion_defaults(storage)
         promotion_id = storage.create_promotion(
             app_id=app_id,
             discount_text=discount,
@@ -944,7 +1033,7 @@ def create_test_promotion(
     )
     try:
         settings, storage = _runtime()
-        discount, valid_from, valid_to = _promotion_defaults(settings)
+        discount, valid_from, valid_to = _promotion_defaults(storage)
         promotion_id = storage.create_promotion(
             app_id=storage.random_approved_game_id(),
             discount_text=discount,
@@ -1434,44 +1523,123 @@ def show_catalog(
     message,
     bot,
     *,
+    status: str = "all",
+    page: int = 0,
     source_message=None,
     notice: str | None = None,
 ):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    settings, storage = _runtime()
-    summary = storage.summary()
-    rotation = storage.rotation_summary()
+    _, storage = _runtime()
+    query_status = None if status == "all" else status
+    rows = storage.managed_games(
+        status=query_status,
+        limit=PAGE_SIZE + 1,
+        offset=max(0, page) * PAGE_SIZE,
+    )
+    has_next = len(rows) > PAGE_SIZE
+    rows = rows[:PAGE_SIZE]
     types = _telegram_types()
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton(
+            "➕ Добавить",
+            callback_data=f"{CALLBACK_PREFIX}:gadd:0",
+        ),
+        types.InlineKeyboardButton(
+            "🔎 Найти",
+            callback_data=f"{CALLBACK_PREFIX}:gsearch:0",
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            "🟢 Активные",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:active:0",
+        ),
+        types.InlineKeyboardButton(
+            "📝 Черновики",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:draft:0",
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            "⏸ На паузе",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:paused:0",
+        ),
+        types.InlineKeyboardButton(
+            "🚫 Исключённые",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:excluded:0",
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            "⚠️ Без лицензии",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:no_license:0",
+        ),
+        types.InlineKeyboardButton(
+            "📚 Все",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        ),
+    )
+    status_icons = {
+        "active": "🟢",
+        "draft": "📝",
+        "paused": "⏸",
+        "excluded": "🚫",
+    }
+    for row in rows:
+        icon = status_icons.get(row["catalog_status"], "🎮")
+        license_icon = "✅" if row["owned_count"] else "⚠️"
+        markup.add(
+            types.InlineKeyboardButton(
+                (
+                    f"{icon} {license_icon} "
+                    f"{row['steam_name']} [{row['app_id']}]"
+                )[:64],
+                callback_data=f"{CALLBACK_PREFIX}:game:{row['app_id']}",
+            )
+        )
+    navigation = []
+    if page > 0:
+        navigation.append(
+            types.InlineKeyboardButton(
+                "⬅️",
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:catalog:{status}:{page - 1}"
+                ),
+            )
+        )
+    if has_next:
+        navigation.append(
+            types.InlineKeyboardButton(
+                "➡️",
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:catalog:{status}:{page + 1}"
+                ),
+            )
+        )
+    if navigation:
+        markup.row(*navigation)
     markup.add(
         types.InlineKeyboardButton(
-            "📄 Открыть Google-таблицу",
-            url=(
-                "https://docs.google.com/spreadsheets/d/"
-                f"{settings.spreadsheet_id}/edit"
-            ),
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
         )
     )
-    markup.add(
-        types.InlineKeyboardButton(
-            "🔄 Применить изменения листа «Игры»",
-            callback_data=f"{CALLBACK_PREFIX}:synccatalog:0",
-        )
-    )
-    markup.add(
-        types.InlineKeyboardButton(
-            "⬅️ Настройки",
-            callback_data=f"{CALLBACK_PREFIX}:settings:0",
-        )
-    )
+    filter_labels = {
+        "all": "все",
+        "active": "активные",
+        "draft": "черновики",
+        "paused": "на паузе",
+        "excluded": "исключённые",
+        "no_license": "без лицензии",
+    }
     body = (
-        "🎮 <b>Каталог игр</b>\n\n"
-        f"Согласовано: {summary['approved_games']}\n"
-        f"Обогащено Steam: {summary['enriched_games']}\n"
-        f"Цикл ротации: {rotation['cycle_number']}\n"
-        f"Уже использовано: {rotation['used_games']}\n"
-        f"Доступно: {rotation['available_games']}"
+        "🕹 <b>Каталог игр</b>\n\n"
+        f"Фильтр: {filter_labels.get(status, status)}\n"
+        f"Страница: {page + 1}\n\n"
+        "✅ означает, что лицензия найдена хотя бы на одном "
+        "активном Steam-аккаунте."
     )
     if notice:
         body = f"{escape(notice)}\n\n{body}"
@@ -1485,8 +1653,9 @@ def show_catalog(
     )
 
 
-def show_promo_settings(
+def show_game_card(
     message,
+    app_id: int,
     bot,
     *,
     source_message=None,
@@ -1494,30 +1663,342 @@ def show_promo_settings(
 ):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    settings, _ = _runtime()
-    try:
-        values = GoogleSheetsManager(settings).read_tracker_settings()
-    except Exception as error:
-        types = _telegram_types()
-        markup = types.InlineKeyboardMarkup()
+    _, storage = _runtime()
+    row = dict(storage.managed_game(app_id))
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(
+        types.InlineKeyboardButton(
+            "👥 Игроки",
+            callback_data=f"{CALLBACK_PREFIX}:geditplayers:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "📝 Описание",
+            callback_data=f"{CALLBACK_PREFIX}:geditdesc:{app_id}",
+        ),
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "💬 Комментарий",
+            callback_data=f"{CALLBACK_PREFIX}:geditcomment:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "💻 Наличие по ПК",
+            callback_data=f"{CALLBACK_PREFIX}:glicenses:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "🔄 Обновить из Steam",
+            callback_data=f"{CALLBACK_PREFIX}:grefresh:{app_id}",
+        ),
+    )
+    if row["catalog_status"] != "active":
         markup.add(
             types.InlineKeyboardButton(
-                "⬅️ Рабочие промо",
-                callback_data=f"{CALLBACK_PREFIX}:plane:real",
+                "🟢 Активировать",
+                callback_data=f"{CALLBACK_PREFIX}:gstatus:active:{app_id}",
             )
         )
-        _send_context_message(
-            message.chat.id,
-            bot,
-            f"❌ Не удалось прочитать настройки: {error}",
-            reply_markup=markup,
-            source_message=source_message,
+    if row["catalog_status"] != "draft":
+        markup.add(
+            types.InlineKeyboardButton(
+                "📝 В черновики",
+                callback_data=f"{CALLBACK_PREFIX}:gstatus:draft:{app_id}",
+            )
         )
+    if row["catalog_status"] != "paused":
+        markup.add(
+            types.InlineKeyboardButton(
+                "⏸ Поставить на паузу",
+                callback_data=f"{CALLBACK_PREFIX}:gstatus:paused:{app_id}",
+            )
+        )
+    if row["catalog_status"] != "excluded":
+        markup.add(
+            types.InlineKeyboardButton(
+                "🚫 Исключить",
+                callback_data=f"{CALLBACK_PREFIX}:gstatus:excluded:{app_id}",
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Каталог",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        )
+    )
+    labels = {
+        "active": "🟢 Активна",
+        "draft": "📝 Черновик",
+        "paused": "⏸ На паузе",
+        "excluded": "🚫 Исключена",
+    }
+    description = (
+        row.get("manager_description")
+        or row.get("store_description")
+        or row.get("base_description")
+        or "не заполнено"
+    )
+    description = str(description)
+    if len(description) > 2500:
+        description = description[:2497] + "..."
+    manager_comment = str(row.get("manager_comment") or "нет")
+    if len(manager_comment) > 600:
+        manager_comment = manager_comment[:597] + "..."
+    body = (
+        f"🎮 <b>{escape(row['steam_name'])}</b>\n"
+        f"AppID: <code>{row['app_id']}</code>\n"
+        f"Статус: {labels.get(row['catalog_status'], row['catalog_status'])}\n"
+        f"Лицензии: {row['owned_count']}/{row['account_count']}\n"
+        f"Игроков: {row['player_count'] or 'не указано'}\n"
+        f"Последнее промо: {row['last_promotion'] or 'не было'}\n\n"
+        f"<b>Описание:</b>\n{escape(description)}\n\n"
+        f"<b>Комментарий:</b> "
+        f"{escape(manager_comment)}"
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        body,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def request_game_add(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_MANAGER):
         return
-    sheet_enabled = str(
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "Отмена",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        )
+    )
+    prompt = _send_context_message(
+        message.chat.id,
+        bot,
+        "Введите Steam AppID новой игры.",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+    bot.register_next_step_handler(prompt, save_game_add, bot)
+
+
+def save_game_add(message, bot):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    try:
+        app_id = int(str(message.text or "").strip())
+        if app_id <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        show_catalog(message, bot, notice="❌ AppID должен быть положительным числом.")
+        return
+    wait = _send_context_message(message.chat.id, bot, "⏳ Проверяю Steam Store…")
+    try:
+        settings, storage = _runtime()
+        metadata = SteamStoreClient().get_metadata(app_id)
+        storage.add_managed_game(
+            app_id=app_id,
+            steam_name=metadata.name,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
+        )
+        storage.save_game_metadata(
+            app_id,
+            steam_name=metadata.name,
+            store_description=metadata.description,
+            genres=metadata.genres,
+            categories=metadata.categories,
+            header_image=metadata.header_image,
+            screenshots=metadata.screenshots,
+            is_free=metadata.is_free,
+            source_language=metadata.source_language,
+        )
+        warning = _sync_tracker_data_best_effort(settings, storage)
+        notice = "✅ Игра добавлена как черновик."
+        if warning:
+            notice += f"\n⚠️ {warning}"
+        show_game_card(
+            message,
+            app_id,
+            bot,
+            source_message=wait,
+            notice=notice,
+        )
+    except Exception as error:
+        show_catalog(
+            message,
+            bot,
+            source_message=wait,
+            notice=f"❌ Не удалось добавить игру: {error}",
+        )
+
+
+def request_game_search(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    prompt = _send_context_message(
+        message.chat.id,
+        bot,
+        "Введите часть названия или AppID.",
+        source_message=source_message,
+    )
+    bot.register_next_step_handler(prompt, show_game_search_results, bot)
+
+
+def show_game_search_results(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    query = str(message.text or "").strip()
+    _, storage = _runtime()
+    rows = storage.managed_games(search=query, limit=20)
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for row in rows:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{row['steam_name']} [{row['app_id']}]"[:64],
+                callback_data=f"{CALLBACK_PREFIX}:game:{row['app_id']}",
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Каталог",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        (
+            f"🔎 <b>Поиск:</b> {escape(query)}\n\n"
+            f"Найдено: {len(rows)}"
+        ),
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+def request_game_field(call, bot, field: str, app_id: int):
+    prompts = {
+        "players": "Введите количество игроков целым числом.",
+        "description": "Введите понятное описание игры для сотрудников.",
+        "comment": "Введите внутренний комментарий менеджера. Для очистки отправьте -",
+    }
+    prompt = _send_context_message(
+        call.message.chat.id,
+        bot,
+        prompts[field],
+        source_message=call.message,
+    )
+    bot.register_next_step_handler(
+        prompt,
+        save_game_field,
+        bot,
+        field,
+        app_id,
+    )
+
+
+def save_game_field(message, bot, field: str, app_id: int):
+    user = require_role(message, bot, ROLE_MANAGER)
+    if not user:
+        return
+    try:
+        settings, storage = _runtime()
+        row = dict(storage.managed_game(app_id))
+        value = str(message.text or "").strip()
+        player_count = row["player_count"]
+        description = row["manager_description"]
+        comment = row["manager_comment"]
+        if field == "players":
+            player_count = int(value)
+            if player_count < 1:
+                raise ValueError("Количество игроков должно быть не меньше 1")
+        elif field == "description":
+            if not value or len(value) > 4000:
+                raise ValueError("Описание должно содержать от 1 до 4000 символов")
+            description = value
+        else:
+            if len(value) > 1000:
+                raise ValueError("Комментарий не должен превышать 1000 символов")
+            comment = None if value == "-" else value
+        storage.update_managed_game(
+            app_id,
+            player_count=player_count,
+            manager_description=description,
+            manager_comment=comment,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
+        )
+        warning = _sync_tracker_data_best_effort(settings, storage)
+        notice = "✅ Игра обновлена."
+        if warning:
+            notice += f"\n⚠️ {warning}"
+    except Exception as error:
+        notice = f"❌ {error}"
+    show_game_card(message, app_id, bot, notice=notice)
+
+
+def show_game_licenses(
+    message,
+    app_id: int,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    game = storage.managed_game(app_id)
+    rows = storage.game_license_rows(app_id)
+    lines = [f"💻 <b>{escape(game['steam_name'])}: наличие</b>", ""]
+    for row in rows:
+        icon = "✅" if row["owned"] and row["active"] else "❌"
+        inactive = " (отключён)" if not row["active"] else ""
+        lines.append(
+            f"{icon} {escape(row['club_name'] or 'Без клуба')} / "
+            f"{escape(row['vanity_url'] or row['steam_id'])}{inactive}"
+        )
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ К игре",
+            callback_data=f"{CALLBACK_PREFIX}:game:{app_id}",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_promo_settings(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
+    user = require_role(message, bot, ROLE_OWNER)
+    if not user:
+        return
+    settings, storage = _runtime()
+    values = storage.tracker_settings()
+    bot_enabled = setting_enabled(
         values.get("weekly_promo_enabled") or ""
-    ).strip().casefold() in {"1", "true", "yes", "on", "да"}
-    fully_enabled = settings.weekly_promo_enabled and sheet_enabled
+    )
+    fully_enabled = settings.weekly_promo_enabled and bot_enabled
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -1528,31 +2009,41 @@ def show_promo_settings(
         types.InlineKeyboardButton(
             (
                 "⏸ Выключить автогенерацию"
-                if sheet_enabled
+                if bot_enabled
                 else "▶️ Включить автогенерацию"
             ),
             callback_data=f"{CALLBACK_PREFIX}:toggleweekly:0",
         ),
         types.InlineKeyboardButton(
-            "🎮 Каталог игр",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:0",
+            "📅 Сменить день",
+            callback_data=f"{CALLBACK_PREFIX}:cycleday:0",
+        ),
+        types.InlineKeyboardButton(
+            "🕥 Изменить время",
+            callback_data=f"{CALLBACK_PREFIX}:edittime:0",
+        ),
+        types.InlineKeyboardButton(
+            "🌍 Изменить часовой пояс",
+            callback_data=f"{CALLBACK_PREFIX}:edittimezone:0",
         ),
         types.InlineKeyboardButton(
             "📦 Техническая очередь",
             callback_data=f"{CALLBACK_PREFIX}:outbox:0",
         ),
         types.InlineKeyboardButton(
-            "⬅️ Рабочие промо",
-            callback_data=f"{CALLBACK_PREFIX}:plane:real",
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
         ),
     )
     body = (
-        "⚙️ <b>Настройки промо</b>\n\n"
+        "⚙️ <b>Настройки Steam Tracker</b>\n\n"
         f"Скидка: {escape(values.get('weekly_discount', 'не задана'))}\n"
-        "Расписание сервера: понедельник, 10:30 МСК\n"
-        f"Разрешено на сервере: "
+        f"День: {escape(values.get('generation_day', 'не задан'))}\n"
+        f"Время: {escape(values.get('generation_time', 'не задано'))}\n"
+        f"Часовой пояс: {escape(values.get('timezone', 'не задан'))}\n\n"
+        f"Главный выключатель сервера: "
         f"{'да' if settings.weekly_promo_enabled else 'нет'}\n"
-        f"Включено менеджером: {'да' if sheet_enabled else 'нет'}\n"
+        f"Включено в боте: {'да' if bot_enabled else 'нет'}\n"
         f"Итог: {'🟢 включено' if fully_enabled else '⏸ выключено'}\n"
         f"Режим: "
         f"{'автоматический' if fully_enabled else 'ручной'}\n"
@@ -1611,7 +2102,8 @@ def _request_discount(call, bot):
 
 
 def save_discount(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_OWNER)
+    if not user:
         return
     message_id = _message_id(message)
     if message_id is not None:
@@ -1637,15 +2129,397 @@ def save_discount(message, bot):
         )
         return
     try:
-        settings, _ = _runtime()
-        GoogleSheetsManager(settings).update_tracker_setting(
+        settings, storage = _runtime()
+        storage.update_tracker_setting(
             "weekly_discount",
             value,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
         )
+        warning = _sync_tracker_data_best_effort(settings, storage)
         notice = "✅ Скидка обновлена."
+        if warning:
+            notice += f"\n⚠️ {warning}"
     except Exception as error:
         notice = f"❌ {error}"
     show_promo_settings(message, bot, notice=notice)
+
+
+def request_tracker_setting(call, bot, key: str):
+    prompts = {
+        "generation_time": "Введите время запуска в формате ЧЧ:ММ.",
+        "timezone": (
+            "Введите часовой пояс IANA, например Europe/Moscow."
+        ),
+    }
+    prompt = _send_context_message(
+        call.message.chat.id,
+        bot,
+        prompts[key],
+        source_message=call.message,
+    )
+    bot.register_next_step_handler(
+        prompt,
+        save_tracker_setting,
+        bot,
+        key,
+    )
+
+
+def save_tracker_setting(message, bot, key: str):
+    user = require_role(message, bot, ROLE_OWNER)
+    if not user:
+        return
+    value = str(message.text or "").strip()
+    try:
+        if key == "generation_time":
+            datetime.strptime(value, "%H:%M")
+        elif key == "timezone":
+            pytz.timezone(value)
+        settings, storage = _runtime()
+        storage.update_tracker_setting(
+            key,
+            value,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
+        )
+        warning = _sync_tracker_data_best_effort(settings, storage)
+        notice = "✅ Настройка обновлена."
+        if warning:
+            notice += f"\n⚠️ {warning}"
+    except Exception as error:
+        notice = f"❌ {error}"
+    show_promo_settings(message, bot, notice=notice)
+
+
+def show_accounts(
+    message,
+    bot,
+    *,
+    page: int = 0,
+    source_message=None,
+    notice: str | None = None,
+):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    _, storage = _runtime()
+    all_rows = storage.managed_accounts()
+    start = max(0, page) * PAGE_SIZE
+    rows = all_rows[start : start + PAGE_SIZE]
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "➕ Добавить Steam-аккаунт",
+            callback_data=f"{CALLBACK_PREFIX}:accountadd:0",
+        )
+    )
+    for row in rows:
+        icon = "🟢" if row["active"] else "⚫"
+        title = row["vanity_url"] or row["steam_id"]
+        markup.add(
+            types.InlineKeyboardButton(
+                (
+                    f"{icon} {row['club_name'] or 'Без клуба'} / "
+                    f"{title}"
+                )[:64],
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:account:{row['steam_id']}"
+                ),
+            )
+        )
+    navigation = []
+    if page > 0:
+        navigation.append(
+            types.InlineKeyboardButton(
+                "⬅️",
+                callback_data=f"{CALLBACK_PREFIX}:accounts:{page - 1}",
+            )
+        )
+    if start + PAGE_SIZE < len(all_rows):
+        navigation.append(
+            types.InlineKeyboardButton(
+                "➡️",
+                callback_data=f"{CALLBACK_PREFIX}:accounts:{page + 1}",
+            )
+        )
+    if navigation:
+        markup.row(*navigation)
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
+        )
+    )
+    body = (
+        "💻 <b>ПК и Steam-аккаунты</b>\n\n"
+        f"Всего: {len(all_rows)}\n"
+        "Аккаунты не удаляются: ненужный аккаунт можно только отключить."
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        body,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_account_card(
+    message,
+    steam_id: str,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    _, storage = _runtime()
+    row = dict(storage.managed_account(steam_id))
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "✏️ Изменить зону и клуб",
+            callback_data=f"{CALLBACK_PREFIX}:accountedit:{steam_id}",
+        ),
+        types.InlineKeyboardButton(
+            "🔄 Проверить лицензии сейчас",
+            callback_data=f"{CALLBACK_PREFIX}:accountsync:{steam_id}",
+        ),
+        types.InlineKeyboardButton(
+            "⚫ Отключить" if row["active"] else "🟢 Включить",
+            callback_data=f"{CALLBACK_PREFIX}:accounttoggle:{steam_id}",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ К аккаунтам",
+            callback_data=f"{CALLBACK_PREFIX}:accounts:0",
+        ),
+    )
+    body = (
+        f"💻 <b>{escape(row['vanity_url'] or row['steam_id'])}</b>\n\n"
+        f"SteamID: <code>{row['steam_id']}</code>\n"
+        f"Клуб: {escape(row['club_name'] or 'не указан')}\n"
+        f"Статус: {'🟢 активен' if row['active'] else '⚫ отключён'}\n"
+        f"Найдено лицензий: {row['owned_games'] or 0}\n"
+        f"Последняя успешная запись: {escape(row['updated_at'])}"
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        body,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def request_account_add(message, bot, *, source_message=None):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    from club_config import get_clublist
+
+    clubs = ", ".join(get_clublist())
+    prompt = _send_context_message(
+        message.chat.id,
+        bot,
+        (
+            "Отправьте одной строкой:\n"
+            "<code>SteamID | название зоны | клуб</code>\n\n"
+            f"Допустимые клубы: {escape(clubs)}"
+        ),
+        parse_mode="HTML",
+        source_message=source_message,
+    )
+    bot.register_next_step_handler(prompt, save_account_add, bot)
+
+
+def save_account_add(message, bot):
+    user = require_role(message, bot, ROLE_OWNER)
+    if not user:
+        return
+    try:
+        parts = [part.strip() for part in str(message.text or "").split("|")]
+        if len(parts) != 3:
+            raise ValueError(
+                "Нужны три значения через символ |: SteamID, зона, клуб"
+            )
+        steam_id, zone, club = parts
+        from club_config import get_clublist
+
+        if club not in get_clublist():
+            raise ValueError("Клуб не найден в текущем списке клубов")
+        settings, storage = _runtime()
+        storage.upsert_managed_account(
+            steam_id=steam_id,
+            vanity_url=zone,
+            club_name=club,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
+        )
+        warning = _sync_tracker_data_best_effort(settings, storage)
+        notice = "✅ Steam-аккаунт добавлен."
+        if warning:
+            notice += f"\n⚠️ {warning}"
+        show_account_card(message, steam_id, bot, notice=notice)
+    except Exception as error:
+        show_accounts(message, bot, notice=f"❌ {error}")
+
+
+def request_account_edit(call, bot, steam_id: str):
+    from club_config import get_clublist
+
+    prompt = _send_context_message(
+        call.message.chat.id,
+        bot,
+        (
+            "Отправьте одной строкой:\n"
+            "<code>новое название зоны | клуб</code>\n\n"
+            f"Допустимые клубы: {escape(', '.join(get_clublist()))}"
+        ),
+        parse_mode="HTML",
+        source_message=call.message,
+    )
+    bot.register_next_step_handler(
+        prompt,
+        save_account_edit,
+        bot,
+        steam_id,
+    )
+
+
+def save_account_edit(message, bot, steam_id: str):
+    user = require_role(message, bot, ROLE_OWNER)
+    if not user:
+        return
+    try:
+        parts = [part.strip() for part in str(message.text or "").split("|")]
+        if len(parts) != 2:
+            raise ValueError("Нужны зона и клуб через символ |")
+        zone, club = parts
+        from club_config import get_clublist
+
+        if club not in get_clublist():
+            raise ValueError("Клуб не найден в текущем списке клубов")
+        settings, storage = _runtime()
+        storage.upsert_managed_account(
+            steam_id=steam_id,
+            vanity_url=zone,
+            club_name=club,
+            actor_id=_actor_id(message),
+            actor_name=_actor_name(message, user),
+        )
+        warning = _sync_tracker_data_best_effort(settings, storage)
+        notice = "✅ Аккаунт обновлён."
+        if warning:
+            notice += f"\n⚠️ {warning}"
+    except Exception as error:
+        notice = f"❌ {error}"
+    show_account_card(message, steam_id, bot, notice=notice)
+
+
+def show_sync_menu(
+    message,
+    bot,
+    *,
+    source_message=None,
+    notice: str | None = None,
+):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "🎫 Проверить все лицензии",
+            callback_data=f"{CALLBACK_PREFIX}:synclicenses:0",
+        ),
+        types.InlineKeyboardButton(
+            "🖼 Обновить данные Steam Store",
+            callback_data=f"{CALLBACK_PREFIX}:syncstore:0",
+        ),
+        types.InlineKeyboardButton(
+            "📊 Выгрузить отчёты в Google",
+            callback_data=f"{CALLBACK_PREFIX}:syncgoogle:0",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
+        ),
+    )
+    body = (
+        "🔄 <b>Синхронизация</b>\n\n"
+        "Запуски лицензий и Steam Store выполняются в фоне. "
+        "Google Sheets только получает отчёты и ничего не меняет в боте."
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        body,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_audit(
+    message,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    rows = storage.recent_audit(limit=20)
+    action_labels = {
+        "game_added": "добавил игру",
+        "game_updated": "изменил игру",
+        "game_status_changed": "изменил статус игры",
+        "game_auto_paused_no_license": (
+            "поставил игру на паузу из-за отсутствия лицензии"
+        ),
+        "account_added": "добавил аккаунт",
+        "account_updated": "изменил аккаунт",
+        "account_activated": "включил аккаунт",
+        "account_deactivated": "отключил аккаунт",
+        "setting_updated": "изменил настройку",
+    }
+    lines = ["📜 <b>Последние изменения</b>", ""]
+    if not rows:
+        lines.append("Изменений пока нет.")
+    for row in rows:
+        timestamp = str(row["created_at"]).replace("T", " ")[:16]
+        actor = row["actor_name"] or row["actor_id"] or "система"
+        action = action_labels.get(row["action"], row["action"])
+        lines.append(
+            f"{escape(timestamp)} — <b>{escape(actor)}</b> "
+            f"{escape(action)} {escape(row['entity_id'] or '')}"
+        )
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Steam Tracker",
+            callback_data=f"{CALLBACK_PREFIX}:tracker:0",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
 
 
 def _regenerate(
@@ -1695,27 +2569,47 @@ def _clear_next_step_handler(chat_id: int, bot) -> None:
 
 def _show_callback_error(call, bot, error: Exception) -> None:
     parts = str(call.data or "").split(":")
+    action = parts[1] if len(parts) > 1 else ""
     promotion_id = (
         int(parts[2])
-        if len(parts) > 2 and parts[2].isdigit()
+        if (
+            action in {
+                "open",
+                "claim",
+                "takeover",
+                "release",
+                "generate",
+                "approve",
+                "texts",
+                "edit",
+                "more",
+                "replace",
+                "postpone",
+                "cancel",
+                "marktest",
+                "delete",
+            }
+            and len(parts) > 2
+            and parts[2].isdigit()
+        )
         else None
     )
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup()
     markup.add(
         types.InlineKeyboardButton(
-            "⬅️ К карточке" if promotion_id else "⬅️ В меню промо",
+            "⬅️ К карточке" if promotion_id else "⬅️ Steam Tracker",
             callback_data=(
                 f"{CALLBACK_PREFIX}:open:{promotion_id}"
                 if promotion_id
-                else f"{CALLBACK_PREFIX}:menu:0"
+                else f"{CALLBACK_PREFIX}:tracker:0"
             ),
         )
     )
     _send_context_message(
         call.message.chat.id,
         bot,
-        f"❌ Ошибка промо: {error}",
+        f"❌ Ошибка Steam Tracker: {error}",
         reply_markup=markup,
         source_message=call.message,
     )
@@ -1740,12 +2634,18 @@ def register_promo_admin_callbacks(bot) -> None:
             bot.answer_callback_query(call.id)
             if action in {
                 "admin",
+                "tracker",
                 "menu",
                 "plane",
                 "history",
                 "create",
                 "settings",
                 "catalog",
+                "game",
+                "accounts",
+                "account",
+                "syncmenu",
+                "audit",
                 "list",
                 "open",
             }:
@@ -1760,6 +2660,13 @@ def register_promo_admin_callbacks(bot) -> None:
                 from menu import admin_menu
 
                 admin_menu(call.message, bot)
+                return
+            if action == "tracker":
+                show_tracker_dashboard(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
                 return
             if action == "menu":
                 show_promo_plane_selector(
@@ -1823,7 +2730,317 @@ def register_promo_admin_callbacks(bot) -> None:
                 show_catalog(
                     call.message,
                     bot,
+                    status=parts[2] if len(parts) > 2 else "all",
+                    page=int(parts[3]) if len(parts) > 3 else 0,
                     source_message=call.message,
+                )
+                return
+            if action == "game":
+                show_game_card(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "gadd":
+                request_game_add(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "gsearch":
+                request_game_search(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action in {
+                "geditplayers",
+                "geditdesc",
+                "geditcomment",
+            }:
+                field = {
+                    "geditplayers": "players",
+                    "geditdesc": "description",
+                    "geditcomment": "comment",
+                }[action]
+                request_game_field(call, bot, field, int(parts[2]))
+                return
+            if action == "glicenses":
+                show_game_licenses(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "gstatus":
+                settings, storage = _runtime()
+                storage.set_game_catalog_status(
+                    int(parts[3]),
+                    parts[2],
+                    actor_id=_actor_id(call),
+                    actor_name=_actor_name(call, user),
+                )
+                warning = _sync_tracker_data_best_effort(
+                    settings,
+                    storage,
+                )
+                notice = "✅ Статус игры обновлён."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                show_game_card(
+                    call.message,
+                    int(parts[3]),
+                    bot,
+                    source_message=call.message,
+                    notice=notice,
+                )
+                return
+            if action == "grefresh":
+                app_id = int(parts[2])
+                settings, storage = _runtime()
+                wait = _send_context_message(
+                    chat_id,
+                    bot,
+                    "⏳ Обновляю данные Steam Store…",
+                    source_message=call.message,
+                )
+                metadata = SteamStoreClient().get_metadata(app_id)
+                storage.save_game_metadata(
+                    app_id,
+                    steam_name=metadata.name,
+                    store_description=metadata.description,
+                    genres=metadata.genres,
+                    categories=metadata.categories,
+                    header_image=metadata.header_image,
+                    screenshots=metadata.screenshots,
+                    is_free=metadata.is_free,
+                    source_language=metadata.source_language,
+                )
+                warning = _sync_tracker_data_best_effort(
+                    settings,
+                    storage,
+                )
+                notice = "✅ Данные Steam Store обновлены."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                show_game_card(
+                    call.message,
+                    app_id,
+                    bot,
+                    source_message=wait,
+                    notice=notice,
+                )
+                return
+            if action == "accounts":
+                show_accounts(
+                    call.message,
+                    bot,
+                    page=int(parts[2]),
+                    source_message=call.message,
+                )
+                return
+            if action == "account":
+                show_account_card(
+                    call.message,
+                    parts[2],
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "accountadd":
+                request_account_add(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "accountedit":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                request_account_edit(call, bot, parts[2])
+                return
+            if action == "accounttoggle":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                settings, storage = _runtime()
+                row = storage.managed_account(parts[2])
+                storage.set_account_active(
+                    parts[2],
+                    not bool(row["active"]),
+                    actor_id=_actor_id(call),
+                    actor_name=_actor_name(call, user),
+                )
+                warning = _sync_tracker_data_best_effort(
+                    settings,
+                    storage,
+                )
+                notice = "✅ Статус аккаунта обновлён."
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                show_account_card(
+                    call.message,
+                    parts[2],
+                    bot,
+                    source_message=call.message,
+                    notice=notice,
+                )
+                return
+            if action == "accountsync":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                settings, storage = _runtime()
+                if not settings.steam_api_key:
+                    raise ValueError("STEAM_API_KEY не задан")
+                wait = _send_context_message(
+                    chat_id,
+                    bot,
+                    "⏳ Проверяю библиотеку Steam…",
+                    source_message=call.message,
+                )
+                result = LicenseSyncService(
+                    storage,
+                    SteamClient(settings.steam_api_key),
+                    removal_threshold=settings.removal_threshold,
+                ).sync_account(parts[2])
+                warning = _sync_tracker_data_best_effort(
+                    settings,
+                    storage,
+                )
+                notice = (
+                    f"✅ Найдено игр: {result.seen_games}; "
+                    f"добавлено: {result.added}; снято: {result.removed}."
+                )
+                if warning:
+                    notice += f"\n⚠️ {warning}"
+                show_account_card(
+                    call.message,
+                    parts[2],
+                    bot,
+                    source_message=wait,
+                    notice=notice,
+                )
+                return
+            if action == "syncmenu":
+                show_sync_menu(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action in {"synclicenses", "syncstore"}:
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                from .jobs import start_license_sync, start_store_enrichment
+
+                started = (
+                    start_license_sync()
+                    if action == "synclicenses"
+                    else start_store_enrichment()
+                )
+                show_sync_menu(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                    notice=(
+                        "✅ Фоновая синхронизация запущена."
+                        if started
+                        else "⚠️ Запуск отключён настройками сервера "
+                        "или уже выполняется."
+                    ),
+                )
+                return
+            if action == "syncgoogle":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                settings, storage = _runtime()
+                wait = _send_context_message(
+                    chat_id,
+                    bot,
+                    "⏳ Выгружаю отчёты в Google Sheets…",
+                    source_message=call.message,
+                )
+                GoogleSheetsManager(settings).sync_tracker_data(
+                    storage,
+                    apply=True,
+                )
+                show_sync_menu(
+                    call.message,
+                    bot,
+                    source_message=wait,
+                    notice="✅ Отчёты Google Sheets обновлены.",
+                )
+                return
+            if action == "audit":
+                show_audit(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "cycleday":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                settings, storage = _runtime()
+                days = [
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday",
+                ]
+                current = storage.tracker_settings().get(
+                    "generation_day",
+                    "monday",
+                )
+                if current not in days:
+                    current = "monday"
+                next_day = days[(days.index(current) + 1) % len(days)]
+                storage.update_tracker_setting(
+                    "generation_day",
+                    next_day,
+                    actor_id=_actor_id(call),
+                    actor_name=_actor_name(call, user),
+                )
+                _sync_tracker_data_best_effort(settings, storage)
+                show_promo_settings(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                    notice=f"✅ День запуска: {next_day}.",
+                )
+                return
+            if action in {"edittime", "edittimezone"}:
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
+                request_tracker_setting(
+                    call,
+                    bot,
+                    (
+                        "generation_time"
+                        if action == "edittime"
+                        else "timezone"
+                    ),
                 )
                 return
             if action == "list":
@@ -2224,52 +3441,26 @@ def register_promo_admin_callbacks(bot) -> None:
                     source_message=call.message,
                 )
             elif action == "synccatalog":
-                settings, storage = _runtime()
-                wait = _send_context_message(
-                    chat_id,
-                    bot,
-                    "⏳ Применяю изменения каталога…",
-                    source_message=call.message,
-                )
-                manager = GoogleSheetsManager(settings)
-                result = CatalogManagementService(
-                    storage,
-                    SteamStoreClient(),
-                ).sync(
-                    manager.read_catalog_rows(),
-                    apply=True,
-                )
-                if result.errors:
-                    raise ValueError("; ".join(result.errors))
-                show_catalog(
-                    call.message,
-                    bot,
-                    source_message=wait,
-                    notice=(
-                        "✅ Каталог применён: "
-                        f"{result.active_games} активных, "
-                        f"{result.excluded_games} исключено."
-                    ),
+                raise ValueError(
+                    "Импорт каталога из Google отключён. "
+                    "Используйте раздел «Каталог игр» в боте."
                 )
             elif action == "editdiscount":
+                if not _is_owner(user):
+                    raise PermissionError(
+                        "Это действие доступно только владельцу"
+                    )
                 _request_discount(call, bot)
             elif action == "toggleweekly":
                 if not _is_owner(user):
                     raise PermissionError(
                         "Это действие доступно только руководству"
                     )
-                settings, _ = _runtime()
-                manager = GoogleSheetsManager(settings)
-                values = manager.read_tracker_settings()
-                enabled = str(
-                    values.get("weekly_promo_enabled") or ""
-                ).strip().casefold() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "on",
-                    "да",
-                }
+                settings, storage = _runtime()
+                values = storage.tracker_settings()
+                enabled = setting_enabled(
+                    values.get("weekly_promo_enabled")
+                )
                 if not enabled and not settings.weekly_promo_enabled:
                     raise ValueError(
                         "Автоматический режим запрещён на сервере. "
@@ -2277,10 +3468,13 @@ def register_promo_admin_callbacks(bot) -> None:
                         "STEAMTRACKER_WEEKLY_PROMO_ENABLED=true "
                         "и перезапустите bot"
                     )
-                manager.update_tracker_setting(
+                storage.update_tracker_setting(
                     "weekly_promo_enabled",
                     "false" if enabled else "true",
+                    actor_id=_actor_id(call),
+                    actor_name=_actor_name(call, user),
                 )
+                _sync_tracker_data_best_effort(settings, storage)
                 show_promo_settings(
                     call.message,
                     bot,

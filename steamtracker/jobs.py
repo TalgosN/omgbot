@@ -1,16 +1,18 @@
 """Неблокирующие фоновые задания Steam Tracker для scheduler Виарыча."""
 
 import threading
+from datetime import datetime
+
+import pytz
 
 from .config import Settings
 from .db import TrackerStorage
-from .management import CatalogManagementService
 from .llm import build_generator
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
 from .steam import LicenseSyncService, SteamClient
 from .store import GameEnrichmentService, SteamStoreClient
-from .weekly import WeeklyPromotionService
+from .weekly import WeeklyPromotionService, setting_enabled, week_period
 
 
 _license_lock = threading.Lock()
@@ -115,49 +117,10 @@ def start_store_enrichment() -> bool:
     return True
 
 
-def _run_catalog_sync(settings: Settings) -> None:
-    with _catalog_lock:
-        try:
-            storage = TrackerStorage(settings.db_path)
-            storage.initialize()
-            sheet_manager = GoogleSheetsManager(settings)
-            result = CatalogManagementService(
-                storage,
-                SteamStoreClient(),
-            ).sync(
-                sheet_manager.read_catalog_rows(),
-                apply=True,
-            )
-            if result.errors:
-                print(
-                    "Steam Tracker Catalog: каталог не изменён: "
-                    + "; ".join(result.errors)
-                )
-                return
-            print(
-                "Steam Tracker Catalog: "
-                f"активных={result.active_games}, "
-                f"исключено={result.excluded_games}, "
-                f"черновиков={result.draft_games}"
-            )
-            _sync_google_data(settings, storage)
-        except Exception as error:
-            print(f"Steam Tracker Catalog: ошибка синхронизации: {error}")
-
-
 def start_catalog_sync() -> bool:
-    settings = Settings.from_env()
-    if not settings.catalog_sync_enabled:
-        return False
-    if _catalog_lock.locked():
-        return False
-    threading.Thread(
-        target=_run_catalog_sync,
-        args=(settings,),
-        name="steamtracker-catalog-sync",
-        daemon=True,
-    ).start()
-    return True
+    # Совместимость со старым планировщиком: Google Sheets больше не
+    # является источником каталога и не должна перезаписывать SQLite.
+    return False
 
 
 def _run_weekly_promo(settings: Settings, bot=None) -> None:
@@ -202,11 +165,62 @@ def _run_weekly_promo(settings: Settings, bot=None) -> None:
             print(f"Steam Tracker Weekly: ошибка: {error}")
 
 
-def start_weekly_promo(bot=None) -> bool:
+def start_weekly_promo(bot=None, *, now: datetime | None = None) -> bool:
     settings = Settings.from_env()
     if not settings.weekly_promo_enabled:
         return False
     if _weekly_lock.locked():
+        return False
+    storage = TrackerStorage(settings.db_path)
+    storage.initialize()
+    tracker_settings = storage.tracker_settings()
+    if not setting_enabled(tracker_settings.get("weekly_promo_enabled")):
+        return False
+    day_names = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+    generation_day = str(
+        tracker_settings.get("generation_day") or ""
+    ).strip().casefold()
+    if generation_day not in day_names:
+        print(
+            "Steam Tracker Weekly: неизвестный день запуска "
+            f"{generation_day!r}"
+        )
+        return False
+    generation_time = str(
+        tracker_settings.get("generation_time") or ""
+    ).strip()
+    try:
+        configured_time = datetime.strptime(
+            generation_time,
+            "%H:%M",
+        ).time()
+        timezone = pytz.timezone(
+            str(
+                tracker_settings.get("timezone")
+                or "Europe/Moscow"
+            ).strip()
+        )
+    except (ValueError, TypeError) as error:
+        print(f"Steam Tracker Weekly: неверные настройки времени: {error}")
+        return False
+    current = now.astimezone(timezone) if now else datetime.now(timezone)
+    if current.weekday() != day_names[generation_day]:
+        return False
+    if current.time().replace(second=0, microsecond=0) < configured_time:
+        return False
+    valid_from, valid_to = week_period(current.date())
+    if storage.has_real_promotion_for_period(
+        valid_from.isoformat(),
+        valid_to.isoformat(),
+    ):
         return False
     threading.Thread(
         target=_run_weekly_promo,

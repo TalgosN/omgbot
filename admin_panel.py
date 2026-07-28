@@ -99,7 +99,7 @@ def admin_func_handler(message, bot):
         from admin_panel import broadcast_menu
         broadcast_menu(message, bot)
 
-    elif a == '📣 Промо':
+    elif a in {'🎮 Steam Tracker', '📣 Промо'}:
         from steamtracker.admin import promotion_admin_menu
         promotion_admin_menu(message, bot)
 
@@ -662,22 +662,25 @@ def collect_steamtracker_health():
         else:
             lines.append("✅ Техническая очередь: без ошибок")
 
-        try:
-            tracker_settings = GoogleSheetsManager(
-                settings
-            ).read_tracker_settings()
-            sheet_enabled = setting_enabled(
-                tracker_settings.get("weekly_promo_enabled")
-            )
-            fully_enabled = settings.weekly_promo_enabled and sheet_enabled
-            lines.append(
-                "✅ Google Steam Tracker: доступен; "
-                f"режим {'автоматический' if fully_enabled else 'ручной'}"
-            )
-        except Exception as error:
-            lines.append(
-                f"❌ Google Steam Tracker: {str(error)[:120]}"
-            )
+        tracker_settings = storage.tracker_settings()
+        bot_enabled = setting_enabled(
+            tracker_settings.get("weekly_promo_enabled")
+        )
+        fully_enabled = settings.weekly_promo_enabled and bot_enabled
+        lines.append(
+            "ℹ️ Игра недели: "
+            f"режим {'автоматический' if fully_enabled else 'ручной'}"
+        )
+        if settings.google_export_enabled:
+            try:
+                GoogleSheetsManager(settings).open()
+                lines.append("✅ Google Steam Tracker: отчёты доступны")
+            except Exception as error:
+                lines.append(
+                    f"❌ Google Steam Tracker: {str(error)[:120]}"
+                )
+        else:
+            lines.append("ℹ️ Google Steam Tracker: выгрузка отключена")
 
         if settings.generator_provider == "openrouter":
             if not settings.openrouter_api_key:

@@ -9,6 +9,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+import pytz
+
 
 PROMOTION_STATUSES = {
     "draft",
@@ -23,6 +25,34 @@ PROMOTION_STATUS_TRANSITIONS = {
     "approved": set(),
     "postponed": {"cancelled"},
     "cancelled": set(),
+}
+GAME_CATALOG_STATUSES = {
+    "active",
+    "draft",
+    "paused",
+    "excluded",
+}
+TRACKER_SETTING_DEFAULTS = {
+    "weekly_discount": (
+        "100 рублей",
+        "Точное значение скидки для игры недели",
+    ),
+    "generation_day": (
+        "monday",
+        "День автоматического выбора игры",
+    ),
+    "generation_time": (
+        "10:30",
+        "Время по часовому поясу Steam Tracker",
+    ),
+    "timezone": (
+        "Europe/Moscow",
+        "Часовой пояс автоматического задания",
+    ),
+    "weekly_promo_enabled": (
+        "false",
+        "Автоматически запускать согласование игры недели",
+    ),
 }
 
 
@@ -88,9 +118,12 @@ class TrackerStorage:
                     steam_name TEXT NOT NULL,
                     official_name TEXT,
                     is_approved INTEGER NOT NULL DEFAULT 0,
+                    managed INTEGER NOT NULL DEFAULT 0,
+                    catalog_status TEXT NOT NULL DEFAULT 'draft',
                     player_count INTEGER,
                     base_description TEXT,
                     manager_description TEXT,
+                    manager_comment TEXT,
                     description_source TEXT,
                     updated_at TEXT NOT NULL
                 );
@@ -208,6 +241,26 @@ class TrackerStorage:
                     FOREIGN KEY (promotion_id) REFERENCES promotions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS tracker_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    comment TEXT,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS tracker_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor_id TEXT,
+                    actor_name TEXT,
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT,
+                    before_json TEXT,
+                    after_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_account_games_owned_app
                     ON account_games(owned, app_id);
                 CREATE INDEX IF NOT EXISTS idx_license_events_recorded_at
@@ -223,8 +276,10 @@ class TrackerStorage:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_game_rotation_active_game
                     ON game_rotation(cycle_number, app_id)
                     WHERE status IN ('reserved', 'used');
+                CREATE INDEX IF NOT EXISTS idx_tracker_audit_created_at
+                    ON tracker_audit(created_at, id);
 
-                PRAGMA user_version = 5;
+                PRAGMA user_version = 6;
                 """
             )
             game_columns = {
@@ -235,6 +290,32 @@ class TrackerStorage:
                 conn.execute(
                     "ALTER TABLE games ADD COLUMN manager_description TEXT"
                 )
+            if "managed" not in game_columns:
+                conn.execute(
+                    "ALTER TABLE games ADD COLUMN managed INTEGER NOT NULL DEFAULT 0"
+                )
+            if "catalog_status" not in game_columns:
+                conn.execute(
+                    "ALTER TABLE games ADD COLUMN catalog_status TEXT NOT NULL DEFAULT 'draft'"
+                )
+            if "manager_comment" not in game_columns:
+                conn.execute(
+                    "ALTER TABLE games ADD COLUMN manager_comment TEXT"
+                )
+            conn.execute(
+                """
+                UPDATE games
+                SET managed = 1,
+                    catalog_status = 'active'
+                WHERE is_approved = 1
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_games_managed_status
+                ON games(managed, catalog_status, steam_name)
+                """
+            )
             promotion_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(promotions)")
@@ -258,6 +339,18 @@ class TrackerStorage:
                 ON promotions(is_test, status, valid_from, valid_to)
                 """
             )
+            timestamp = utc_now()
+            for key, (value, comment) in TRACKER_SETTING_DEFAULTS.items():
+                conn.execute(
+                    """
+                    INSERT INTO tracker_settings (
+                        setting_key, setting_value, comment, updated_at
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(setting_key) DO NOTHING
+                    """,
+                    (key, value, comment, timestamp),
+                )
+            conn.execute("PRAGMA user_version = 6")
 
     def import_legacy_accounts(self, legacy_db_path: str | Path) -> int:
         legacy_path = Path(legacy_db_path)
@@ -311,13 +404,16 @@ class TrackerStorage:
                     """
                     INSERT INTO games (
                         app_id, steam_name, official_name, is_approved,
+                        managed, catalog_status,
                         player_count, base_description, manager_description,
                         description_source, updated_at
-                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, 1, 1, 'active', ?, ?, ?, ?, ?)
                     ON CONFLICT(app_id) DO UPDATE SET
                         steam_name = excluded.steam_name,
                         official_name = excluded.official_name,
                         is_approved = 1,
+                        managed = 1,
+                        catalog_status = 'active',
                         player_count = excluded.player_count,
                         base_description = excluded.base_description,
                         manager_description = COALESCE(
@@ -347,8 +443,10 @@ class TrackerStorage:
             conn.execute(
                 """
                 UPDATE games
-                SET is_approved = 0, updated_at = ?
-                WHERE is_approved = 1
+                SET is_approved = 0,
+                    catalog_status = 'excluded',
+                    updated_at = ?
+                WHERE managed = 1
                 """,
                 (timestamp,),
             )
@@ -357,13 +455,16 @@ class TrackerStorage:
                     """
                     INSERT INTO games (
                         app_id, steam_name, official_name, is_approved,
+                        managed, catalog_status,
                         player_count, base_description, manager_description,
                         description_source, updated_at
-                    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, 1, 1, 'active', ?, ?, ?, ?, ?)
                     ON CONFLICT(app_id) DO UPDATE SET
                         steam_name = excluded.steam_name,
                         official_name = excluded.official_name,
                         is_approved = 1,
+                        managed = 1,
+                        catalog_status = 'active',
                         player_count = excluded.player_count,
                         base_description = excluded.base_description,
                         manager_description = excluded.manager_description,
@@ -419,6 +520,687 @@ class TrackerStorage:
                 """
             ).fetchall()
         return {row["app_id"]: dict(row) for row in rows}
+
+    @staticmethod
+    def _write_audit(
+        conn: sqlite3.Connection,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+        action: str,
+        entity_type: str,
+        entity_id: str | int | None,
+        before: dict | None,
+        after: dict | None,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO tracker_audit (
+                actor_id, actor_name, action, entity_type, entity_id,
+                before_json, after_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                actor_id,
+                actor_name,
+                action,
+                entity_type,
+                None if entity_id is None else str(entity_id),
+                json.dumps(before, ensure_ascii=False, default=str)
+                if before is not None
+                else None,
+                json.dumps(after, ensure_ascii=False, default=str)
+                if after is not None
+                else None,
+                utc_now(),
+            ),
+        )
+
+    @classmethod
+    def _pause_unlicensed_games(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> int:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM games g
+            WHERE g.managed = 1
+                AND g.catalog_status = 'active'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM account_games ag
+                    JOIN accounts a ON a.steam_id = ag.steam_id
+                    WHERE ag.app_id = g.app_id
+                        AND ag.owned = 1
+                        AND a.active = 1
+                )
+            """
+        ).fetchall()
+        for row in rows:
+            before = dict(row)
+            conn.execute(
+                """
+                UPDATE games
+                SET catalog_status = 'paused',
+                    is_approved = 0,
+                    updated_at = ?
+                WHERE app_id = ?
+                """,
+                (utc_now(), row["app_id"]),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM games WHERE app_id = ?",
+                    (row["app_id"],),
+                ).fetchone()
+            )
+            cls._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="game_auto_paused_no_license",
+                entity_type="game",
+                entity_id=row["app_id"],
+                before=before,
+                after=after,
+            )
+        return len(rows)
+
+    def tracker_settings(self) -> dict[str, str]:
+        with self.connect() as conn:
+            return {
+                row["setting_key"]: row["setting_value"]
+                for row in conn.execute(
+                    """
+                    SELECT setting_key, setting_value
+                    FROM tracker_settings
+                    ORDER BY setting_key
+                    """
+                )
+            }
+
+    def tracker_setting_rows(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        setting_key,
+                        setting_value,
+                        comment,
+                        updated_at,
+                        updated_by
+                    FROM tracker_settings
+                    ORDER BY setting_key
+                    """
+                )
+            )
+
+    def update_tracker_setting(
+        self,
+        key: str,
+        value: str,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        if key not in TRACKER_SETTING_DEFAULTS:
+            raise ValueError(f"Неизвестная настройка Steam Tracker: {key}")
+        value = str(value).strip()
+        if not value:
+            raise ValueError("Значение настройки не может быть пустым")
+        if key == "weekly_discount" and len(value) > 80:
+            raise ValueError("Скидка не должна превышать 80 символов")
+        if key == "weekly_promo_enabled":
+            normalized = value.casefold()
+            if normalized not in {
+                "1",
+                "0",
+                "true",
+                "false",
+                "yes",
+                "no",
+                "on",
+                "off",
+                "да",
+                "нет",
+            }:
+                raise ValueError("Включение должно быть true или false")
+            value = (
+                "true"
+                if normalized in {"1", "true", "yes", "on", "да"}
+                else "false"
+            )
+        if key == "generation_day":
+            value = value.casefold()
+            if value not in {
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            }:
+                raise ValueError("Неизвестный день недели")
+        if key == "generation_time":
+            datetime.strptime(value, "%H:%M")
+        if key == "timezone":
+            pytz.timezone(value)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT setting_key, setting_value, comment, updated_at,
+                       updated_by
+                FROM tracker_settings
+                WHERE setting_key = ?
+                """,
+                (key,),
+            ).fetchone()
+            before = dict(row) if row else None
+            comment = TRACKER_SETTING_DEFAULTS[key][1]
+            conn.execute(
+                """
+                INSERT INTO tracker_settings (
+                    setting_key, setting_value, comment, updated_at,
+                    updated_by
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    comment = excluded.comment,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (key, value, comment, utc_now(), actor_name or actor_id),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM tracker_settings WHERE setting_key = ?",
+                    (key,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="setting_updated",
+                entity_type="setting",
+                entity_id=key,
+                before=before,
+                after=after,
+            )
+    def recent_audit(self, *, limit: int = 30) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT *
+                    FROM tracker_audit
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (max(1, min(int(limit), 100)),),
+                )
+            )
+
+    def add_managed_game(
+        self,
+        *,
+        app_id: int,
+        steam_name: str,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        app_id = int(app_id)
+        steam_name = str(steam_name).strip()
+        if app_id <= 0:
+            raise ValueError("AppID должен быть положительным числом")
+        if not steam_name:
+            raise ValueError("Название игры обязательно")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM games WHERE app_id = ?",
+                (app_id,),
+            ).fetchone()
+            before = dict(row) if row else None
+            if row is not None and row["managed"]:
+                raise ValueError(f"Игра AppID {app_id} уже есть в каталоге")
+            conn.execute(
+                """
+                INSERT INTO games (
+                    app_id, steam_name, official_name, is_approved,
+                    managed, catalog_status, description_source, updated_at
+                ) VALUES (?, ?, ?, 0, 1, 'draft', 'steam_store', ?)
+                ON CONFLICT(app_id) DO UPDATE SET
+                    steam_name = excluded.steam_name,
+                    official_name = COALESCE(
+                        games.official_name,
+                        excluded.official_name
+                    ),
+                    is_approved = 0,
+                    managed = 1,
+                    catalog_status = 'draft',
+                    updated_at = excluded.updated_at
+                """,
+                (app_id, steam_name, steam_name, utc_now()),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM games WHERE app_id = ?",
+                    (app_id,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="game_added",
+                entity_type="game",
+                entity_id=app_id,
+                before=before,
+                after=after,
+            )
+
+    def update_managed_game(
+        self,
+        app_id: int,
+        *,
+        player_count: int | None = None,
+        manager_description: str | None = None,
+        manager_comment: str | None = None,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        if player_count is not None and player_count < 1:
+            raise ValueError("Количество игроков должно быть не меньше 1")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM games WHERE app_id = ? AND managed = 1",
+                (app_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Игра AppID {app_id} не найдена в каталоге")
+            before = dict(row)
+            conn.execute(
+                """
+                UPDATE games
+                SET player_count = ?,
+                    manager_description = ?,
+                    manager_comment = ?,
+                    updated_at = ?
+                WHERE app_id = ?
+                """,
+                (
+                    player_count,
+                    manager_description,
+                    manager_comment,
+                    utc_now(),
+                    app_id,
+                ),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM games WHERE app_id = ?",
+                    (app_id,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="game_updated",
+                entity_type="game",
+                entity_id=app_id,
+                before=before,
+                after=after,
+            )
+
+    def set_game_catalog_status(
+        self,
+        app_id: int,
+        status: str,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        if status not in GAME_CATALOG_STATUSES:
+            raise ValueError(f"Неизвестный статус игры: {status}")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM games WHERE app_id = ? AND managed = 1",
+                (app_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Игра AppID {app_id} не найдена в каталоге")
+            if status == "active":
+                license_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM account_games ag
+                    JOIN accounts a ON a.steam_id = ag.steam_id
+                    WHERE ag.app_id = ?
+                        AND ag.owned = 1
+                        AND a.active = 1
+                    LIMIT 1
+                    """,
+                    (app_id,),
+                ).fetchone()
+                if license_row is None:
+                    raise ValueError(
+                        "Игру нельзя активировать: лицензия не найдена "
+                        "ни на одном активном аккаунте"
+                    )
+            before = dict(row)
+            conn.execute(
+                """
+                UPDATE games
+                SET catalog_status = ?,
+                    is_approved = ?,
+                    updated_at = ?
+                WHERE app_id = ?
+                """,
+                (status, int(status == "active"), utc_now(), app_id),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM games WHERE app_id = ?",
+                    (app_id,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="game_status_changed",
+                entity_type="game",
+                entity_id=app_id,
+                before=before,
+                after=after,
+            )
+
+    def managed_games(
+        self,
+        *,
+        status: str | None = None,
+        search: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        conditions = ["g.managed = 1"]
+        params: list[object] = []
+        if status:
+            if status == "no_license":
+                conditions.append(
+                    """
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM account_games ag
+                        JOIN accounts a ON a.steam_id = ag.steam_id
+                        WHERE ag.app_id = g.app_id
+                            AND ag.owned = 1
+                            AND a.active = 1
+                    )
+                    """
+                )
+            elif status in GAME_CATALOG_STATUSES:
+                conditions.append("g.catalog_status = ?")
+                params.append(status)
+            else:
+                raise ValueError(f"Неизвестный фильтр каталога: {status}")
+        if search:
+            conditions.append(
+                """
+                (
+                    CAST(g.app_id AS TEXT) LIKE ?
+                    OR g.steam_name LIKE ?
+                    OR COALESCE(g.official_name, '') LIKE ?
+                )
+                """
+            )
+            pattern = f"%{search.strip()}%"
+            params.extend((pattern, pattern, pattern))
+        params.extend((max(1, min(int(limit), 500)), max(0, int(offset))))
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT
+                        g.app_id,
+                        g.steam_name,
+                        g.official_name,
+                        g.catalog_status,
+                        g.player_count,
+                        g.manager_description,
+                        g.manager_comment,
+                        (
+                            SELECT COUNT(*)
+                            FROM account_games ag
+                            JOIN accounts a ON a.steam_id = ag.steam_id
+                            WHERE ag.app_id = g.app_id
+                                AND ag.owned = 1
+                                AND a.active = 1
+                        ) AS owned_count
+                    FROM games g
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY g.steam_name, g.app_id
+                    LIMIT ? OFFSET ?
+                    """,
+                    params,
+                )
+            )
+
+    def managed_game(self, app_id: int) -> sqlite3.Row:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    g.*,
+                    gm.store_description,
+                    gm.source_language,
+                    gm.genres_json,
+                    gm.categories_json,
+                    gm.header_image,
+                    gm.updated_at AS metadata_updated_at,
+                    gm.last_error,
+                    (
+                        SELECT COUNT(*)
+                        FROM account_games ag
+                        JOIN accounts a ON a.steam_id = ag.steam_id
+                        WHERE ag.app_id = g.app_id
+                            AND ag.owned = 1
+                            AND a.active = 1
+                    ) AS owned_count,
+                    (
+                        SELECT COUNT(*)
+                        FROM accounts
+                        WHERE active = 1
+                    ) AS account_count,
+                    (
+                        SELECT MAX(valid_to)
+                        FROM promotions p
+                        WHERE p.app_id = g.app_id
+                            AND p.is_test = 0
+                            AND p.status = 'approved'
+                    ) AS last_promotion
+                FROM games g
+                LEFT JOIN game_metadata gm ON gm.app_id = g.app_id
+                WHERE g.app_id = ? AND g.managed = 1
+                """,
+                (app_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Игра AppID {app_id} не найдена в каталоге")
+            return row
+
+    def game_license_rows(self, app_id: int) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        a.steam_id,
+                        a.vanity_url,
+                        a.club_name,
+                        a.active,
+                        COALESCE(ag.owned, 0) AS owned,
+                        COALESCE(ag.last_playtime_minutes, 0)
+                            AS playtime_minutes,
+                        ag.last_seen_at
+                    FROM accounts a
+                    LEFT JOIN account_games ag
+                        ON ag.steam_id = a.steam_id
+                        AND ag.app_id = ?
+                    ORDER BY a.active DESC, a.club_name, a.vanity_url
+                    """,
+                    (app_id,),
+                )
+            )
+
+    def managed_accounts(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        a.*,
+                        SUM(CASE WHEN ag.owned = 1 THEN 1 ELSE 0 END)
+                            AS owned_games
+                    FROM accounts a
+                    LEFT JOIN account_games ag ON ag.steam_id = a.steam_id
+                    GROUP BY a.steam_id
+                    ORDER BY a.active DESC, a.club_name, a.vanity_url,
+                             a.steam_id
+                    """
+                )
+            )
+
+    def managed_account(self, steam_id: str) -> sqlite3.Row:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    a.*,
+                    SUM(CASE WHEN ag.owned = 1 THEN 1 ELSE 0 END)
+                        AS owned_games
+                FROM accounts a
+                LEFT JOIN account_games ag ON ag.steam_id = a.steam_id
+                WHERE a.steam_id = ?
+                GROUP BY a.steam_id
+                """,
+                (steam_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Steam-аккаунт {steam_id} не найден")
+            return row
+
+    def upsert_managed_account(
+        self,
+        *,
+        steam_id: str,
+        vanity_url: str | None,
+        club_name: str | None,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        steam_id = str(steam_id).strip()
+        if not steam_id.isdigit():
+            raise ValueError("SteamID должен содержать только цифры")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM accounts WHERE steam_id = ?",
+                (steam_id,),
+            ).fetchone()
+            before = dict(row) if row else None
+            conn.execute(
+                """
+                INSERT INTO accounts (
+                    steam_id, vanity_url, club_name, active, updated_at
+                ) VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(steam_id) DO UPDATE SET
+                    vanity_url = excluded.vanity_url,
+                    club_name = excluded.club_name,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    steam_id,
+                    str(vanity_url or "").strip() or None,
+                    str(club_name or "").strip() or None,
+                    utc_now(),
+                ),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM accounts WHERE steam_id = ?",
+                    (steam_id,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="account_added" if before is None else "account_updated",
+                entity_type="account",
+                entity_id=steam_id,
+                before=before,
+                after=after,
+            )
+
+    def set_account_active(
+        self,
+        steam_id: str,
+        active: bool,
+        *,
+        actor_id: str | None,
+        actor_name: str | None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM accounts WHERE steam_id = ?",
+                (steam_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Steam-аккаунт {steam_id} не найден")
+            before = dict(row)
+            conn.execute(
+                """
+                UPDATE accounts
+                SET active = ?, updated_at = ?
+                WHERE steam_id = ?
+                """,
+                (int(bool(active)), utc_now(), steam_id),
+            )
+            after = dict(
+                conn.execute(
+                    "SELECT * FROM accounts WHERE steam_id = ?",
+                    (steam_id,),
+                ).fetchone()
+            )
+            self._write_audit(
+                conn,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                action="account_activated" if active else "account_deactivated",
+                entity_type="account",
+                entity_id=steam_id,
+                before=before,
+                after=after,
+            )
+            if not active:
+                self._pause_unlicensed_games(
+                    conn,
+                    actor_id=actor_id,
+                    actor_name=actor_name,
+                )
 
     def active_steam_ids(self) -> list[str]:
         with self.connect() as conn:
@@ -569,6 +1351,11 @@ class TrackerStorage:
                 """,
                 (scanned_at, steam_id),
             )
+            self._pause_unlicensed_games(
+                conn,
+                actor_id="system",
+                actor_name="Steam license sync",
+            )
 
         return ScanResult(
             steam_id=steam_id,
@@ -600,11 +1387,29 @@ class TrackerStorage:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             game = conn.execute(
-                "SELECT is_approved FROM games WHERE app_id = ?",
+                """
+                SELECT
+                    g.is_approved,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_games ag
+                        JOIN accounts a ON a.steam_id = ag.steam_id
+                        WHERE ag.app_id = g.app_id
+                            AND ag.owned = 1
+                            AND a.active = 1
+                    ) AS has_license
+                FROM games g
+                WHERE g.app_id = ?
+                """,
                 (app_id,),
             ).fetchone()
             if game is None or not game["is_approved"]:
                 raise ValueError("Промо можно создать только для согласованной игры")
+            if not game["has_license"]:
+                raise ValueError(
+                    "Промо нельзя создать: лицензия игры не найдена "
+                    "ни на одном активном аккаунте"
+                )
             if not is_test and parsed_from and parsed_to:
                 overlap = conn.execute(
                     """
@@ -730,8 +1535,16 @@ class TrackerStorage:
                 for row in conn.execute(
                     """
                     SELECT app_id
-                    FROM games
-                    WHERE is_approved = 1
+                    FROM games g
+                    WHERE g.is_approved = 1
+                        AND EXISTS (
+                            SELECT 1
+                            FROM account_games ag
+                            JOIN accounts a ON a.steam_id = ag.steam_id
+                            WHERE ag.app_id = g.app_id
+                                AND ag.owned = 1
+                                AND a.active = 1
+                        )
                     ORDER BY app_id
                     """
                 )
@@ -945,7 +1758,15 @@ class TrackerStorage:
                 SELECT
                     p.*,
                     COALESCE(p.image_url, gm.header_image) AS publish_image_url,
-                    g.is_approved
+                    g.is_approved,
+                    EXISTS (
+                        SELECT 1
+                        FROM account_games ag
+                        JOIN accounts a ON a.steam_id = ag.steam_id
+                        WHERE ag.app_id = p.app_id
+                            AND ag.owned = 1
+                            AND a.active = 1
+                    ) AS has_license
                 FROM promotions p
                 JOIN games g ON g.app_id = p.app_id
                 LEFT JOIN game_metadata gm ON gm.app_id = p.app_id
@@ -973,6 +1794,11 @@ class TrackerStorage:
                 )
             if not promo["is_approved"]:
                 raise ValueError("Нельзя согласовать промо исключённой игры")
+            if not promo["has_license"]:
+                raise ValueError(
+                    "Нельзя согласовать промо: лицензия игры не найдена "
+                    "ни на одном активном аккаунте"
+                )
             if not all(
                 [
                     promo["employee_text"],
@@ -1298,8 +2124,16 @@ class TrackerStorage:
                 for row in conn.execute(
                     """
                     SELECT app_id
-                    FROM games
-                    WHERE is_approved = 1
+                    FROM games g
+                    WHERE g.is_approved = 1
+                        AND EXISTS (
+                            SELECT 1
+                            FROM account_games ag
+                            JOIN accounts a ON a.steam_id = ag.steam_id
+                            WHERE ag.app_id = g.app_id
+                                AND ag.owned = 1
+                                AND a.active = 1
+                        )
                     ORDER BY app_id
                     """
                 )
@@ -1351,6 +2185,27 @@ class TrackerStorage:
                 """,
                 (reference_date, reference_date),
             ).fetchone()
+
+    def has_real_promotion_for_period(
+        self,
+        valid_from: str,
+        valid_to: str,
+    ) -> bool:
+        with self.connect() as conn:
+            return (
+                conn.execute(
+                    """
+                    SELECT 1
+                    FROM promotions
+                    WHERE is_test = 0
+                        AND valid_from = ?
+                        AND valid_to = ?
+                    LIMIT 1
+                    """,
+                    (valid_from, valid_to),
+                ).fetchone()
+                is not None
+            )
 
     def promotion_admin_row(self, promotion_id: int) -> sqlite3.Row:
         with self.connect() as conn:
@@ -1533,7 +2388,7 @@ class TrackerStorage:
                         gm.updated_at AS metadata_updated_at
                     FROM games g
                     LEFT JOIN game_metadata gm ON gm.app_id = g.app_id
-                    WHERE g.is_approved = 1
+                    WHERE g.managed = 1
                     ORDER BY g.app_id
                     """
                 )
@@ -1707,9 +2562,11 @@ class TrackerStorage:
                         g.app_id,
                         g.steam_name,
                         g.official_name,
+                        g.catalog_status,
                         g.player_count,
                         g.base_description,
                         g.manager_description,
+                        g.manager_comment,
                         gm.store_description,
                         gm.source_language,
                         gm.genres_json,
@@ -1745,7 +2602,7 @@ class TrackerStorage:
                         ) AS last_rotation_cycle
                     FROM games g
                     LEFT JOIN game_metadata gm ON gm.app_id = g.app_id
-                    WHERE g.is_approved = 1
+                    WHERE g.managed = 1
                     ORDER BY g.steam_name
                     """
                 )
@@ -1779,7 +2636,19 @@ class TrackerStorage:
             ).fetchone()
             cycle_number = int(cycle_row["value"] or 1)
             approved = conn.execute(
-                "SELECT COUNT(*) FROM games WHERE is_approved = 1"
+                """
+                SELECT COUNT(*)
+                FROM games g
+                WHERE g.is_approved = 1
+                    AND EXISTS (
+                        SELECT 1
+                        FROM account_games ag
+                        JOIN accounts a ON a.steam_id = ag.steam_id
+                        WHERE ag.app_id = g.app_id
+                            AND ag.owned = 1
+                            AND a.active = 1
+                    )
+                """
             ).fetchone()[0]
             used = conn.execute(
                 """

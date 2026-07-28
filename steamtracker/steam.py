@@ -87,14 +87,10 @@ class LicenseSyncService:
 
         for steam_id in self.storage.active_steam_ids():
             try:
-                games = self.client.get_owned_games(steam_id)
                 results.append(
-                    self.storage.record_account_scan(
+                    self.sync_account(
                         steam_id,
-                        games,
-                        scanned_at=timestamp,
-                        snapshot_date=timestamp[:10],
-                        removal_threshold=self.removal_threshold,
+                        timestamp=timestamp,
                     )
                 )
             except Exception as error:
@@ -107,4 +103,22 @@ class LicenseSyncService:
             licenses_added=sum(result.added for result in results),
             licenses_removed=sum(result.removed for result in results),
             errors=errors,
+        )
+
+    def sync_account(
+        self,
+        steam_id: str,
+        *,
+        timestamp: str | None = None,
+    ) -> ScanResult:
+        timestamp = timestamp or datetime.now(UTC).replace(
+            microsecond=0
+        ).isoformat()
+        games = self.client.get_owned_games(steam_id)
+        return self.storage.record_account_scan(
+            steam_id,
+            games,
+            scanned_at=timestamp,
+            snapshot_date=timestamp[:10],
+            removal_threshold=self.removal_threshold,
         )

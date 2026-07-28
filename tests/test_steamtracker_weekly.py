@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from steamtracker.db import TrackerStorage
+from steamtracker.db import OwnedGame, TrackerStorage
 from steamtracker.promo import DryRunPublisher, FakeGenerator, PromotionWorkflow
 from steamtracker.weekly import WeeklyPromotionService, week_period
 
@@ -46,6 +46,26 @@ class WeeklyPromotionTests(unittest.TestCase):
                     "base_description": "Одиночная игра.",
                 },
             ]
+        )
+        self.storage.upsert_managed_account(
+            steam_id="76561198000000001",
+            vanity_url="zone-1",
+            club_name="Клуб",
+            actor_id="test",
+            actor_name="Test",
+        )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Licensed Game One", 0),
+                OwnedGame(20, "Licensed Game Two", 0),
+            ],
+        )
+        self.storage.update_tracker_setting(
+            "weekly_promo_enabled",
+            "true",
+            actor_id="test",
+            actor_name="Test",
         )
         self.sheets = FakeSheets()
         self.workflow = PromotionWorkflow(
