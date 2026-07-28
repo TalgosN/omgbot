@@ -391,6 +391,16 @@ def validate_manager_description(value: str) -> None:
         raise ValueError("Не найден блок «Кому рекомендовать»")
 
 
+def manager_description_facts(row: dict) -> dict:
+    """Возвращает тот же набор фактов для CLI и Telegram-карточки."""
+    return _generation_facts(dict(row))
+
+
+def manager_description_source_fingerprint(row: dict) -> str:
+    """Фиксирует исходные факты, чтобы не сохранить устаревший текст."""
+    return _source_fingerprint(dict(row))
+
+
 def _validated_part(
     result: dict,
     key: str,

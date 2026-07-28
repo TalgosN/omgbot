@@ -408,6 +408,148 @@ class StageTwoTests(unittest.TestCase):
         error = show_error.call_args.args[2]
         self.assertIsInstance(error, PermissionError)
 
+    def test_manager_can_preview_and_apply_generated_game_description(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        generated_text = (
+            "Динамичная VR-игра с понятными правилами и насыщенным "
+            "игровым процессом. Она быстро погружает гостя в виртуальный "
+            "мир и дарит яркие эмоции.\n\n"
+            "Кому рекомендовать: гостям, которые любят активные "
+            "развлечения и хотят быстро освоиться в виртуальной реальности."
+        )
+        row = {
+            "app_id": 10,
+            "steam_name": "Test Game",
+            "catalog_status": "active",
+            "player_count": 1,
+            "manager_description": None,
+            "manager_comment": "Комментарий",
+            "store_description": "Исходное описание Steam.",
+            "base_description": None,
+            "source_language": "ru",
+            "genres_json": "[]",
+            "categories_json": "[]",
+        }
+        storage = Mock()
+        storage.managed_game.return_value = row
+        generator = Mock()
+        generator.generate.return_value = types.SimpleNamespace(
+            text=generated_text,
+        )
+        settings = Mock()
+        bot = Mock()
+        bot.send_message.side_effect = [
+            types.SimpleNamespace(message_id=40),
+            types.SimpleNamespace(message_id=41),
+            types.SimpleNamespace(message_id=42),
+        ]
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=100))
+        call = types.SimpleNamespace(
+            message=message,
+            from_user=types.SimpleNamespace(
+                id=200,
+                username="manager",
+                is_bot=False,
+            ),
+        )
+        user = {
+            "status": promo_admin.ROLE_MANAGER,
+            "login": "@manager",
+        }
+        promo_admin._context_messages.clear()
+        promo_admin._game_description_previews.clear()
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value=user,
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ), patch.object(
+            promo_admin,
+            "_runtime",
+            return_value=(settings, storage),
+        ), patch.object(
+            promo_admin,
+            "build_manager_description_generator",
+            return_value=generator,
+        ), patch.object(
+            promo_admin,
+            "_sync_tracker_data_best_effort",
+            return_value=None,
+        ), patch.object(
+            promo_admin,
+            "show_game_card",
+        ) as show_card:
+            promo_admin.show_game_edit_menu(message, 10, bot)
+            edit_markup = bot.send_message.call_args.kwargs["reply_markup"]
+            edit_callbacks = [
+                button.callback_data
+                for keyboard_row in edit_markup.keyboard
+                for button in keyboard_row
+            ]
+            self.assertIn("stpa:gdescgenerate:10", edit_callbacks)
+
+            promo_admin.generate_game_description(
+                message,
+                10,
+                bot,
+                update=call,
+            )
+            preview_markup = bot.send_message.call_args.kwargs[
+                "reply_markup"
+            ]
+            callbacks = [
+                button.callback_data
+                for keyboard_row in preview_markup.keyboard
+                for button in keyboard_row
+            ]
+            self.assertIn("stpa:gdescapply:10", callbacks)
+            self.assertIn("stpa:gdescgenerate:10", callbacks)
+            storage.update_managed_game.assert_not_called()
+
+            promo_admin.apply_generated_game_description(
+                message,
+                10,
+                bot,
+                update=call,
+                source_message=message,
+            )
+
+        storage.update_managed_game.assert_called_once_with(
+            10,
+            player_count=1,
+            manager_description=generated_text,
+            manager_comment="Комментарий",
+            actor_id="200",
+            actor_name="@manager",
+        )
+        show_card.assert_called_once()
+        self.assertNotIn(
+            ("200", 10),
+            promo_admin._game_description_previews,
+        )
+        promo_admin._context_messages.clear()
+        promo_admin._game_description_previews.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

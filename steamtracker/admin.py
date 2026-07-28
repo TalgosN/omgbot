@@ -10,6 +10,12 @@ from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, ROLE_OWNER, require_role
 
 from .config import Settings
 from .db import TrackerStorage
+from .description_backfill import (
+    build_manager_description_generator,
+    manager_description_facts,
+    manager_description_source_fingerprint,
+    validate_manager_description,
+)
 from .llm import build_generator
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
@@ -30,6 +36,8 @@ _context_messages: dict[int, set[int]] = {}
 _context_lock = threading.Lock()
 _promotion_action_locks: dict[int, threading.Lock] = {}
 _promotion_action_registry_lock = threading.Lock()
+_game_description_previews: dict[tuple[str, int], dict] = {}
+_game_description_preview_lock = threading.Lock()
 
 STATUS_LABELS = {
     "draft": "⚪ Черновик",
@@ -1832,6 +1840,7 @@ def show_game_edit_menu(
     bot,
     *,
     source_message=None,
+    notice: str | None = None,
 ):
     if not require_role(message, bot, ROLE_MANAGER):
         return
@@ -1849,6 +1858,10 @@ def show_game_edit_menu(
             callback_data=f"{CALLBACK_PREFIX}:geditdesc:{app_id}",
         ),
         types.InlineKeyboardButton(
+            "✨ Сгенерировать описание",
+            callback_data=f"{CALLBACK_PREFIX}:gdescgenerate:{app_id}",
+        ),
+        types.InlineKeyboardButton(
             "💬 Изменить комментарий",
             callback_data=f"{CALLBACK_PREFIX}:geditcomment:{app_id}",
         ),
@@ -1857,16 +1870,170 @@ def show_game_edit_menu(
             callback_data=f"{CALLBACK_PREFIX}:game:{app_id}",
         ),
     )
+    body = (
+        f"✏️ <b>Изменить: {escape(row['steam_name'])}</b>\n\n"
+        "Выберите поле."
+    )
+    if notice:
+        body = f"{escape(notice)}\n\n{body}"
+    _send_context_message(
+        message.chat.id,
+        bot,
+        body,
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def generate_game_description(
+    message,
+    app_id: int,
+    bot,
+    *,
+    update=None,
+    source_message=None,
+):
+    actor = update or message
+    if not require_role(actor, bot, ROLE_MANAGER):
+        return
+    wait = _send_context_message(
+        message.chat.id,
+        bot,
+        "⏳ Генерирую описание игры через OpenRouter…",
+        source_message=source_message,
+    )
+    try:
+        settings, storage = _runtime()
+        row = dict(storage.managed_game(app_id))
+        facts = manager_description_facts(row)
+        if not facts["source_description"]:
+            raise ValueError(
+                "Сначала обновите игру из Steam: исходное описание отсутствует"
+            )
+        proposal = build_manager_description_generator(settings).generate(
+            facts
+        )
+        validate_manager_description(proposal.text)
+        preview = {
+            "steam_name": str(row["steam_name"]),
+            "source_fingerprint": (
+                manager_description_source_fingerprint(row)
+            ),
+            "manager_description_before": str(
+                row.get("manager_description") or ""
+            ),
+            "proposed_description": proposal.text,
+        }
+        key = (_actor_id(actor), int(app_id))
+        with _game_description_preview_lock:
+            _game_description_previews[key] = preview
+    except Exception as error:
+        show_game_edit_menu(
+            message,
+            app_id,
+            bot,
+            source_message=wait,
+            notice=f"❌ Не удалось сгенерировать описание: {error}",
+        )
+        return
+
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "✅ Сохранить описание",
+            callback_data=f"{CALLBACK_PREFIX}:gdescapply:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "🔄 Сгенерировать заново",
+            callback_data=f"{CALLBACK_PREFIX}:gdescgenerate:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ Назад без сохранения",
+            callback_data=f"{CALLBACK_PREFIX}:geditmenu:{app_id}",
+        ),
+    )
+    warning = (
+        "\n\n⚠️ Текущее менеджерское описание будет заменено."
+        if preview["manager_description_before"]
+        else ""
+    )
     _send_context_message(
         message.chat.id,
         bot,
         (
-            f"✏️ <b>Изменить: {escape(row['steam_name'])}</b>\n\n"
-            "Выберите поле."
+            f"✨ <b>Черновик: {escape(preview['steam_name'])}</b>\n\n"
+            f"{escape(preview['proposed_description'])}"
+            f"{warning}"
         ),
         parse_mode="HTML",
         reply_markup=markup,
+        source_message=wait,
+    )
+
+
+def apply_generated_game_description(
+    message,
+    app_id: int,
+    bot,
+    *,
+    update=None,
+    source_message=None,
+):
+    actor = update or message
+    user = require_role(actor, bot, ROLE_MANAGER)
+    if not user:
+        return
+    key = (_actor_id(actor), int(app_id))
+    with _game_description_preview_lock:
+        preview = _game_description_previews.get(key)
+    if preview is None:
+        raise ValueError(
+            "Черновик не найден. Сгенерируйте описание заново."
+        )
+
+    settings, storage = _runtime()
+    row = dict(storage.managed_game(app_id))
+    if str(row["steam_name"]) != preview["steam_name"]:
+        raise ValueError(
+            "Название игры изменилось. Сгенерируйте описание заново."
+        )
+    if (
+        manager_description_source_fingerprint(row)
+        != preview["source_fingerprint"]
+    ):
+        raise ValueError(
+            "Данные игры изменились. Сгенерируйте описание заново."
+        )
+    if str(row.get("manager_description") or "") != (
+        preview["manager_description_before"]
+    ):
+        raise ValueError(
+            "Описание уже изменил другой менеджер. "
+            "Сгенерируйте черновик заново."
+        )
+    validate_manager_description(preview["proposed_description"])
+    storage.update_managed_game(
+        app_id,
+        player_count=row["player_count"],
+        manager_description=preview["proposed_description"],
+        manager_comment=row["manager_comment"],
+        actor_id=_actor_id(actor),
+        actor_name=_actor_name(actor, user),
+    )
+    with _game_description_preview_lock:
+        _game_description_previews.pop(key, None)
+    warning = _sync_tracker_data_best_effort(settings, storage)
+    notice = "✅ Сгенерированное описание сохранено."
+    if warning:
+        notice += f"\n⚠️ {warning}"
+    show_game_card(
+        message,
+        app_id,
+        bot,
         source_message=source_message,
+        notice=notice,
     )
 
 
@@ -2995,6 +3162,8 @@ def register_promo_admin_callbacks(bot) -> None:
                 "catalog",
                 "game",
                 "geditmenu",
+                "gdescgenerate",
+                "gdescapply",
                 "gstatusmenu",
                 "missingreport",
                 "missingclub",
@@ -3136,6 +3305,24 @@ def register_promo_admin_callbacks(bot) -> None:
                     call.message,
                     int(parts[2]),
                     bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "gdescgenerate":
+                generate_game_description(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    update=call,
+                    source_message=call.message,
+                )
+                return
+            if action == "gdescapply":
+                apply_generated_game_description(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    update=call,
                     source_message=call.message,
                 )
                 return
