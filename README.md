@@ -131,6 +131,7 @@ OMG Shift является источником истины для реальн
 | --- | --- |
 | каждые 15 секунд | проверка очереди уведомлений OMG Shift |
 | каждую минуту | динамические рассылки и проверки открытия/закрытия |
+| `03:00` | согласованный backup SQLite с хранением последних 7 дней |
 | `04:30` | синхронизация Telegram chat ID и профилей с OMG Shift |
 | время `AutoCloseTime` каждого клуба | ночной сброс состояния физического клуба |
 | `09:00` | утреннее расписание; по понедельникам — финансовый отчёт в `CHAT_REPORTS` |
@@ -277,6 +278,23 @@ docker compose ps
 docker compose logs --tail=200 bot
 ```
 
+### Автоматические резервные копии
+
+Каждый день в `03:00` по Москве бот создаёт согласованные копии
+`db/omgbot.sql` и `db/steamtracker_v2.db` через SQLite Backup API, проверяет
+их командой `PRAGMA integrity_check` и хранит в `db/backups` 7 дней.
+Уведомление в `CHAT_ME` отправляется только при ошибке.
+
+Для внепланового запуска:
+
+```bash
+docker compose exec bot python backup.py
+```
+
+Перед восстановлением остановите бот и KPI-приложение. Сначала сохраните
+текущие файлы баз отдельно, затем замените нужную базу проверенной копией из
+`db/backups` и запустите сервисы снова.
+
 `.env`, база, Google-ключ и `data/*.json` не обновляются через Git. После `git pull` они остаются на сервере. При запуске бот добавляет только отсутствующие рабочие таблицы.
 
 ### Чек-лист после деплоя
@@ -407,3 +425,10 @@ The helper also saves the current URL in `data/kpi_webapp_url.txt`, so the
 `/kpi` bot command starts using it without another bot restart. Quick Tunnel
 URLs can change after a tunnel restart; rerun the last two commands when that
 happens.
+
+The default `Мой KPI` screen shows the current employee's place, KPI, worked
+and weighted shifts, per-shift pace, distance from the team average and the
+exact contribution of every metric. Employees still have unrestricted access
+to the full team rating and other employee cards. Metric details show the
+stored source where it can be determined reliably. The freshness block reports
+the calculation time and the dates of the latest KPI record and shift.

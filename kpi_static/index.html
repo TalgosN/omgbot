@@ -22,21 +22,32 @@
     </header>
 
     <nav class="view-tabs" aria-label="Разделы KPI">
-      <button class="view-tab active" type="button" data-view="rating">Рейтинг</button>
+      <button class="view-tab active" type="button" data-view="my">Мой KPI</button>
+      <button class="view-tab" type="button" data-view="rating">Рейтинг</button>
       <button class="view-tab" type="button" data-view="analytics">Аналитика</button>
     </nav>
 
-    <section id="ratingView">
-      <section class="period-panel">
-        <button id="previousDay" class="icon-button" aria-label="Предыдущий день">‹</button>
-        <label class="date-label">
-          <span>Рейтинг на дату</span>
-          <strong id="dateDisplay">28.07.2026</strong>
-          <input id="datePicker" type="date" aria-label="Выбрать дату">
-        </label>
-        <button id="nextDay" class="icon-button" aria-label="Следующий день">›</button>
-        <button id="monthStatusButton" class="status-button" hidden></button>
+    <section class="period-panel">
+      <button id="previousDay" class="icon-button" aria-label="Предыдущий день">‹</button>
+      <label class="date-label">
+        <span>KPI на дату</span>
+        <strong id="dateDisplay">28.07.2026</strong>
+        <input id="datePicker" type="date" aria-label="Выбрать дату">
+      </label>
+      <button id="nextDay" class="icon-button" aria-label="Следующий день">›</button>
+      <button id="monthStatusButton" class="status-button" hidden></button>
+    </section>
+
+    <section id="myView" class="my-view">
+      <section id="freshness" class="freshness-card" aria-live="polite">
+        <div class="loading-line"></div>
       </section>
+      <section id="myKpi" aria-live="polite">
+        <div class="loading-card"></div>
+      </section>
+    </section>
+
+    <section id="ratingView" hidden>
 
       <section id="summary" class="summary-grid" aria-live="polite"></section>
 

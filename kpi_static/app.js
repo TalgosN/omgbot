@@ -14,6 +14,8 @@ const state = {
   employees: [],
   penalties: [],
   monthStatus: null,
+  myKpi: null,
+  freshness: null,
   selected: null,
   analytics: null,
   analyticsEmployees: new Set(),
@@ -151,6 +153,143 @@ function kpiMovement(item) {
   return `<small class="movement ${direction}">${signedPercent(item.kpi_change)}</small>`;
 }
 
+function renderFreshness() {
+  const freshness = state.freshness || {};
+  const calculated = freshness.calculated_at
+    ? new Intl.DateTimeFormat('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(freshness.calculated_at))
+    : '—';
+  const recordDate = (value) => (value ? numericDayLabel(value) : 'записей нет');
+  $('#freshness').innerHTML = `
+    <div>
+      <span class="freshness-dot"></span>
+      <div>
+        <strong>Рассчитано ${calculated}</strong>
+        <small>KPI-запись: ${recordDate(freshness.latest_metric_date)}
+          · смена: ${recordDate(freshness.latest_shift_date)}</small>
+      </div>
+    </div>
+    <button id="refreshKpi" type="button">Обновить</button>
+  `;
+}
+
+function explanationMetric(item, compact = false) {
+  const target = item.target == null
+    ? 'Каждая инициатива добавляет 1% к итоговому KPI'
+    : `Норма на ${number(state.myKpi?.shifts || 0)} смен: ${number(item.target)}`;
+  const needed = item.target != null && item.needed > 0
+    ? `<small class="metric-gap">До нормы: ${number(item.needed)}</small>`
+    : '<small class="metric-done">Норма выполнена</small>';
+  return `
+    <button class="explanation-metric${compact ? ' compact' : ''}" type="button"
+      data-metric="${item.key}">
+      <div>
+        <span>${escapeHtml(item.label)}</span>
+        <small>${target}</small>
+      </div>
+      <div class="explanation-values">
+        <strong>${number(item.fact)} · ${percent(item.ratio)}</strong>
+        <em>Вклад ${signedPercent(item.contribution_pct)}</em>
+        ${item.target == null ? '' : needed}
+      </div>
+    </button>
+  `;
+}
+
+function renderMyKpi() {
+  const container = $('#myKpi');
+  const employee = state.myKpi;
+  if (!employee) {
+    container.innerHTML = `
+      <div class="empty my-empty">
+        KPI-профиль не найден. Проверьте Telegram-логин в разделе «Аккаунт».
+      </div>
+    `;
+    return;
+  }
+  const explanation = employee.explanation || {};
+  const pace = explanation.pace || {};
+  const metrics = explanation.metrics || [];
+  const paceText = pace.available
+    ? percent(pace.projected_pct)
+    : 'Нет смен';
+  const greenText = pace.gap_to_green_pct > 0
+    ? `До среднего команды: ${percent(pace.gap_to_green_pct)}`
+    : 'Не ниже среднего команды';
+  const adjustments = [
+    explanation.penalty_impact_pct
+      ? `<span class="negative">Штрафы −${percent(explanation.penalty_impact_pct)}</span>`
+      : '',
+    explanation.stream_bonus_pct
+      ? `<span class="positive">Трансляция +${percent(explanation.stream_bonus_pct)}</span>`
+      : '',
+  ].filter(Boolean).join('');
+
+  container.innerHTML = `
+    <article class="my-hero">
+      <div class="my-hero-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(employee.login)} · ${dayLabel(state.day)}</p>
+          <h2>${escapeHtml(employee.nickname)}</h2>
+        </div>
+        <span class="zone-badge">${employee.zone}</span>
+      </div>
+      <div class="my-score-grid">
+        <div>
+          <span>Мой KPI</span>
+          <strong>${percent(employee.total_pct)}</strong>
+          ${kpiMovement(employee)}
+        </div>
+        <div>
+          <span>Место</span>
+          <strong>${employee.rank ?? '—'}</strong>
+          ${rankMovement(employee)}
+        </div>
+        <div>
+          <span>Смены</span>
+          <strong>${number(employee.shifts)}</strong>
+          <small>взвешенные ${number(employee.weighted_shifts)}</small>
+        </div>
+      </div>
+      <div class="pace-card">
+        <div>
+          <span>Прогноз по фактически отработанным сменам</span>
+          <strong>${paceText}</strong>
+        </div>
+        <small>${greenText}</small>
+      </div>
+      ${adjustments ? `<div class="adjustments">${adjustments}</div>` : ''}
+      <button class="secondary-button open-my-detail" type="button">
+        Открыть полную карточку
+      </button>
+    </article>
+    <section class="explanation-card">
+      <div class="explanation-heading">
+        <div>
+          <p class="eyebrow">Расшифровка</p>
+          <h2>Из чего сложился KPI</h2>
+        </div>
+        <strong>${percent(explanation.total_pct)}</strong>
+      </div>
+      <p class="formula-note">
+        Основные показатели делятся на норму для фактических смен.
+        Нажмите показатель, чтобы увидеть исходные записи.
+      </p>
+      <div class="explanation-list">
+        ${metrics.map((item) => explanationMetric(item)).join('')}
+      </div>
+      <div class="formula-total">
+        <span>Вклад показателей</span>
+        <strong>${percent(explanation.metric_contribution_pct)}</strong>
+      </div>
+    </section>
+  `;
+}
+
 function renderEmployees() {
   const query = $('#searchInput').value.trim().toLowerCase();
   const rows = state.employees
@@ -200,10 +339,14 @@ function renderEmployees() {
   }).join('');
 }
 
-function metric(label, key, fact, ratio) {
+function metric(label, key, fact, ratio, explanation = null) {
+  const details = explanation
+    ? `Норма: ${explanation.target == null ? '1% за инициативу' : number(explanation.target)}
+       · вклад ${signedPercent(explanation.contribution_pct)}`
+    : 'Показать записи';
   return `
     <button class="metric-row" type="button" data-metric="${key}">
-      <span>${label}<small>Показать записи</small></span>
+      <span>${label}<small>${details}</small></span>
       <strong>${number(fact)} · ${percent(ratio)}</strong>
       <b aria-hidden="true">›</b>
     </button>
@@ -216,6 +359,9 @@ function renderDialog(employee) {
   $('#dialogName').textContent = employee.nickname;
   const penalties = state.penalties.filter(
     (item) => item.employee_login.toLowerCase() === employee.login.toLowerCase(),
+  );
+  const explanation = Object.fromEntries(
+    (employee.explanation?.metrics || []).map((item) => [item.key, item]),
   );
   $('#dialogContent').innerHTML = `
     <div class="detail-grid">
@@ -236,12 +382,12 @@ function renderDialog(employee) {
     </div>
     <p class="weighted-note">Значения в скобках — взвешенные.</p>
     <h3 class="section-title">Показатели</h3>
-    ${metric('Отзывы', 'reviews', employee.reviews, employee.reviews_pct)}
-    ${metric('Анкеты', 'forms', employee.forms, employee.forms_pct)}
-    ${metric('Продления', 'extensions', employee.extensions, employee.extensions_pct)}
-    ${metric('Сертификаты', 'certificates', employee.certificates, employee.certificates_pct)}
-    ${metric('Абонементы', 'subscriptions', employee.subscriptions, employee.subscriptions_pct)}
-    ${metric('Инициативы', 'initiatives', employee.initiatives, employee.initiatives_pct)}
+    ${metric('Отзывы', 'reviews', employee.reviews, employee.reviews_pct, explanation.reviews)}
+    ${metric('Анкеты', 'forms', employee.forms, employee.forms_pct, explanation.forms)}
+    ${metric('Продления', 'extensions', employee.extensions, employee.extensions_pct, explanation.extensions)}
+    ${metric('Сертификаты', 'certificates', employee.certificates, employee.certificates_pct, explanation.certificates)}
+    ${metric('Абонементы', 'subscriptions', employee.subscriptions, employee.subscriptions_pct, explanation.subscriptions)}
+    ${metric('Инициативы', 'initiatives', employee.initiatives, employee.initiatives_pct, explanation.initiatives)}
     <h3 class="section-title">Штрафы</h3>
     <div class="penalty-list">
       ${penalties.length ? penalties.map((item) => `
@@ -294,6 +440,7 @@ async function showMetricEntries(metricKey) {
           ${(item.club || item.status) ? `
             <small>${[item.club, item.status].filter(Boolean).map(escapeHtml).join(' · ')}</small>
           ` : ''}
+          ${item.source ? `<small>Источник: ${escapeHtml(item.source)}</small>` : ''}
         </article>
       `).join('')
       : '<div class="empty">До выбранной даты записей нет</div>';
@@ -312,13 +459,18 @@ async function loadData() {
     state.employees = payload.employees;
     state.penalties = payload.penalties;
     state.monthStatus = payload.month_status;
+    state.myKpi = payload.my_kpi;
+    state.freshness = payload.freshness;
     $('#datePicker').value = state.day;
     $('#dateDisplay').textContent = numericDayLabel(state.day);
     renderSummary();
     renderStatus();
+    renderFreshness();
+    renderMyKpi();
     renderEmployees();
   } catch (error) {
     employeeList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    $('#myKpi').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     showToast(error.message, true);
   }
 }
@@ -713,10 +865,28 @@ document.querySelector('.view-tabs').addEventListener('click', async (event) => 
   document.querySelectorAll('.view-tab').forEach(
     (button) => button.classList.toggle('active', button === tab),
   );
-  const analytics = tab.dataset.view === 'analytics';
-  $('#ratingView').hidden = analytics;
+  const view = tab.dataset.view;
+  const analytics = view === 'analytics';
+  $('#myView').hidden = view !== 'my';
+  $('#ratingView').hidden = view !== 'rating';
   $('#analyticsView').hidden = !analytics;
+  document.querySelector('.period-panel').hidden = analytics;
   if (analytics && !state.analytics) await loadAnalytics();
+});
+
+$('#myKpi').addEventListener('click', async (event) => {
+  if (!state.myKpi) return;
+  const metricButton = event.target.closest('[data-metric]');
+  if (metricButton) {
+    state.selected = state.myKpi;
+    await showMetricEntries(metricButton.dataset.metric);
+    return;
+  }
+  if (event.target.closest('.open-my-detail')) renderDialog(state.myKpi);
+});
+
+$('#freshness').addEventListener('click', (event) => {
+  if (event.target.closest('#refreshKpi')) loadData();
 });
 
 $('#analyticsMode').addEventListener('change', () => loadAnalytics());

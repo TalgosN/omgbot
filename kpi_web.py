@@ -6,7 +6,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 from urllib.parse import parse_qsl
 
@@ -20,6 +20,7 @@ from kpi_calculator import (
     cancel_penalty,
     get_month_status,
     get_metric_entries,
+    get_kpi_freshness,
     initialize_kpi_calculation_schema,
     list_penalties,
     set_month_status,
@@ -278,6 +279,73 @@ def _actor_login():
     return str(g.kpi_user.get('login') or '').strip().lower()
 
 
+def _employee_explanation(row):
+    shifts = float(row.get('shifts', 0) or 0)
+    metric_specs = (
+        ('reviews', 'Отзывы', 1 / 3),
+        ('forms', 'Анкеты', 1 / 3),
+        ('extensions', 'Продления', 1 / 3),
+        ('certificates', 'Сертификаты', 0.10),
+        ('subscriptions', 'Абонементы', 0.10),
+    )
+    metrics = []
+    for key, label, weight in metric_specs:
+        fact = float(row.get(key, 0) or 0)
+        plan_per_shift = float(row.get(f'{key}_plan_per_shift', 0) or 0)
+        target = float(
+            row.get(f'{key}_target', shifts * plan_per_shift) or 0
+        )
+        ratio = float(row.get(f'{key}_pct', 0) or 0)
+        metrics.append({
+            'key': key,
+            'label': label,
+            'fact': fact,
+            'plan_per_shift': plan_per_shift,
+            'target': target,
+            'needed': max(target - fact, 0),
+            'ratio': ratio,
+            'weight': weight,
+            'contribution_pct': ratio * weight,
+        })
+
+    initiative_fact = float(row.get('initiatives', 0) or 0)
+    initiative_ratio = float(row.get('initiatives_pct', 0) or 0)
+    metrics.append({
+        'key': 'initiatives',
+        'label': 'Инициативы',
+        'fact': initiative_fact,
+        'plan_per_shift': None,
+        'target': None,
+        'needed': 0,
+        'ratio': initiative_ratio,
+        'weight': 0.10,
+        'contribution_pct': initiative_ratio * 0.10,
+    })
+
+    metric_contribution = sum(
+        metric['contribution_pct']
+        for metric in metrics
+    )
+    penalty_impact = float(row.get('penalty_impact', 0) or 0)
+    stream_bonus = float(row.get('stream_bonus', 0) or 0)
+    total_pct = float(row.get('total_pct', 0) or 0)
+    average_pct = float(row.get('average_pct', 0) or 0)
+    return {
+        'metrics': metrics,
+        'metric_contribution_pct': metric_contribution,
+        'penalty_impact_pct': penalty_impact,
+        'stream_bonus_pct': stream_bonus,
+        'total_pct': total_pct,
+        'pace': {
+            'available': shifts > 0,
+            'shifts': shifts,
+            'projected_pct': total_pct if shifts > 0 else 0,
+            'green_threshold_pct': average_pct,
+            'gap_to_green_pct': max(average_pct - total_pct, 0),
+        },
+    }
+
+
 @app.after_request
 def add_security_headers(response):
     response.headers['Cache-Control'] = 'no-store'
@@ -334,8 +402,9 @@ def api_kpi():
         request.args.get('date') or _default_day(month),
         month,
     )
+    active_logins = _active_employee_logins()
     employee_logins = _employee_logins_with_month_shifts(
-        _active_employee_logins(),
+        active_logins,
         month,
     )
     rows = calculate_monthly_kpi(
@@ -367,13 +436,40 @@ def api_kpi():
             )
             else None
         )
+        row['explanation'] = _employee_explanation(row)
     penalties = list_penalties(month)
+    current_login = _actor_login()
+    current_employee = next(
+        (
+            row
+            for row in rows
+            if str(row.get('login') or '').strip().lower() == current_login
+        ),
+        None,
+    )
+    if current_employee is None and current_login in set(active_logins):
+        personal_rows = calculate_monthly_kpi(
+            month,
+            employee_logins=[current_login],
+            period_end=selected_day,
+        )
+        if personal_rows:
+            current_employee = personal_rows[0]
+            current_employee['kpi_change'] = None
+            current_employee['rank_change'] = None
+            current_employee['explanation'] = _employee_explanation(
+                current_employee
+            )
+    freshness = get_kpi_freshness(month, period_end=selected_day)
+    freshness['calculated_at'] = datetime.now(UTC).isoformat()
     return jsonify({
         'month': month[:7],
         'date': selected_day,
         'month_status': get_month_status(month),
         'employees': rows,
         'penalties': penalties,
+        'my_kpi': current_employee,
+        'freshness': freshness,
     })
 
 

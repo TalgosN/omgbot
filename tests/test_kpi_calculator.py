@@ -166,6 +166,8 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertAlmostEqual(row['shifts'], 2.5)
         self.assertAlmostEqual(row['weighted_shifts'], 3.5)
         self.assertEqual(row['forms'], 2)
+        self.assertEqual(row['forms_plan_per_shift'], 1)
+        self.assertEqual(row['forms_target'], 2.5)
         self.assertEqual(row['penalties'], 1)
         self.assertTrue(row['stream'])
         self.assertEqual(row['birthdays'], 1)
@@ -291,6 +293,31 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]['date'], '2026-07-05')
         self.assertEqual(entries[0]['description'], 'Хороший отзыв')
+        self.assertEqual(entries[0]['source'], 'Локальная база KPI')
+
+    def test_freshness_returns_latest_metric_and_shift_dates(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO users VALUES (1, '@employee', 'Test', 'User', 'Tester', 0)"
+        )
+        conn.execute(
+            "INSERT INTO shifts VALUES ('User', 'Test', '2026-07-08', "
+            "'Дмитровка', 6, 'test', '@employee')"
+        )
+        conn.execute(
+            "INSERT INTO reviews VALUES (1, '@employee', '2026-07-09', 1, '')"
+        )
+        conn.commit()
+        conn.close()
+
+        freshness = kpi_calculator.get_kpi_freshness(
+            '2026-07',
+            period_end='2026-07-15',
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(freshness['latest_metric_date'], '2026-07-09')
+        self.assertEqual(freshness['latest_shift_date'], '2026-07-08')
 
     def test_zones_are_relative_to_average_for_employees_with_shifts(self):
         conn = sqlite3.connect(self.db_path)

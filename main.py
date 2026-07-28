@@ -142,6 +142,13 @@ def schedule_func(bot): # Не забудь передать bot!
     schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks)
     schedule.every().day.at("09:20:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
 
+    from backup import run_scheduled_backup
+    schedule.every().day.at("03:00:00", 'Europe/Moscow').do(
+        run_scheduled_backup,
+        bot,
+        CHATS['me'],
+    )
+
     from rasp import start_shifton_chat_sync, start_shifton_notifications_check
     start_shifton_chat_sync()
     schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)

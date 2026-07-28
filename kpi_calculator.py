@@ -674,6 +674,8 @@ def _build_kpi_rows(
         ):
             plan = metric_settings[metric][0]
             denominator = shifts * plan
+            row[f'{field}_plan_per_shift'] = plan
+            row[f'{field}_target'] = denominator
             row[f'{field}_pct'] = row[field] / denominator if denominator else 0.0
         row['initiatives_pct'] = row['initiatives'] * 0.10
 
@@ -996,28 +998,30 @@ def get_metric_entries(
 
     direct_queries = {
         'reviews': '''
-            SELECT ID, date(d_rep), amount, desc, NULL, NULL
+            SELECT ID, date(d_rep), amount, desc, NULL, NULL, 'Локальная база KPI'
             FROM reviews
             WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
         ''',
         'extensions': '''
-            SELECT ID, date(dt_rep), 1, desc, club, status
+            SELECT ID, date(dt_rep), 1, desc, club, status, 'Локальная база KPI'
             FROM afterparty
             WHERE lower(who)=? AND date(dt_rep) BETWEEN date(?) AND date(?)
               AND COALESCE(status, '') <> 'Отклонено'
         ''',
         'certificates': '''
-            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'), NULL, NULL
+            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'),
+                   NULL, NULL, 'Локальная база KPI'
             FROM sert
             WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
         ''',
         'subscriptions': '''
-            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'), NULL, NULL
+            SELECT ID, date(d_rep), bonus, '№ ' || COALESCE(num, '—'),
+                   NULL, NULL, 'Локальная база KPI'
             FROM abik
             WHERE lower(who)=? AND date(d_rep) BETWEEN date(?) AND date(?)
         ''',
         'initiatives': '''
-            SELECT ID, date(dt_rep), 1, desc, club, status
+            SELECT ID, date(dt_rep), 1, desc, club, status, 'Локальная база KPI'
             FROM initiative
             WHERE lower(who)=? AND date(dt_rep) BETWEEN date(?) AND date(?)
               AND COALESCE(status, '') <> 'Отклонено'
@@ -1031,7 +1035,8 @@ def get_metric_entries(
             rows = conn.execute(
                 f'''
                 SELECT NULL, date(dt_rep), fact,
-                       'Распределено по сменам', NULL, NULL
+                       'Распределено по сменам', NULL, NULL,
+                       'Распределение анкет по сменам'
                 FROM ({union_sql}) source
                 WHERE lower(s_name)=? AND kpi='Анкеты'
                   AND date(dt_rep) BETWEEN date(?) AND date(?)
@@ -1045,7 +1050,7 @@ def get_metric_entries(
                 SELECT sh.rowid, date(substr(sh.dt_shift, 1, 10)),
                        sh.dur / 6.0,
                        printf('%g ч · %s', sh.dur, COALESCE(sh.source, 'смена')),
-                       sh.club, NULL
+                       sh.club, NULL, COALESCE(sh.source, 'История смен')
                 FROM shifts sh
                 JOIN users ns ON (
                     sh.shift_login IS NOT NULL
@@ -1080,9 +1085,44 @@ def get_metric_entries(
             'description': row[3],
             'club': row[4],
             'status': row[5],
+            'source': row[6],
         }
         for row in rows
     ]
+
+
+def get_kpi_freshness(period_month, period_end=None, db_path=DB_PATH):
+    month = _month_start(period_month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+
+    union_sql = sql_scripts.union.strip().rstrip(';')
+    conn = sqlite3.connect(db_path)
+    try:
+        latest_metric_date = conn.execute(
+            f'''
+            SELECT MAX(date(dt_rep))
+            FROM ({union_sql}) source
+            WHERE date(dt_rep) BETWEEN date(?) AND date(?)
+              AND kpi <> 'Штрафы'
+            ''',
+            (month.isoformat(), end.isoformat()),
+        ).fetchone()[0]
+        latest_shift_date = conn.execute(
+            '''
+            SELECT MAX(date(substr(dt_shift, 1, 10)))
+            FROM shifts
+            WHERE date(substr(dt_shift, 1, 10)) BETWEEN date(?) AND date(?)
+            ''',
+            (month.isoformat(), end.isoformat()),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        'latest_metric_date': latest_metric_date,
+        'latest_shift_date': latest_shift_date,
+    }
 
 
 def get_kpi_control_status(period_month, db_path=DB_PATH):
