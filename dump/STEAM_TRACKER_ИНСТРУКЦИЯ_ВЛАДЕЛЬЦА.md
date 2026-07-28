@@ -22,7 +22,7 @@
 
 ### Сотрудник
 
-- видит `Steam Tracker` первой кнопкой главного меню;
+- видит `Steam Tracker` в главном меню сразу после `Расписания`;
 - просматривает только активные игры;
 - открывает карточки и проверяет наличие игры на активных ПК;
 - не может менять каталог, статусы, данные Steam или промо.
@@ -257,6 +257,53 @@ Steam Store недостаточен.
 `Каталог игр → Отсутствующие лицензии`. Он учитывает только активные игры
 и активные аккаунты, группирует проблемы по клубам и показывает конкретные
 игры и зоны.
+
+### Разовое заполнение менеджерских описаний
+
+Генерация использует текущие `OPENROUTER_API_KEY` и `OPENROUTER_MODEL`, но
+не изменяет SQLite. Для пилота из пяти игр:
+
+```bash
+docker compose run --rm bot python steamtracker_cli.py \
+  generate-manager-descriptions --limit 5
+```
+
+Черновики сохраняются на сервере в
+`Reports/steamtracker_manager_descriptions.json`. Внутри можно отредактировать
+поле `proposed_description`, не меняя AppID, название и fingerprint.
+
+Продолжить с оставшихся игр и повторить неудачные запросы:
+
+```bash
+docker compose run --rm bot python steamtracker_cli.py \
+  generate-manager-descriptions --resume --workers 3
+```
+
+Для выборочного пилота вместо `--limit` можно несколько раз передать
+`--app-id`:
+
+```bash
+docker compose run --rm bot python steamtracker_cli.py \
+  generate-manager-descriptions \
+  --app-id 620980 \
+  --app-id 555160
+```
+
+`--workers` задаёт от 1 до 5 параллельных запросов. По умолчанию используется
+один; для массового разового запуска достаточно трёх.
+
+После проверки применить готовые тексты:
+
+```bash
+docker compose run --rm bot python steamtracker_cli.py \
+  apply-manager-descriptions \
+  --confirm APPLY_MANAGER_DESCRIPTIONS
+```
+
+Применяются только записи со статусом `generated`. Игра должна оставаться
+активной, её название и исходные Steam-данные не должны измениться.
+Существующее ручное описание никогда не перезаписывается. Каждая запись
+фиксируется в аудите как `game_updated`.
 
 ## 9. Настройки игры недели
 

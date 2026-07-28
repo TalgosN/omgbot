@@ -112,6 +112,15 @@ class HelpMenuTest(unittest.TestCase):
 
         tracker_admin.promotion_admin_menu.assert_called_once_with(message, bot)
 
+    def test_steamtracker_follows_schedule_in_every_main_menu(self):
+        import constants
+
+        for buttons in constants.funclist.values():
+            self.assertEqual(
+                buttons.index('🎮 Steam Tracker'),
+                buttons.index('🗓 Расписание') + 1,
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

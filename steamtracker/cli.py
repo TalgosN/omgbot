@@ -10,6 +10,13 @@ from pathlib import Path
 from .catalog import read_catalog_csv, resolve_catalog
 from .config import Settings
 from .db import TrackerStorage
+from .description_backfill import (
+    APPLY_CONFIRMATION,
+    DEFAULT_ARTIFACT_PATH,
+    apply_description_artifact,
+    build_manager_description_generator,
+    generate_description_artifact,
+)
 from .llm import build_generator
 from .promo import DryRunPublisher, PromotionWorkflow
 from .sheets import GoogleSheetsManager
@@ -76,6 +83,38 @@ def command_enrich_store(
         SteamStoreClient(),
     ).enrich(force=args.force, limit=args.limit)
     print(json.dumps(summary.__dict__, ensure_ascii=False, indent=2))
+
+
+def command_generate_manager_descriptions(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> None:
+    summary = generate_description_artifact(
+        _storage(settings),
+        build_manager_description_generator(settings),
+        args.output,
+        limit=args.limit,
+        resume=args.resume,
+        app_ids=args.app_id,
+        workers=args.workers,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    print(
+        "SQLite не изменена. Проверьте JSON и только затем используйте "
+        "apply-manager-descriptions."
+    )
+
+
+def command_apply_manager_descriptions(
+    args: argparse.Namespace,
+    settings: Settings,
+) -> None:
+    summary = apply_description_artifact(
+        _storage(settings),
+        args.input,
+        confirmation=args.confirm,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def command_setup_sheets(
@@ -310,6 +349,55 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     enrich_parser.add_argument("--force", action="store_true")
     enrich_parser.add_argument("--limit", type=int)
     enrich_parser.set_defaults(handler=command_enrich_store)
+
+    generate_descriptions_parser = subparsers.add_parser(
+        "generate-manager-descriptions",
+        help="Сгенерировать проверяемый JSON без изменения SQLite",
+    )
+    generate_descriptions_parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_ARTIFACT_PATH,
+    )
+    generate_descriptions_parser.add_argument("--limit", type=int)
+    generate_descriptions_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Продолжить существующий JSON и повторить ошибки",
+    )
+    generate_descriptions_parser.add_argument(
+        "--app-id",
+        type=int,
+        action="append",
+        help="Обработать конкретный AppID; можно указать несколько раз",
+    )
+    generate_descriptions_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Параллельные запросы OpenRouter: от 1 до 5",
+    )
+    generate_descriptions_parser.set_defaults(
+        handler=command_generate_manager_descriptions
+    )
+
+    apply_descriptions_parser = subparsers.add_parser(
+        "apply-manager-descriptions",
+        help="Применить проверенные описания из JSON",
+    )
+    apply_descriptions_parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_ARTIFACT_PATH,
+    )
+    apply_descriptions_parser.add_argument(
+        "--confirm",
+        required=True,
+        help=f"Требуется точное значение {APPLY_CONFIRMATION}",
+    )
+    apply_descriptions_parser.set_defaults(
+        handler=command_apply_manager_descriptions
+    )
 
     setup_sheets_parser = subparsers.add_parser("setup-sheets")
     setup_sheets_parser.add_argument("--apply", action="store_true")
