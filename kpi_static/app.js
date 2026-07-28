@@ -19,6 +19,13 @@ const state = {
   selected: null,
   analytics: null,
   analyticsEmployees: new Set(),
+  filters: {
+    club: '',
+    role: '',
+    zone: '',
+    condition: '',
+    attention: false,
+  },
 };
 
 const analyticsCache = new Map();
@@ -38,6 +45,7 @@ const employeeList = $('#employeeList');
 const employeeDialog = $('#employeeDialog');
 const penaltyDialog = $('#penaltyDialog');
 const entriesDialog = $('#entriesDialog');
+const monthCloseDialog = $('#monthCloseDialog');
 
 tg?.ready();
 tg?.expand();
@@ -138,6 +146,68 @@ function renderStatus() {
   const closed = Boolean(state.monthStatus?.is_closed);
   button.className = `status-button${closed ? ' closed' : ''}`;
   button.textContent = closed ? '✓ Месяц закрыт' : 'Закрыть месяц';
+  button.title = closed && state.monthStatus?.snapshot
+    ? `Snapshot: ${state.monthStatus.snapshot.summary?.participants || 0} участников`
+    : '';
+}
+
+function renderMonthClosePreview(payload) {
+  const summary = payload.summary || {};
+  const zones = summary.zones || {};
+  const warnings = payload.warnings || [];
+  $('#monthCloseTitle').textContent = `Закрыть ${monthLabel(state.month)}?`;
+  $('#monthCloseContent').innerHTML = `
+    <div class="close-summary">
+      <div><span>Участников</span><strong>${summary.participants || 0}</strong></div>
+      <div><span>Средний KPI</span><strong>${percent(summary.average_pct)}</strong></div>
+      <div><span>Зоны</span><strong>${zones['🟢'] || 0} · ${zones['🟡'] || 0} · ${zones['🔴'] || 0}</strong></div>
+    </div>
+    <p class="close-period">Данные по ${dayLabel(payload.date, { year: true })}</p>
+    <h3 class="section-title">Предупреждения</h3>
+    <div class="close-warnings">
+      ${warnings.length ? warnings.map((warning) => {
+    const names = warning.employees
+      .slice(0, 4)
+      .map((employee) => escapeHtml(employee.nickname || employee.login))
+      .join(', ');
+    const remaining = warning.count - Math.min(warning.count, 4);
+    return `
+          <article class="close-warning">
+            <div>
+              <strong>${escapeHtml(warning.label)}</strong>
+              <span>${warning.count}</span>
+            </div>
+            <small>${names}${remaining > 0 ? ` и ещё ${remaining}` : ''}</small>
+          </article>
+        `;
+  }).join('') : `
+        <div class="close-ready">
+          Критичных предупреждений по данным месяца нет.
+        </div>
+      `}
+    </div>
+    <p class="close-note">
+      Предупреждения не блокируют закрытие. При повторном закрытии предыдущий
+      snapshot будет заменён текущими данными.
+    </p>
+  `;
+}
+
+async function openMonthCloseCheck() {
+  $('#monthCloseContent').innerHTML = '<div class="loading-card"></div>';
+  $('#confirmMonthClose').disabled = true;
+  monthCloseDialog.showModal();
+  try {
+    const params = new URLSearchParams({ month: state.month });
+    const payload = await api(`/api/month-close-check?${params}`);
+    renderMonthClosePreview(payload);
+    $('#confirmMonthClose').disabled = false;
+  } catch (error) {
+    $('#monthCloseContent').innerHTML = `
+      <div class="empty">${escapeHtml(error.message)}</div>
+    `;
+    showToast(error.message, true);
+  }
 }
 
 function rankMovement(item) {
@@ -290,10 +360,71 @@ function renderMyKpi() {
   `;
 }
 
+function renderManagerFilters() {
+  const panel = $('#managerFilters');
+  if (!state.me?.can_manage) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const clubs = [...new Set(
+    state.employees.flatMap((employee) => employee.clubs || []),
+  )].sort((a, b) => a.localeCompare(b, 'ru'));
+  const roles = [...new Map(
+    state.employees
+      .filter((employee) => employee.role != null)
+      .map((employee) => [String(employee.role), employee.role_name]),
+  ).entries()];
+  $('#clubFilter').innerHTML = [
+    '<option value="">Все клубы</option>',
+    ...clubs.map((club) => (
+      `<option value="${escapeHtml(club)}">${escapeHtml(club)}</option>`
+    )),
+  ].join('');
+  $('#roleFilter').innerHTML = [
+    '<option value="">Все роли</option>',
+    ...roles.map(([role, label]) => (
+      `<option value="${role}">${escapeHtml(label)}</option>`
+    )),
+  ].join('');
+  $('#clubFilter').value = state.filters.club;
+  $('#roleFilter').value = state.filters.role;
+  $('#zoneFilter').value = state.filters.zone;
+  $('#stateFilter').value = state.filters.condition;
+  const attentionCount = state.employees.filter((item) => item.needs_attention).length;
+  $('#attentionCount').textContent = attentionCount;
+  $('#attentionToggle').classList.toggle('active', state.filters.attention);
+  $('#ratingTitle').textContent = state.filters.attention
+    ? 'Требует внимания'
+    : 'Рейтинг команды';
+}
+
 function renderEmployees() {
   const query = $('#searchInput').value.trim().toLowerCase();
   const rows = state.employees
     .filter((item) => `${item.nickname} ${item.login}`.toLowerCase().includes(query))
+    .filter((item) => (
+      !state.me?.can_manage
+      || (
+        (!state.filters.attention || item.needs_attention)
+        && (!state.filters.club || (item.clubs || []).includes(state.filters.club))
+        && (
+          !state.filters.role
+          || String(item.role) === state.filters.role
+        )
+        && (!state.filters.zone || item.zone === state.filters.zone)
+        && (
+          !state.filters.condition
+          || (
+            state.filters.condition === 'no_shifts'
+              ? Number(item.shifts || 0) <= 0
+              : (item.attention_reasons || []).some(
+                (reason) => reason.key === state.filters.condition,
+              )
+          )
+        )
+      )
+    ))
     .sort((a, b) => {
       if (a.rank == null && b.rank == null) return a.nickname.localeCompare(b.nickname, 'ru');
       if (a.rank == null) return 1;
@@ -308,6 +439,11 @@ function renderEmployees() {
   }
   employeeList.innerHTML = rows.map((item) => {
     const penaltyCount = activePenalties(item.login).length;
+    const attention = state.me?.can_manage
+      ? (item.attention_reasons || []).map((reason) => (
+        `<span>${escapeHtml(reason.label)}</span>`
+      )).join('')
+      : '';
     return `
       <article class="employee-card" data-login="${escapeHtml(item.login)}">
         <div class="employee-head">
@@ -334,6 +470,7 @@ function renderEmployees() {
           </div>
         </div>
         ${penaltyCount ? `<div class="employee-alert">−${penaltyCount * 10}% · штрафов: ${penaltyCount}</div>` : ''}
+        ${attention ? `<div class="attention-reasons">${attention}</div>` : ''}
       </article>
     `;
   }).join('');
@@ -467,6 +604,7 @@ async function loadData() {
     renderStatus();
     renderFreshness();
     renderMyKpi();
+    renderManagerFilters();
     renderEmployees();
   } catch (error) {
     employeeList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -859,6 +997,38 @@ $('#datePicker').addEventListener('change', (event) => {
 });
 $('#searchInput').addEventListener('input', renderEmployees);
 
+$('#managerFilters').addEventListener('change', (event) => {
+  const mapping = {
+    clubFilter: 'club',
+    roleFilter: 'role',
+    zoneFilter: 'zone',
+    stateFilter: 'condition',
+  };
+  const key = mapping[event.target.id];
+  if (!key) return;
+  state.filters[key] = event.target.value;
+  renderEmployees();
+});
+
+$('#attentionToggle').addEventListener('click', () => {
+  state.filters.attention = !state.filters.attention;
+  renderManagerFilters();
+  renderEmployees();
+});
+
+$('#resetFilters').addEventListener('click', () => {
+  state.filters = {
+    club: '',
+    role: '',
+    zone: '',
+    condition: '',
+    attention: false,
+  };
+  $('#searchInput').value = '';
+  renderManagerFilters();
+  renderEmployees();
+});
+
 document.querySelector('.view-tabs').addEventListener('click', async (event) => {
   const tab = event.target.closest('[data-view]');
   if (!tab) return;
@@ -1005,16 +1175,40 @@ $('#penaltyForm').addEventListener('submit', async (event) => {
 
 $('#monthStatusButton').addEventListener('click', async () => {
   const closed = Boolean(state.monthStatus?.is_closed);
-  const action = closed ? 'открыть' : 'закрыть';
-  if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${monthLabel(state.month)}?`)) return;
+  if (!closed) {
+    await openMonthCloseCheck();
+    return;
+  }
+  if (!window.confirm(`Переоткрыть ${monthLabel(state.month)}?`)) return;
   try {
     state.monthStatus = await api('/api/month-status', {
       method: 'POST',
-      body: JSON.stringify({ month: state.month, is_closed: !closed }),
+      body: JSON.stringify({ month: state.month, is_closed: false }),
     });
     renderStatus();
-    showToast(closed ? 'Месяц снова открыт' : 'Месяц закрыт');
+    analyticsCache.clear();
+    state.analytics = null;
+    showToast('Месяц снова открыт');
   } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+$('#confirmMonthClose').addEventListener('click', async () => {
+  const button = $('#confirmMonthClose');
+  button.disabled = true;
+  try {
+    state.monthStatus = await api('/api/month-status', {
+      method: 'POST',
+      body: JSON.stringify({ month: state.month, is_closed: true }),
+    });
+    monthCloseDialog.close();
+    renderStatus();
+    analyticsCache.clear();
+    state.analytics = null;
+    showToast('Месяц закрыт, snapshot сохранён');
+  } catch (error) {
+    button.disabled = false;
     showToast(error.message, true);
   }
 });

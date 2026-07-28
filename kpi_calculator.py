@@ -1,4 +1,5 @@
 import calendar
+import json
 import math
 import sqlite3
 from collections import defaultdict
@@ -148,10 +149,27 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                     period_month DATE PRIMARY KEY,
                     is_closed INTEGER NOT NULL DEFAULT 0,
                     updated_by_login TEXT,
-                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    snapshot_json TEXT,
+                    snapshot_created_at DATETIME
                 );
                 '''
             )
+            month_status_columns = {
+                row[1]
+                for row in conn.execute(
+                    'PRAGMA table_info(kpi_month_status)'
+                )
+            }
+            if 'snapshot_json' not in month_status_columns:
+                conn.execute(
+                    'ALTER TABLE kpi_month_status ADD COLUMN snapshot_json TEXT'
+                )
+            if 'snapshot_created_at' not in month_status_columns:
+                conn.execute(
+                    'ALTER TABLE kpi_month_status '
+                    'ADD COLUMN snapshot_created_at DATETIME'
+                )
             metric_columns = {
                 row[1]
                 for row in conn.execute(
@@ -350,7 +368,8 @@ def get_month_status(period_month, db_path=DB_PATH):
     try:
         row = conn.execute(
             '''
-            SELECT period_month, is_closed, updated_by_login, updated_at
+            SELECT period_month, is_closed, updated_by_login, updated_at,
+                   snapshot_json, snapshot_created_at
             FROM kpi_month_status
             WHERE date(period_month)=date(?)
             ''',
@@ -362,9 +381,16 @@ def get_month_status(period_month, db_path=DB_PATH):
                 'is_closed': False,
                 'updated_by_login': None,
                 'updated_at': None,
+                'snapshot': None,
+                'snapshot_created_at': None,
             }
         result = dict(row)
         result['is_closed'] = bool(result['is_closed'])
+        raw_snapshot = result.pop('snapshot_json', None)
+        result['snapshot'] = (
+            json.loads(raw_snapshot)
+            if raw_snapshot else None
+        )
         return result
     finally:
         conn.close()
@@ -375,6 +401,7 @@ def set_month_status(
     is_closed,
     updated_by_login,
     db_path=DB_PATH,
+    snapshot=None,
 ):
     initialize_kpi_calculation_schema(db_path)
     month = _month_start(period_month).isoformat()
@@ -384,17 +411,36 @@ def set_month_status(
             conn.execute(
                 '''
                 INSERT INTO kpi_month_status (
-                    period_month, is_closed, updated_by_login, updated_at
-                ) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    period_month, is_closed, updated_by_login, updated_at,
+                    snapshot_json, snapshot_created_at
+                ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?,
+                          CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END)
                 ON CONFLICT(period_month) DO UPDATE SET
                     is_closed=excluded.is_closed,
                     updated_by_login=excluded.updated_by_login,
-                    updated_at=CURRENT_TIMESTAMP
+                    updated_at=CURRENT_TIMESTAMP,
+                    snapshot_json=CASE
+                        WHEN excluded.is_closed=1 THEN excluded.snapshot_json
+                        ELSE kpi_month_status.snapshot_json
+                    END,
+                    snapshot_created_at=CASE
+                        WHEN excluded.is_closed=1 THEN CURRENT_TIMESTAMP
+                        ELSE kpi_month_status.snapshot_created_at
+                    END
                 ''',
                 (
                     month,
                     int(bool(is_closed)),
                     _normalize_login(updated_by_login),
+                    (
+                        json.dumps(
+                            snapshot,
+                            ensure_ascii=False,
+                            separators=(',', ':'),
+                        )
+                        if is_closed and snapshot is not None else None
+                    ),
+                    int(bool(is_closed)),
                 ),
             )
     finally:

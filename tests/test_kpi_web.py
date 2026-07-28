@@ -1,8 +1,11 @@
 import hashlib
 import hmac
 import json
+import sqlite3
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from urllib.parse import urlencode
 from unittest.mock import patch
 
@@ -74,6 +77,13 @@ class KpiWebTest(unittest.TestCase):
                 '_employee_logins_with_month_shifts',
                 return_value=['@one'],
             ),
+            patch.object(kpi_web, '_employee_metadata', return_value={
+                '@one': {
+                    'role': 0,
+                    'role_name': 'Сотрудник',
+                    'clubs': ['Дмитровка'],
+                },
+            }),
             patch.object(kpi_web, 'calculate_monthly_kpi', return_value=[{
                 'login': '@one',
                 'nickname': 'Первый',
@@ -156,8 +166,15 @@ class KpiWebTest(unittest.TestCase):
             patch.object(
                 kpi_web,
                 'calculate_monthly_kpi',
-                side_effect=[[row], []],
+                side_effect=[[row], [], []],
             ),
+            patch.object(kpi_web, '_employee_metadata', return_value={
+                '@tester': {
+                    'role': 0,
+                    'role_name': 'Сотрудник',
+                    'clubs': ['Дмитровка', 'Марьино'],
+                },
+            }),
             patch.object(kpi_web, 'list_penalties', return_value=[]),
             patch.object(kpi_web, 'get_month_status', return_value={
                 'period_month': '2026-07-01',
@@ -184,6 +201,141 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(
             payload['freshness']['latest_metric_date'],
             '2026-07-14',
+        )
+        self.assertEqual(payload['my_kpi']['clubs'], ['Дмитровка', 'Марьино'])
+
+    def test_attention_reasons_follow_confirmed_manager_rules(self):
+        reasons = kpi_web._attention_reasons({
+            'zone': '🔴',
+            'penalties': 1,
+            'kpi_change_7d': -0.10,
+            'shifts': 3,
+            'reviews': 0,
+            'forms': 0,
+            'extensions': 0,
+            'certificates': 0,
+            'subscriptions': 0,
+            'initiatives': 0,
+        })
+
+        self.assertEqual(
+            [reason['key'] for reason in reasons],
+            ['red_zone', 'penalty', 'drop', 'no_kpi'],
+        )
+
+    def test_kpi_payload_marks_seven_day_drop_for_manager(self):
+        current = {
+            'login': '@one',
+            'nickname': 'Первый',
+            'shifts': 2,
+            'weighted_shifts': 2,
+            'rank': 1,
+            'zone': '🟡',
+            'average_pct': 0.8,
+            'total_pct': 0.7,
+            'weighted_pct': 0.7,
+            'reviews': 1,
+            'reviews_pct': 1,
+            'forms': 1,
+            'forms_pct': 0.5,
+            'extensions': 1,
+            'extensions_pct': 1,
+            'certificates': 0,
+            'certificates_pct': 0,
+            'subscriptions': 0,
+            'subscriptions_pct': 0,
+            'initiatives': 1,
+            'initiatives_pct': 0.1,
+            'penalties': 0,
+            'penalty_impact': 0,
+            'stream_bonus': 0,
+        }
+        previous_day = dict(current, total_pct=0.72)
+        previous_week = dict(current, total_pct=0.85)
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_active_employee_logins', return_value=['@one']),
+            patch.object(
+                kpi_web,
+                'calculate_monthly_kpi',
+                side_effect=[[current], [previous_day], [previous_week]],
+            ),
+            patch.object(kpi_web, '_employee_metadata', return_value={
+                '@one': {
+                    'role': 0,
+                    'role_name': 'Сотрудник',
+                    'clubs': ['Дмитровка'],
+                },
+            }),
+            patch.object(kpi_web, 'list_penalties', return_value=[]),
+            patch.object(kpi_web, 'get_month_status', return_value={
+                'period_month': '2026-07-01',
+                'is_closed': False,
+            }),
+            patch.object(kpi_web, 'get_kpi_freshness', return_value={
+                'latest_metric_date': '2026-07-15',
+                'latest_shift_date': '2026-07-15',
+            }),
+        ):
+            response = self.client.get(
+                '/api/kpi?month=2026-07&date=2026-07-15',
+                headers=self.headers,
+            )
+
+        employee = response.get_json()['employees'][0]
+        self.assertAlmostEqual(employee['kpi_change_7d'], -0.15)
+        self.assertTrue(employee['needs_attention'])
+        self.assertEqual(
+            [reason['key'] for reason in employee['attention_reasons']],
+            ['drop'],
+        )
+        self.assertEqual(employee['clubs'], ['Дмитровка'])
+
+    def test_employee_metadata_contains_every_club_in_selected_month(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'metadata.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''
+                CREATE TABLE users (
+                    login TEXT,
+                    first_name TEXT,
+                    second_name TEXT,
+                    status INTEGER
+                );
+                CREATE TABLE shifts (
+                    shift_login TEXT,
+                    shift_first_name TEXT,
+                    shift_second_name TEXT,
+                    dt_shift TEXT,
+                    club TEXT
+                );
+                INSERT INTO users VALUES ('@one', 'One', 'User', 0);
+                INSERT INTO shifts VALUES (
+                    '@one', 'One', 'User', '2026-07-05', 'Дмитровка'
+                );
+                INSERT INTO shifts VALUES (
+                    '@one', 'One', 'User', '2026-07-12', 'Марьино'
+                );
+                INSERT INTO shifts VALUES (
+                    '@one', 'One', 'User', '2026-08-01', 'Каширка'
+                );
+                '''
+            )
+            conn.commit()
+            conn.close()
+
+            with patch.object(kpi_web, 'DB_PATH', str(db_path)):
+                metadata = kpi_web._employee_metadata(
+                    ['@one'],
+                    '2026-07-01',
+                )
+
+        self.assertEqual(metadata['@one']['role'], 0)
+        self.assertEqual(
+            metadata['@one']['clubs'],
+            ['Дмитровка', 'Марьино'],
         )
 
     def test_metric_details_are_available_to_employee(self):
@@ -318,6 +470,127 @@ class KpiWebTest(unittest.TestCase):
             'Опоздание',
             '@tester',
             source='telegram_mini_app',
+        )
+
+    def test_month_close_preview_only_warns_about_detected_problems(self):
+        rows = [
+            {
+                'login': '@red',
+                'nickname': 'Red',
+                'shifts': 2,
+                'total_pct': 0.4,
+                'zone': '🔴',
+                'penalties': 1,
+                'reviews': 0,
+                'forms': 0,
+                'extensions': 0,
+                'certificates': 0,
+                'subscriptions': 0,
+                'initiatives': 0,
+            },
+            {
+                'login': '@idle',
+                'nickname': 'Idle',
+                'shifts': 0,
+                'total_pct': 0,
+                'zone': '⚪',
+                'penalties': 0,
+            },
+        ]
+        with (
+            patch.object(kpi_web, '_active_employee_logins', return_value=[
+                '@red',
+                '@idle',
+            ]),
+            patch.object(
+                kpi_web,
+                'calculate_monthly_kpi',
+                return_value=rows,
+            ),
+            patch.object(kpi_web, '_employee_metadata', return_value={}),
+        ):
+            preview = kpi_web._month_close_preview('2026-07-01')
+
+        self.assertEqual(preview['summary']['active_employees'], 2)
+        self.assertEqual(preview['summary']['participants'], 1)
+        self.assertEqual(
+            [warning['key'] for warning in preview['warnings']],
+            ['no_shifts', 'no_kpi', 'red_zone', 'penalties'],
+        )
+
+    def test_manager_closes_month_with_server_snapshot(self):
+        snapshot = {
+            'period_month': '2026-07-01',
+            'date': '2026-07-31',
+            'generated_at': '2026-07-31T20:00:00+00:00',
+            'summary': {'participants': 1},
+            'warnings': [],
+            'employees': [],
+        }
+        saved_status = {
+            'period_month': '2026-07-01',
+            'is_closed': True,
+            'updated_by_login': '@tester',
+            'updated_at': '2026-07-31 23:00:00',
+            'snapshot': snapshot,
+            'snapshot_created_at': '2026-07-31 23:00:00',
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(
+                kpi_web,
+                '_month_close_preview',
+                return_value=snapshot,
+            ),
+            patch.object(
+                kpi_web,
+                'set_month_status',
+                return_value=saved_status,
+            ) as set_status,
+        ):
+            response = self.client.post(
+                '/api/month-status',
+                headers=self.headers,
+                json={'month': '2026-07', 'is_closed': True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['is_closed'])
+        set_status.assert_called_once_with(
+            '2026-07-01',
+            True,
+            '@tester',
+            snapshot=snapshot,
+        )
+
+    def test_manager_can_reopen_month_without_rebuilding_snapshot(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_month_close_preview') as preview,
+            patch.object(
+                kpi_web,
+                'set_month_status',
+                return_value={
+                    'period_month': '2026-07-01',
+                    'is_closed': False,
+                },
+            ) as set_status,
+        ):
+            response = self.client.post(
+                '/api/month-status',
+                headers=self.headers,
+                json={'month': '2026-07', 'is_closed': False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        preview.assert_not_called()
+        set_status.assert_called_once_with(
+            '2026-07-01',
+            False,
+            '@tester',
+            snapshot=None,
         )
 
 

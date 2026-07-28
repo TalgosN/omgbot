@@ -275,6 +275,63 @@ def _employee_logins_with_month_shifts(employee_logins, month):
         conn.close()
 
 
+def _employee_metadata(employee_logins, month):
+    normalized = sorted({
+        str(login or '').strip().lower()
+        for login in employee_logins
+        if str(login or '').strip()
+    })
+    if not normalized:
+        return {}
+    placeholders = ','.join('?' for _ in normalized)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        users = conn.execute(
+            f'''
+            SELECT lower(login), status
+            FROM users
+            WHERE lower(login) IN ({placeholders})
+            ''',
+            normalized,
+        ).fetchall()
+        clubs = conn.execute(
+            f'''
+            SELECT DISTINCT lower(ns.login), sh.club
+            FROM shifts sh
+            JOIN users ns ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(ns.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=ns.second_name
+                AND sh.shift_first_name=ns.first_name
+            )
+            WHERE lower(ns.login) IN ({placeholders})
+              AND date(substr(sh.dt_shift, 1, 10)) >= date(?)
+              AND date(substr(sh.dt_shift, 1, 10)) < date(?, '+1 month')
+              AND sh.club IS NOT NULL
+              AND trim(sh.club) <> ''
+            ORDER BY sh.club
+            ''',
+            (*normalized, month, month),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    result = {
+        login: {
+            'role': int(role),
+            'role_name': ROLE_NAMES.get(int(role), str(role)),
+            'clubs': [],
+        }
+        for login, role in users
+    }
+    for login, club in clubs:
+        if login in result and club not in result[login]['clubs']:
+            result[login]['clubs'].append(club)
+    return result
+
+
 def _actor_login():
     return str(g.kpi_user.get('login') or '').strip().lower()
 
@@ -346,6 +403,167 @@ def _employee_explanation(row):
     }
 
 
+def _attention_reasons(row):
+    reasons = []
+    if row.get('zone') == '🔴':
+        reasons.append({
+            'key': 'red_zone',
+            'label': 'Красная зона',
+        })
+    if int(row.get('penalties', 0) or 0) > 0:
+        reasons.append({
+            'key': 'penalty',
+            'label': 'Активный штраф',
+        })
+    if float(row.get('kpi_change_7d', 0) or 0) <= -0.10:
+        reasons.append({
+            'key': 'drop',
+            'label': 'Падение KPI за 7 дней',
+        })
+    metric_total = sum(
+        float(row.get(field, 0) or 0)
+        for field in (
+            'reviews',
+            'forms',
+            'extensions',
+            'certificates',
+            'subscriptions',
+            'initiatives',
+        )
+    )
+    if float(row.get('shifts', 0) or 0) > 0 and metric_total == 0:
+        reasons.append({
+            'key': 'no_kpi',
+            'label': 'Есть смены, но нет KPI-записей',
+        })
+    return reasons
+
+
+def _snapshot_employee(row):
+    fields = (
+        'login',
+        'nickname',
+        'role',
+        'role_name',
+        'clubs',
+        'shifts',
+        'weighted_shifts',
+        'reviews',
+        'reviews_pct',
+        'forms',
+        'forms_pct',
+        'extensions',
+        'extensions_pct',
+        'certificates',
+        'certificates_pct',
+        'subscriptions',
+        'subscriptions_pct',
+        'initiatives',
+        'initiatives_pct',
+        'penalties',
+        'penalty_impact',
+        'stream',
+        'stream_bonus',
+        'total_pct',
+        'weighted_pct',
+        'rank',
+        'average_pct',
+        'zone',
+    )
+    return {
+        field: row.get(field)
+        for field in fields
+    }
+
+
+def _month_close_preview(month):
+    selected_day = _default_day(month)
+    active_logins = _active_employee_logins()
+    rows = calculate_monthly_kpi(
+        month,
+        employee_logins=active_logins,
+        period_end=selected_day,
+    )
+    metadata = _employee_metadata(active_logins, month)
+    for row in rows:
+        row.update(metadata.get(row['login'], {
+            'role': None,
+            'role_name': 'Неизвестно',
+            'clubs': [],
+        }))
+
+    participants = [row for row in rows if float(row.get('shifts', 0) or 0) > 0]
+    no_shifts = [row for row in rows if float(row.get('shifts', 0) or 0) <= 0]
+    red_zone = [row for row in participants if row.get('zone') == '🔴']
+    penalties = [
+        row
+        for row in rows
+        if int(row.get('penalties', 0) or 0) > 0
+    ]
+    no_kpi = []
+    for row in participants:
+        metric_total = sum(
+            float(row.get(field, 0) or 0)
+            for field in (
+                'reviews',
+                'forms',
+                'extensions',
+                'certificates',
+                'subscriptions',
+                'initiatives',
+            )
+        )
+        if metric_total == 0:
+            no_kpi.append(row)
+
+    warning_specs = (
+        ('no_shifts', 'Активные сотрудники без смен', no_shifts),
+        ('no_kpi', 'Есть смены, но нет KPI-записей', no_kpi),
+        ('red_zone', 'Сотрудники в красной зоне', red_zone),
+        ('penalties', 'Сотрудники с активными штрафами', penalties),
+    )
+    warnings = [
+        {
+            'key': key,
+            'label': label,
+            'count': len(items),
+            'employees': [
+                {
+                    'login': item.get('login'),
+                    'nickname': item.get('nickname'),
+                }
+                for item in items
+            ],
+        }
+        for key, label, items in warning_specs
+        if items
+    ]
+    average = (
+        sum(float(row.get('total_pct', 0) or 0) for row in participants)
+        / len(participants)
+        if participants else 0
+    )
+    zones = {
+        zone: sum(row.get('zone') == zone for row in participants)
+        for zone in ('🟢', '🟡', '🔴')
+    }
+    summary = {
+        'active_employees': len(rows),
+        'participants': len(participants),
+        'average_pct': average,
+        'zones': zones,
+        'warnings': sum(warning['count'] for warning in warnings),
+    }
+    return {
+        'period_month': month,
+        'date': selected_day,
+        'generated_at': datetime.now(UTC).isoformat(),
+        'summary': summary,
+        'warnings': warnings,
+        'employees': [_snapshot_employee(row) for row in rows],
+    }
+
+
 @app.after_request
 def add_security_headers(response):
     response.headers['Cache-Control'] = 'no-store'
@@ -403,10 +621,7 @@ def api_kpi():
         month,
     )
     active_logins = _active_employee_logins()
-    employee_logins = _employee_logins_with_month_shifts(
-        active_logins,
-        month,
-    )
+    employee_logins = active_logins
     rows = calculate_monthly_kpi(
         month,
         employee_logins=employee_logins,
@@ -421,8 +636,22 @@ def api_kpi():
             period_end=selected_date - timedelta(days=1),
         )
     previous_by_login = {row['login']: row for row in previous_rows}
+    comparison_date = max(
+        datetime.strptime(month, '%Y-%m-%d').date(),
+        selected_date - timedelta(days=7),
+    )
+    week_rows = []
+    if comparison_date < selected_date:
+        week_rows = calculate_monthly_kpi(
+            month,
+            employee_logins=employee_logins,
+            period_end=comparison_date,
+        )
+    week_by_login = {row['login']: row for row in week_rows}
+    metadata = _employee_metadata(employee_logins, month)
     for row in rows:
         previous = previous_by_login.get(row['login'])
+        week_previous = week_by_login.get(row['login'])
         row['kpi_change'] = (
             row['total_pct'] - previous['total_pct']
             if previous else None
@@ -436,6 +665,17 @@ def api_kpi():
             )
             else None
         )
+        row['kpi_change_7d'] = (
+            row['total_pct'] - week_previous['total_pct']
+            if week_previous else None
+        )
+        row.update(metadata.get(row['login'], {
+            'role': None,
+            'role_name': 'Неизвестно',
+            'clubs': [],
+        }))
+        row['attention_reasons'] = _attention_reasons(row)
+        row['needs_attention'] = bool(row['attention_reasons'])
         row['explanation'] = _employee_explanation(row)
     penalties = list_penalties(month)
     current_login = _actor_login()
@@ -681,12 +921,30 @@ def api_set_stream():
 def api_month_status():
     payload = request.get_json(silent=True) or {}
     month = _validate_month(payload.get('month'))
+    is_closed = bool(payload.get('is_closed'))
+    snapshot = _month_close_preview(month) if is_closed else None
     status = set_month_status(
         month,
-        bool(payload.get('is_closed')),
+        is_closed,
         _actor_login(),
+        snapshot=snapshot,
     )
+    _clear_analytics_cache()
     return jsonify(status)
+
+
+@app.get('/api/month-close-check')
+@require_manager
+def api_month_close_check():
+    month = _validate_month(request.args.get('month'))
+    preview = _month_close_preview(month)
+    return jsonify({
+        'period_month': preview['period_month'],
+        'date': preview['date'],
+        'generated_at': preview['generated_at'],
+        'summary': preview['summary'],
+        'warnings': preview['warnings'],
+    })
 
 
 def main():

@@ -51,6 +51,53 @@
 
       <section id="summary" class="summary-grid" aria-live="polite"></section>
 
+      <section id="managerFilters" class="manager-filters" hidden>
+        <div class="manager-filter-heading">
+          <div>
+            <p class="eyebrow">Менеджерский режим</p>
+            <h2 id="ratingTitle">Рейтинг команды</h2>
+          </div>
+          <button id="attentionToggle" class="attention-toggle" type="button">
+            Требует внимания <strong id="attentionCount">0</strong>
+          </button>
+        </div>
+        <div class="filter-grid">
+          <label class="control-field">
+            <span>Клуб</span>
+            <select id="clubFilter">
+              <option value="">Все клубы</option>
+            </select>
+          </label>
+          <label class="control-field">
+            <span>Роль</span>
+            <select id="roleFilter">
+              <option value="">Все роли</option>
+            </select>
+          </label>
+          <label class="control-field">
+            <span>Зона</span>
+            <select id="zoneFilter">
+              <option value="">Все зоны</option>
+              <option value="🟢">Зелёная</option>
+              <option value="🟡">Жёлтая</option>
+              <option value="🔴">Красная</option>
+              <option value="⚪">Без рейтинга</option>
+            </select>
+          </label>
+          <label class="control-field">
+            <span>Состояние</span>
+            <select id="stateFilter">
+              <option value="">Любое</option>
+              <option value="penalty">Со штрафом</option>
+              <option value="drop">Падение за 7 дней</option>
+              <option value="no_shifts">Без смен</option>
+              <option value="no_kpi">Смены без KPI</option>
+            </select>
+          </label>
+        </div>
+        <button id="resetFilters" class="reset-filters" type="button">Сбросить фильтры</button>
+      </section>
+
       <section class="toolbar">
         <label class="search">
           <span>⌕</span>
@@ -171,6 +218,25 @@
     </div>
     <p id="entriesPeriod" class="entries-period"></p>
     <div id="entriesContent" class="entries-list"></div>
+  </dialog>
+
+  <dialog id="monthCloseDialog" class="dialog dialog-small">
+    <div class="dialog-header">
+      <div>
+        <p class="eyebrow">Проверка месяца</p>
+        <h2 id="monthCloseTitle">Закрытие KPI</h2>
+      </div>
+      <button type="button" class="icon-button close-dialog" aria-label="Закрыть">×</button>
+    </div>
+    <div id="monthCloseContent">
+      <div class="loading-card"></div>
+    </div>
+    <div class="month-close-actions">
+      <button id="confirmMonthClose" class="primary-button" type="button">
+        Всё равно закрыть месяц
+      </button>
+      <button class="secondary-button close-dialog" type="button">Отмена</button>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>

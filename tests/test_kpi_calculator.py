@@ -367,7 +367,7 @@ class KpiCalculatorTest(unittest.TestCase):
 
         self.assertEqual(differences, [])
 
-    def test_month_can_be_closed_and_reopened_without_locking_history(self):
+    def test_month_can_be_reopened_and_reclosed_with_replaced_snapshot(self):
         kpi_calculator.initialize_kpi_calculation_schema(self.db_path)
 
         closed = kpi_calculator.set_month_status(
@@ -375,6 +375,7 @@ class KpiCalculatorTest(unittest.TestCase):
             True,
             '@manager',
             db_path=self.db_path,
+            snapshot={'revision': 1},
         )
         reopened = kpi_calculator.set_month_status(
             '2026-07',
@@ -382,10 +383,21 @@ class KpiCalculatorTest(unittest.TestCase):
             '@manager',
             db_path=self.db_path,
         )
+        reclosed = kpi_calculator.set_month_status(
+            '2026-07',
+            True,
+            '@manager',
+            db_path=self.db_path,
+            snapshot={'revision': 2},
+        )
 
         self.assertTrue(closed['is_closed'])
         self.assertFalse(reopened['is_closed'])
         self.assertEqual(reopened['updated_by_login'], '@manager')
+        self.assertEqual(reopened['snapshot'], {'revision': 1})
+        self.assertTrue(reclosed['is_closed'])
+        self.assertEqual(reclosed['snapshot'], {'revision': 2})
+        self.assertIsNotNone(reclosed['snapshot_created_at'])
 
     def test_penalty_cancellation_keeps_audit_and_removes_impact(self):
         conn = sqlite3.connect(self.db_path)

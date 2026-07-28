@@ -432,3 +432,15 @@ exact contribution of every metric. Employees still have unrestricted access
 to the full team rating and other employee cards. Metric details show the
 stored source where it can be determined reliably. The freshness block reports
 the calculation time and the dates of the latest KPI record and shift.
+
+Managers additionally receive filters by club, role, KPI zone and state. The
+`Требует внимания` view includes employees in the red zone, employees with an
+active penalty, a KPI drop of at least 10 percentage points over 7 days, or
+worked shifts without KPI records. Club membership for filtering is derived
+from every club where the employee has shifts in the selected month.
+
+Before closing a month, the app recalculates its KPI data on the server and
+shows non-blocking warnings about missing shifts, missing KPI records, red-zone
+results and active penalties. Managers can close and reopen a month. Closing
+stores a KPI snapshot; closing the same month again replaces the previous
+snapshot without keeping an audit history.
