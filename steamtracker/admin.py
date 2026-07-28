@@ -1,11 +1,12 @@
 """Административное управление промо внутри Виарыча."""
 
+import hashlib
 import threading
 from datetime import datetime
 from html import escape, unescape
 
 import pytz
-from permissions import ROLE_MANAGER, ROLE_OWNER, require_role
+from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, ROLE_OWNER, require_role
 
 from .config import Settings
 from .db import TrackerStorage
@@ -24,6 +25,7 @@ from .weekly import (
 
 CALLBACK_PREFIX = "stpa"
 PAGE_SIZE = 8
+REPORT_PAGE_SIZE = 5
 _context_messages: dict[int, set[int]] = {}
 _context_lock = threading.Lock()
 _promotion_action_locks: dict[int, threading.Lock] = {}
@@ -208,11 +210,37 @@ def _send_context_photo(
     return message
 
 
+def _send_context_photo_and_message(
+    chat_id: int,
+    bot,
+    photo: str,
+    text: str,
+    *,
+    reply_markup=None,
+    parse_mode: str | None = None,
+    source_message=None,
+):
+    _clear_context(chat_id, bot, source_message=source_message)
+    try:
+        photo_message = bot.send_photo(chat_id, photo=photo)
+        _remember_context_message(chat_id, photo_message)
+    except Exception:
+        pass
+    message = bot.send_message(
+        chat_id,
+        text,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+    )
+    _remember_context_message(chat_id, message)
+    return message
+
+
 def _hide_reply_keyboard(chat_id: int, bot) -> None:
     types = _telegram_types()
     message = bot.send_message(
         chat_id,
-        "Открываю раздел промо…",
+        "Открываю Steam Tracker…",
         reply_markup=types.ReplyKeyboardRemove(),
     )
     message_id = _message_id(message)
@@ -221,7 +249,7 @@ def _hide_reply_keyboard(chat_id: int, bot) -> None:
 
 
 def promotion_admin_menu(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
         return
     _hide_reply_keyboard(message.chat.id, bot)
     show_tracker_dashboard(message, bot)
@@ -234,21 +262,30 @@ def show_tracker_dashboard(
     source_message=None,
     notice: str | None = None,
 ):
-    user = require_role(message, bot, ROLE_MANAGER)
+    user = require_role(message, bot, ROLE_EMPLOYEE)
     if not user:
         return
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton(
-            "📣 Промо",
-            callback_data=f"{CALLBACK_PREFIX}:menu:0",
-        ),
-        types.InlineKeyboardButton(
-            "🕹 Каталог игр",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
-        ),
-    )
+    is_manager = int(user["status"]) >= ROLE_MANAGER
+    if is_manager:
+        markup.add(
+            types.InlineKeyboardButton(
+                "📣 Промо",
+                callback_data=f"{CALLBACK_PREFIX}:menu:0",
+            ),
+            types.InlineKeyboardButton(
+                "🕹 Каталог игр",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+            ),
+        )
+    else:
+        markup.add(
+            types.InlineKeyboardButton(
+                "🕹 Каталог игр",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:active:0",
+            )
+        )
     if _is_owner(user):
         markup.add(
             types.InlineKeyboardButton(
@@ -264,20 +301,24 @@ def show_tracker_dashboard(
                 callback_data=f"{CALLBACK_PREFIX}:syncmenu:0",
             ),
         )
+    if is_manager:
+        markup.add(
+            types.InlineKeyboardButton(
+                "📜 История изменений",
+                callback_data=f"{CALLBACK_PREFIX}:audit:0",
+            )
+        )
     markup.add(
         types.InlineKeyboardButton(
-            "📜 История изменений",
-            callback_data=f"{CALLBACK_PREFIX}:audit:0",
-        ),
-        types.InlineKeyboardButton(
-            "⬅️ Админ-панель",
-            callback_data=f"{CALLBACK_PREFIX}:admin:0",
-        ),
+            "⬅️ Главное меню",
+            callback_data=f"{CALLBACK_PREFIX}:home:0",
+        )
     )
-    text = (
-        "🎮 <b>Steam Tracker</b>\n\n"
-        "Управление каталогом, лицензиями и игрой недели."
-    )
+    text = "🎮 <b>Steam Tracker</b>\n\n"
+    if is_manager:
+        text += "Управление каталогом, лицензиями и игрой недели."
+    else:
+        text += "Каталог игр и проверка наличия лицензий на ПК."
     if notice:
         text = f"{escape(notice)}\n\n{text}"
     _send_context_message(
@@ -349,6 +390,19 @@ def _actor_name(update, user) -> str:
 
 def _is_owner(user) -> bool:
     return int(user["status"]) >= ROLE_OWNER
+
+
+def _is_manager(user) -> bool:
+    return int(user["status"]) >= ROLE_MANAGER
+
+
+def _format_playtime_hours(minutes: int | None) -> str:
+    hours = max(0, int(minutes or 0)) / 60
+    if hours.is_integer():
+        value = f"{int(hours):,}".replace(",", " ")
+    else:
+        value = f"{hours:,.1f}".replace(",", " ").replace(".", ",")
+    return f"{value} ч"
 
 
 def _claim_required(storage, promotion_id: int, update, user) -> dict:
@@ -1528,8 +1582,12 @@ def show_catalog(
     source_message=None,
     notice: str | None = None,
 ):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
+    can_manage = _is_manager(user)
+    if not can_manage:
+        status = "active"
     _, storage = _runtime()
     query_status = None if status == "all" else status
     rows = storage.managed_games(
@@ -1541,46 +1599,53 @@ def show_catalog(
     rows = rows[:PAGE_SIZE]
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton(
-            "➕ Добавить",
-            callback_data=f"{CALLBACK_PREFIX}:gadd:0",
-        ),
-        types.InlineKeyboardButton(
-            "🔎 Найти",
-            callback_data=f"{CALLBACK_PREFIX}:gsearch:0",
-        ),
-    )
-    markup.row(
-        types.InlineKeyboardButton(
-            "🟢 Активные",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:active:0",
-        ),
-        types.InlineKeyboardButton(
-            "📝 Черновики",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:draft:0",
-        ),
-    )
-    markup.row(
-        types.InlineKeyboardButton(
-            "⏸ На паузе",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:paused:0",
-        ),
-        types.InlineKeyboardButton(
-            "🚫 Исключённые",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:excluded:0",
-        ),
-    )
-    markup.row(
-        types.InlineKeyboardButton(
-            "⚠️ Без лицензии",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:no_license:0",
-        ),
-        types.InlineKeyboardButton(
-            "📚 Все",
-            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
-        ),
-    )
+    if can_manage:
+        markup.row(
+            types.InlineKeyboardButton(
+                "➕ Добавить",
+                callback_data=f"{CALLBACK_PREFIX}:gadd:0",
+            ),
+            types.InlineKeyboardButton(
+                "🔎 Найти",
+                callback_data=f"{CALLBACK_PREFIX}:gsearch:0",
+            ),
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                "📋 Отсутствующие лицензии",
+                callback_data=f"{CALLBACK_PREFIX}:missingreport:0",
+            )
+        )
+        markup.row(
+            types.InlineKeyboardButton(
+                "🟢 Активные",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:active:0",
+            ),
+            types.InlineKeyboardButton(
+                "📝 Черновики",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:draft:0",
+            ),
+        )
+        markup.row(
+            types.InlineKeyboardButton(
+                "⏸ На паузе",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:paused:0",
+            ),
+            types.InlineKeyboardButton(
+                "🚫 Исключённые",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:excluded:0",
+            ),
+        )
+        markup.row(
+            types.InlineKeyboardButton(
+                "⚠️ Без лицензии",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:no_license:0",
+            ),
+            types.InlineKeyboardButton(
+                "📚 Все",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+            ),
+        )
     status_icons = {
         "active": "🟢",
         "draft": "📝",
@@ -1641,6 +1706,13 @@ def show_catalog(
         "✅ означает, что лицензия найдена хотя бы на одном "
         "активном Steam-аккаунте."
     )
+    if not can_manage:
+        body = (
+            "🕹 <b>Каталог игр</b>\n\n"
+            f"Страница: {page + 1}\n\n"
+            "Выберите игру, чтобы открыть карточку и проверить "
+            "наличие на ПК."
+        )
     if notice:
         body = f"{escape(notice)}\n\n{body}"
     _send_context_message(
@@ -1661,63 +1733,36 @@ def show_game_card(
     source_message=None,
     notice: str | None = None,
 ):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
     _, storage = _runtime()
     row = dict(storage.managed_game(app_id))
+    can_manage = _is_manager(user)
+    if not can_manage and row["catalog_status"] != "active":
+        raise PermissionError("Сотрудникам доступны только активные игры")
     types = _telegram_types()
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(
-        types.InlineKeyboardButton(
-            "👥 Игроки",
-            callback_data=f"{CALLBACK_PREFIX}:geditplayers:{app_id}",
-        ),
-        types.InlineKeyboardButton(
-            "📝 Описание",
-            callback_data=f"{CALLBACK_PREFIX}:geditdesc:{app_id}",
-        ),
-    )
+    markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton(
-            "💬 Комментарий",
-            callback_data=f"{CALLBACK_PREFIX}:geditcomment:{app_id}",
-        ),
-        types.InlineKeyboardButton(
-            "💻 Наличие по ПК",
+            "💻 Наличие на ПК",
             callback_data=f"{CALLBACK_PREFIX}:glicenses:{app_id}",
-        ),
-        types.InlineKeyboardButton(
-            "🔄 Обновить из Steam",
-            callback_data=f"{CALLBACK_PREFIX}:grefresh:{app_id}",
-        ),
+        )
     )
-    if row["catalog_status"] != "active":
+    if can_manage:
         markup.add(
             types.InlineKeyboardButton(
-                "🟢 Активировать",
-                callback_data=f"{CALLBACK_PREFIX}:gstatus:active:{app_id}",
-            )
-        )
-    if row["catalog_status"] != "draft":
-        markup.add(
+                "✏️ Изменить",
+                callback_data=f"{CALLBACK_PREFIX}:geditmenu:{app_id}",
+            ),
             types.InlineKeyboardButton(
-                "📝 В черновики",
-                callback_data=f"{CALLBACK_PREFIX}:gstatus:draft:{app_id}",
-            )
-        )
-    if row["catalog_status"] != "paused":
-        markup.add(
+                "⚙️ Статус",
+                callback_data=f"{CALLBACK_PREFIX}:gstatusmenu:{app_id}",
+            ),
             types.InlineKeyboardButton(
-                "⏸ Поставить на паузу",
-                callback_data=f"{CALLBACK_PREFIX}:gstatus:paused:{app_id}",
-            )
-        )
-    if row["catalog_status"] != "excluded":
-        markup.add(
-            types.InlineKeyboardButton(
-                "🚫 Исключить",
-                callback_data=f"{CALLBACK_PREFIX}:gstatus:excluded:{app_id}",
-            )
+                "🔄 Обновить из Steam",
+                callback_data=f"{CALLBACK_PREFIX}:grefresh:{app_id}",
+            ),
         )
     markup.add(
         types.InlineKeyboardButton(
@@ -1749,6 +1794,10 @@ def show_game_card(
         f"Статус: {labels.get(row['catalog_status'], row['catalog_status'])}\n"
         f"Лицензии: {row['owned_count']}/{row['account_count']}\n"
         f"Игроков: {row['player_count'] or 'не указано'}\n"
+        f"Наиграно во всех клубах: "
+        f"{_format_playtime_hours(row.get('total_playtime_minutes'))}\n"
+        f"Место по популярности: "
+        f"{row.get('popularity_rank') or '—'}\n"
         f"Последнее промо: {row['last_promotion'] or 'не было'}\n\n"
         f"<b>Описание:</b>\n{escape(description)}\n\n"
         f"<b>Комментарий:</b> "
@@ -1756,10 +1805,120 @@ def show_game_card(
     )
     if notice:
         body = f"{escape(notice)}\n\n{body}"
+    if row.get("header_image"):
+        _send_context_photo_and_message(
+            message.chat.id,
+            bot,
+            str(row["header_image"]),
+            body,
+            parse_mode="HTML",
+            reply_markup=markup,
+            source_message=source_message,
+        )
+    else:
+        _send_context_message(
+            message.chat.id,
+            bot,
+            body,
+            parse_mode="HTML",
+            reply_markup=markup,
+            source_message=source_message,
+        )
+
+
+def show_game_edit_menu(
+    message,
+    app_id: int,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    row = storage.managed_game(app_id)
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "👥 Изменить количество игроков",
+            callback_data=f"{CALLBACK_PREFIX}:geditplayers:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "📝 Изменить описание",
+            callback_data=f"{CALLBACK_PREFIX}:geditdesc:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "💬 Изменить комментарий",
+            callback_data=f"{CALLBACK_PREFIX}:geditcomment:{app_id}",
+        ),
+        types.InlineKeyboardButton(
+            "⬅️ К игре",
+            callback_data=f"{CALLBACK_PREFIX}:game:{app_id}",
+        ),
+    )
     _send_context_message(
         message.chat.id,
         bot,
-        body,
+        (
+            f"✏️ <b>Изменить: {escape(row['steam_name'])}</b>\n\n"
+            "Выберите поле."
+        ),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_game_status_menu(
+    message,
+    app_id: int,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    row = storage.managed_game(app_id)
+    labels = {
+        "active": "🟢 Активна",
+        "draft": "📝 Черновик",
+        "paused": "⏸ На паузе",
+        "excluded": "🚫 Исключена",
+    }
+    options = [
+        ("active", "🟢 Активировать"),
+        ("draft", "📝 В черновики"),
+        ("paused", "⏸ Поставить на паузу"),
+        ("excluded", "🚫 Исключить"),
+    ]
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for status, label in options:
+        if status == row["catalog_status"]:
+            continue
+        markup.add(
+            types.InlineKeyboardButton(
+                label,
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:gstatus:{status}:{app_id}"
+                ),
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ К игре",
+            callback_data=f"{CALLBACK_PREFIX}:game:{app_id}",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        (
+            f"⚙️ <b>Статус: {escape(row['steam_name'])}</b>\n\n"
+            f"Сейчас: {labels.get(row['catalog_status'], row['catalog_status'])}"
+        ),
         parse_mode="HTML",
         reply_markup=markup,
         source_message=source_message,
@@ -1952,25 +2111,206 @@ def show_game_licenses(
     *,
     source_message=None,
 ):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
     _, storage = _runtime()
     game = storage.managed_game(app_id)
-    rows = storage.game_license_rows(app_id)
+    if not _is_manager(user) and game["catalog_status"] != "active":
+        raise PermissionError("Сотрудникам доступны только активные игры")
+    rows = storage.missing_game_license_rows(app_id)
     lines = [f"💻 <b>{escape(game['steam_name'])}: наличие</b>", ""]
-    for row in rows:
-        icon = "✅" if row["owned"] and row["active"] else "❌"
-        inactive = " (отключён)" if not row["active"] else ""
+    if not game["account_count"]:
+        lines.append("Активных Steam-аккаунтов пока нет.")
+    elif not rows:
         lines.append(
-            f"{icon} {escape(row['club_name'] or 'Без клуба')} / "
-            f"{escape(row['vanity_url'] or row['steam_id'])}{inactive}"
+            f"✅ Игра есть на всех {game['account_count']} активных ПК."
         )
+    else:
+        installed = int(game["account_count"]) - len(rows)
+        lines.extend(
+            [
+                (
+                    f"Есть на {installed} из "
+                    f"{game['account_count']} активных ПК."
+                ),
+                "",
+                "<b>Лицензия отсутствует:</b>",
+            ]
+        )
+        for row in rows:
+            lines.append(
+                f"❌ {escape(row['club_name'] or 'Без клуба')} / "
+                f"{escape(row['vanity_url'] or row['steam_id'])}"
+            )
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup()
     markup.add(
         types.InlineKeyboardButton(
             "⬅️ К игре",
             callback_data=f"{CALLBACK_PREFIX}:game:{app_id}",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def _club_token(club_name: str) -> str:
+    return hashlib.sha256(club_name.encode("utf-8")).hexdigest()[:16]
+
+
+def _missing_report_club(
+    storage: TrackerStorage,
+    token: str,
+) -> str:
+    for row in storage.missing_license_club_summary():
+        if _club_token(row["club_name"]) == token:
+            return str(row["club_name"])
+    raise ValueError("Клуб из отчёта больше не найден")
+
+
+def show_missing_license_report(
+    message,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    rows = storage.missing_license_club_summary()
+    summary = storage.summary()
+    problem_rows = [
+        row for row in rows if int(row["missing_license_count"] or 0) > 0
+    ]
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    lines = ["📋 <b>Отсутствующие лицензии</b>", ""]
+    if not summary["accounts"]:
+        lines.append("Активных Steam-аккаунтов пока нет.")
+    elif not summary["approved_games"]:
+        lines.append("Активных игр пока нет.")
+    elif not problem_rows:
+        lines.append(
+            "✅ Все активные игры есть на всех активных ПК."
+        )
+    else:
+        total = sum(
+            int(row["missing_license_count"])
+            for row in problem_rows
+        )
+        lines.extend(
+            [
+                f"Всего отсутствующих лицензий: <b>{total}</b>",
+                "Выберите клуб, чтобы увидеть игры и ПК.",
+            ]
+        )
+        for row in problem_rows:
+            markup.add(
+                types.InlineKeyboardButton(
+                    (
+                        f"🏢 {row['club_name']}: "
+                        f"{row['missing_license_count']} "
+                        f"({row['games_with_gaps']} игр)"
+                    )[:64],
+                    callback_data=(
+                        f"{CALLBACK_PREFIX}:missingclub:"
+                        f"{_club_token(row['club_name'])}:0"
+                    ),
+                )
+            )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Каталог",
+            callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
+        )
+    )
+    _send_context_message(
+        message.chat.id,
+        bot,
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=markup,
+        source_message=source_message,
+    )
+
+
+def show_missing_license_club(
+    message,
+    token: str,
+    page: int,
+    bot,
+    *,
+    source_message=None,
+):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    _, storage = _runtime()
+    club_name = _missing_report_club(storage, token)
+    rows = storage.missing_license_rows_for_club(
+        club_name,
+        limit=REPORT_PAGE_SIZE + 1,
+        offset=max(0, page) * REPORT_PAGE_SIZE,
+    )
+    has_next = len(rows) > REPORT_PAGE_SIZE
+    rows = rows[:REPORT_PAGE_SIZE]
+    lines = [
+        f"🏢 <b>{escape(club_name)}</b>",
+        "Отсутствующие лицензии активных игр:",
+        "",
+    ]
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if not rows:
+        lines.append("✅ Пропусков больше нет.")
+    for row in rows:
+        zones = str(row["missing_zones"] or "")
+        if len(zones) > 500:
+            zones = zones[:497] + "..."
+        lines.extend(
+            [
+                f"<b>{escape(row['steam_name'])}</b>",
+                f"Нет на ПК: {escape(zones)}",
+                "",
+            ]
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🎮 {row['steam_name']}"[:64],
+                callback_data=f"{CALLBACK_PREFIX}:game:{row['app_id']}",
+            )
+        )
+    navigation = []
+    if page > 0:
+        navigation.append(
+            types.InlineKeyboardButton(
+                "⬅️",
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:missingclub:{token}:{page - 1}"
+                ),
+            )
+        )
+    if has_next:
+        navigation.append(
+            types.InlineKeyboardButton(
+                "➡️",
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:missingclub:{token}:{page + 1}"
+                ),
+            )
+        )
+    if navigation:
+        markup.row(*navigation)
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Ко всем клубам",
+            callback_data=f"{CALLBACK_PREFIX}:missingreport:0",
         )
     )
     _send_context_message(
@@ -2623,7 +2963,7 @@ def register_promo_admin_callbacks(bot) -> None:
         )
     )
     def promo_admin_callback(call):
-        user = require_role(call, bot, ROLE_MANAGER)
+        user = require_role(call, bot, ROLE_EMPLOYEE)
         if not user:
             return
         parts = call.data.split(":")
@@ -2632,8 +2972,20 @@ def register_promo_admin_callbacks(bot) -> None:
         action_lock = None
         try:
             bot.answer_callback_query(call.id)
+            if not _is_manager(user) and action not in {
+                "home",
+                "tracker",
+                "catalog",
+                "game",
+                "glicenses",
+            }:
+                raise PermissionError(
+                    "Сотрудникам доступны только каталог, карточки игр "
+                    "и проверка наличия"
+                )
             if action in {
                 "admin",
+                "home",
                 "tracker",
                 "menu",
                 "plane",
@@ -2642,6 +2994,10 @@ def register_promo_admin_callbacks(bot) -> None:
                 "settings",
                 "catalog",
                 "game",
+                "geditmenu",
+                "gstatusmenu",
+                "missingreport",
+                "missingclub",
                 "accounts",
                 "account",
                 "syncmenu",
@@ -2651,6 +3007,16 @@ def register_promo_admin_callbacks(bot) -> None:
             }:
                 _clear_next_step_handler(chat_id, bot)
 
+            if action == "home":
+                _clear_context(
+                    chat_id,
+                    bot,
+                    source_message=call.message,
+                )
+                from menu import hello
+
+                hello(chat_id, bot)
+                return
             if action == "admin":
                 _clear_context(
                     chat_id,
@@ -2757,6 +3123,22 @@ def register_promo_admin_callbacks(bot) -> None:
                     source_message=call.message,
                 )
                 return
+            if action == "geditmenu":
+                show_game_edit_menu(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "gstatusmenu":
+                show_game_status_menu(
+                    call.message,
+                    int(parts[2]),
+                    bot,
+                    source_message=call.message,
+                )
+                return
             if action in {
                 "geditplayers",
                 "geditdesc",
@@ -2773,6 +3155,22 @@ def register_promo_admin_callbacks(bot) -> None:
                 show_game_licenses(
                     call.message,
                     int(parts[2]),
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "missingreport":
+                show_missing_license_report(
+                    call.message,
+                    bot,
+                    source_message=call.message,
+                )
+                return
+            if action == "missingclub":
+                show_missing_license_club(
+                    call.message,
+                    parts[2],
+                    int(parts[3]),
                     bot,
                     source_message=call.message,
                 )

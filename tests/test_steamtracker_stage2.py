@@ -228,6 +228,186 @@ class StageTwoTests(unittest.TestCase):
         self.assertEqual(promo_admin._context_messages[100], {22})
         promo_admin._context_messages.clear()
 
+    def test_game_card_uses_grouped_management_actions(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+            def row(self, *buttons):
+                self.keyboard.append(list(buttons))
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        storage = Mock()
+        storage.managed_game.return_value = {
+            "app_id": 10,
+            "steam_name": "Test Game",
+            "catalog_status": "active",
+            "owned_count": 2,
+            "account_count": 2,
+            "player_count": 1,
+            "last_promotion": None,
+            "manager_description": None,
+            "store_description": "Steam description",
+            "base_description": None,
+            "manager_comment": None,
+            "header_image": "https://example.test/header.jpg",
+            "total_playtime_minutes": 150,
+            "popularity_rank": 1,
+        }
+        bot = Mock()
+        bot.send_message.return_value = types.SimpleNamespace(message_id=31)
+        bot.send_photo.return_value = types.SimpleNamespace(message_id=30)
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=100))
+        promo_admin._context_messages.clear()
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value={"status": promo_admin.ROLE_MANAGER},
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ), patch.object(
+            promo_admin,
+            "_runtime",
+            return_value=(Mock(), storage),
+        ):
+            promo_admin.show_game_card(message, 10, bot)
+
+        markup = bot.send_message.call_args.kwargs["reply_markup"]
+        callbacks = [
+            button.callback_data
+            for row in markup.keyboard
+            for button in row
+        ]
+        self.assertIn("stpa:glicenses:10", callbacks)
+        self.assertIn("stpa:geditmenu:10", callbacks)
+        self.assertIn("stpa:gstatusmenu:10", callbacks)
+        self.assertNotIn("stpa:geditplayers:10", callbacks)
+        self.assertNotIn("stpa:gstatus:paused:10", callbacks)
+        bot.send_photo.assert_called_once_with(
+            100,
+            photo="https://example.test/header.jpg",
+        )
+        body = bot.send_message.call_args.args[1]
+        self.assertIn("Наиграно во всех клубах: 2,5 ч", body)
+        self.assertIn("Место по популярности: 1", body)
+        promo_admin._context_messages.clear()
+
+    def test_employee_game_card_is_read_only(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        storage = Mock()
+        storage.managed_game.return_value = {
+            "app_id": 10,
+            "steam_name": "Test Game",
+            "catalog_status": "active",
+            "owned_count": 2,
+            "account_count": 2,
+            "player_count": 1,
+            "last_promotion": None,
+            "manager_description": None,
+            "store_description": "Steam description",
+            "base_description": None,
+            "manager_comment": None,
+            "header_image": None,
+            "total_playtime_minutes": 60,
+            "popularity_rank": 1,
+        }
+        bot = Mock()
+        bot.send_message.return_value = types.SimpleNamespace(message_id=32)
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=100))
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        promo_admin._context_messages.clear()
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value={"status": promo_admin.ROLE_EMPLOYEE},
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ), patch.object(
+            promo_admin,
+            "_runtime",
+            return_value=(Mock(), storage),
+        ):
+            promo_admin.show_game_card(message, 10, bot)
+
+        markup = bot.send_message.call_args.kwargs["reply_markup"]
+        callbacks = [
+            button.callback_data
+            for row in markup.keyboard
+            for button in row
+        ]
+        self.assertIn("stpa:glicenses:10", callbacks)
+        self.assertNotIn("stpa:geditmenu:10", callbacks)
+        self.assertNotIn("stpa:gstatusmenu:10", callbacks)
+        self.assertNotIn("stpa:grefresh:10", callbacks)
+        promo_admin._context_messages.clear()
+
+    def test_employee_callback_rejects_management_action(self):
+        handlers = []
+        bot = Mock()
+
+        def callback_query_handler(**_kwargs):
+            def decorator(handler):
+                handlers.append(handler)
+                return handler
+
+            return decorator
+
+        bot.callback_query_handler.side_effect = callback_query_handler
+        register_promo_admin_callbacks(bot)
+        call = types.SimpleNamespace(
+            id="callback",
+            data="stpa:grefresh:10",
+            message=types.SimpleNamespace(
+                chat=types.SimpleNamespace(id=100),
+            ),
+        )
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value={"status": promo_admin.ROLE_EMPLOYEE},
+        ), patch.object(
+            promo_admin,
+            "_show_callback_error",
+        ) as show_error:
+            handlers[0](call)
+
+        error = show_error.call_args.args[2]
+        self.assertIsInstance(error, PermissionError)
+
 
 if __name__ == "__main__":
     unittest.main()

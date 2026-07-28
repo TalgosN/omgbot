@@ -136,6 +136,134 @@ class TrackerBotManagementTests(unittest.TestCase):
         )
         self.assertEqual(selection.app_id, 10)
 
+    def test_missing_license_report_uses_only_active_games_and_accounts(self):
+        self.storage.upsert_catalog_games(
+            [
+                {
+                    "app_id": 10,
+                    "steam_name": "Game One",
+                    "official_name": "Game One",
+                    "player_count": 1,
+                    "base_description": "Описание",
+                },
+                {
+                    "app_id": 20,
+                    "steam_name": "Game Two",
+                    "official_name": "Game Two",
+                    "player_count": 1,
+                    "base_description": "Описание",
+                },
+            ]
+        )
+        self.storage.add_managed_game(
+            app_id=30,
+            steam_name="Draft Game",
+            actor_id="manager",
+            actor_name="Manager",
+        )
+        accounts = [
+            ("76561198000000001", "zone-1", "Club A"),
+            ("76561198000000002", "zone-2", "Club B"),
+            ("76561198000000003", "zone-3", "Club B"),
+        ]
+        for steam_id, zone, club in accounts:
+            self.storage.upsert_managed_account(
+                steam_id=steam_id,
+                vanity_url=zone,
+                club_name=club,
+                actor_id="owner",
+                actor_name="Owner",
+            )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Game One", 0),
+                OwnedGame(20, "Game Two", 0),
+            ],
+        )
+        self.storage.record_account_scan(
+            "76561198000000002",
+            [OwnedGame(20, "Game Two", 0)],
+        )
+        self.storage.record_account_scan(
+            "76561198000000003",
+            [],
+        )
+        self.storage.set_account_active(
+            "76561198000000003",
+            False,
+            actor_id="owner",
+            actor_name="Owner",
+        )
+
+        missing_game = self.storage.missing_game_license_rows(10)
+        self.assertEqual(
+            [row["steam_id"] for row in missing_game],
+            ["76561198000000002"],
+        )
+        summary = {
+            row["club_name"]: dict(row)
+            for row in self.storage.missing_license_club_summary()
+        }
+        self.assertEqual(summary["Club A"]["missing_license_count"], 0)
+        self.assertEqual(summary["Club B"]["missing_license_count"], 1)
+        self.assertEqual(summary["Club B"]["games_with_gaps"], 1)
+        rows = self.storage.missing_license_rows_for_club("Club B")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["app_id"], 10)
+        self.assertEqual(rows[0]["missing_zones"], "zone-2")
+
+    def test_game_card_playtime_and_rank_use_all_active_accounts(self):
+        self.storage.upsert_catalog_games(
+            [
+                {
+                    "app_id": 10,
+                    "steam_name": "Popular Game",
+                    "official_name": "Popular Game",
+                    "player_count": 1,
+                    "base_description": "Описание",
+                },
+                {
+                    "app_id": 20,
+                    "steam_name": "Other Game",
+                    "official_name": "Other Game",
+                    "player_count": 1,
+                    "base_description": "Описание",
+                },
+            ]
+        )
+        accounts = [
+            ("76561198000000001", "zone-1"),
+            ("76561198000000002", "zone-2"),
+        ]
+        for steam_id, zone in accounts:
+            self.storage.upsert_managed_account(
+                steam_id=steam_id,
+                vanity_url=zone,
+                club_name="Club",
+                actor_id="owner",
+                actor_name="Owner",
+            )
+        self.storage.record_account_scan(
+            accounts[0][0],
+            [
+                OwnedGame(10, "Popular Game", 120),
+                OwnedGame(20, "Other Game", 60),
+            ],
+        )
+        self.storage.record_account_scan(
+            accounts[1][0],
+            [OwnedGame(10, "Popular Game", 30)],
+        )
+
+        popular = self.storage.managed_game(10)
+        other = self.storage.managed_game(20)
+
+        self.assertEqual(popular["total_playtime_minutes"], 150)
+        self.assertEqual(popular["popularity_rank"], 1)
+        self.assertEqual(other["total_playtime_minutes"], 60)
+        self.assertEqual(other["popularity_rank"], 2)
+
 
 class TrackerMigrationTests(unittest.TestCase):
     def test_v5_approved_games_become_managed_active_games(self):

@@ -96,6 +96,22 @@ class HelpMenuTest(unittest.TestCase):
         ))
         self.assertFalse(any('Расписание' in button.text for button in buttons))
 
+    def test_main_menu_opens_steamtracker_for_employee(self):
+        tracker_admin = types.ModuleType('steamtracker.admin')
+        tracker_admin.promotion_admin_menu = Mock()
+        bot = Mock()
+        message = types.SimpleNamespace(
+            text='🎮 Steam Tracker',
+            chat=types.SimpleNamespace(id=123),
+        )
+
+        with patch.dict(sys.modules, {
+            'steamtracker.admin': tracker_admin,
+        }):
+            self.menu.func(message, bot)
+
+        tracker_admin.promotion_admin_menu.assert_called_once_with(message, bot)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -68,6 +68,10 @@ def func(message, bot):
         from openclose import func_today
         func_today(message, bot)
 
+    elif a == '🎮 Steam Tracker':
+        from steamtracker.admin import promotion_admin_menu
+        promotion_admin_menu(message, bot)
+
     elif a == '🚩 Доска проблем':
         from taskboard import task_board
         task_board(message, bot)

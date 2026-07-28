@@ -1001,6 +1001,37 @@ class TrackerStorage:
         with self.connect() as conn:
             row = conn.execute(
                 """
+                WITH active_game_playtime AS (
+                    SELECT
+                        catalog_game.app_id,
+                        COALESCE(
+                            SUM(
+                                CASE
+                                    WHEN a.active = 1
+                                    THEN ag.last_playtime_minutes
+                                    ELSE 0
+                                END
+                            ),
+                            0
+                        ) AS total_playtime_minutes
+                    FROM games catalog_game
+                    LEFT JOIN account_games ag
+                        ON ag.app_id = catalog_game.app_id
+                    LEFT JOIN accounts a
+                        ON a.steam_id = ag.steam_id
+                    WHERE catalog_game.managed = 1
+                        AND catalog_game.catalog_status = 'active'
+                    GROUP BY catalog_game.app_id
+                ),
+                ranked_game_playtime AS (
+                    SELECT
+                        app_id,
+                        total_playtime_minutes,
+                        RANK() OVER (
+                            ORDER BY total_playtime_minutes DESC
+                        ) AS popularity_rank
+                    FROM active_game_playtime
+                )
                 SELECT
                     g.*,
                     gm.store_description,
@@ -1023,6 +1054,11 @@ class TrackerStorage:
                         FROM accounts
                         WHERE active = 1
                     ) AS account_count,
+                    COALESCE(
+                        ranked_game_playtime.total_playtime_minutes,
+                        0
+                    ) AS total_playtime_minutes,
+                    ranked_game_playtime.popularity_rank,
                     (
                         SELECT MAX(valid_to)
                         FROM promotions p
@@ -1032,6 +1068,8 @@ class TrackerStorage:
                     ) AS last_promotion
                 FROM games g
                 LEFT JOIN game_metadata gm ON gm.app_id = g.app_id
+                LEFT JOIN ranked_game_playtime
+                    ON ranked_game_playtime.app_id = g.app_id
                 WHERE g.app_id = ? AND g.managed = 1
                 """,
                 (app_id,),
@@ -1061,6 +1099,114 @@ class TrackerStorage:
                     ORDER BY a.active DESC, a.club_name, a.vanity_url
                     """,
                     (app_id,),
+                )
+            )
+
+    def missing_game_license_rows(
+        self,
+        app_id: int,
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        a.steam_id,
+                        a.vanity_url,
+                        a.club_name
+                    FROM accounts a
+                    LEFT JOIN account_games ag
+                        ON ag.steam_id = a.steam_id
+                        AND ag.app_id = ?
+                    WHERE a.active = 1
+                        AND COALESCE(ag.owned, 0) = 0
+                    ORDER BY a.club_name, a.vanity_url, a.steam_id
+                    """,
+                    (app_id,),
+                )
+            )
+
+    def missing_license_club_summary(self) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        COALESCE(NULLIF(a.club_name, ''), 'Без клуба')
+                            AS club_name,
+                        COUNT(DISTINCT a.steam_id) AS account_count,
+                        COUNT(DISTINCT g.app_id) AS active_game_count,
+                        SUM(
+                            CASE
+                                WHEN COALESCE(ag.owned, 0) = 0 THEN 1
+                                ELSE 0
+                            END
+                        ) AS missing_license_count,
+                        COUNT(
+                            DISTINCT CASE
+                                WHEN COALESCE(ag.owned, 0) = 0
+                                THEN g.app_id
+                            END
+                        ) AS games_with_gaps
+                    FROM accounts a
+                    CROSS JOIN games g
+                    LEFT JOIN account_games ag
+                        ON ag.steam_id = a.steam_id
+                        AND ag.app_id = g.app_id
+                    WHERE a.active = 1
+                        AND g.managed = 1
+                        AND g.catalog_status = 'active'
+                    GROUP BY
+                        COALESCE(NULLIF(a.club_name, ''), 'Без клуба')
+                    ORDER BY club_name
+                    """
+                )
+            )
+
+    def missing_license_rows_for_club(
+        self,
+        club_name: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        with self.connect() as conn:
+            return list(
+                conn.execute(
+                    """
+                    SELECT
+                        g.app_id,
+                        g.steam_name,
+                        COUNT(*) AS missing_count,
+                        GROUP_CONCAT(
+                            COALESCE(
+                                NULLIF(a.vanity_url, ''),
+                                a.steam_id
+                            ),
+                            ', '
+                        ) AS missing_zones
+                    FROM games g
+                    CROSS JOIN accounts a
+                    LEFT JOIN account_games ag
+                        ON ag.steam_id = a.steam_id
+                        AND ag.app_id = g.app_id
+                    WHERE g.managed = 1
+                        AND g.catalog_status = 'active'
+                        AND a.active = 1
+                        AND COALESCE(
+                            NULLIF(a.club_name, ''),
+                            'Без клуба'
+                        ) = ?
+                        AND COALESCE(ag.owned, 0) = 0
+                    GROUP BY g.app_id, g.steam_name
+                    ORDER BY g.steam_name, g.app_id
+                    LIMIT ? OFFSET ?
+                    """,
+                    (
+                        club_name,
+                        max(1, min(int(limit), 500)),
+                        max(0, int(offset)),
+                    ),
                 )
             )
 
