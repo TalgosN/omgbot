@@ -258,7 +258,7 @@ function renderFreshness() {
 
 function explanationMetric(item, compact = false) {
   const target = item.target == null
-    ? 'Каждая инициатива добавляет 1% к итоговому KPI'
+    ? `Каждая инициатива добавляет ${percent(item.bonus_per_item)} к итоговому KPI`
     : `Норма на ${number(state.myKpi?.shifts || 0)} смен: ${number(item.target)}`;
   const needed = item.target != null && item.needed > 0
     ? `<small class="metric-gap">До нормы: ${number(item.needed)}</small>`
@@ -478,6 +478,7 @@ function renderEmployees() {
             <strong>${number(item.shifts)} <em>(${number(item.weighted_shifts)})</em></strong>
           </div>
         </div>
+        ${hashtagChips(item)}
         ${penaltyCount ? `<div class="employee-alert">−${penaltyCount * 10}% · штрафов: ${penaltyCount}</div>` : ''}
         ${attention ? `<div class="attention-reasons">${attention}</div>` : ''}
       </article>
@@ -485,9 +486,34 @@ function renderEmployees() {
   }).join('');
 }
 
+function hashtagValue(item) {
+  if (item.total_value == null) return `×${item.count}`;
+  const units = {
+    hours: 'ч',
+    hour: 'ч',
+  };
+  return `×${item.count} · ${number(item.total_value)} ${units[item.value_unit] || item.value_unit}`;
+}
+
+function hashtagChips(employee, clickable = false) {
+  const hashtags = employee.extra_hashtags || [];
+  if (!hashtags.length) return '';
+  return `
+    <div class="employee-hashtags">
+      ${hashtags.map((item) => (
+        clickable
+          ? `<button type="button" data-hashtag="${escapeHtml(item.hashtag)}">
+              ${escapeHtml(item.hashtag)} <b>${escapeHtml(hashtagValue(item))}</b>
+            </button>`
+          : `<span>${escapeHtml(item.hashtag)} <b>${escapeHtml(hashtagValue(item))}</b></span>`
+      )).join('')}
+    </div>
+  `;
+}
+
 function metric(label, key, fact, ratio, explanation = null) {
   const details = explanation
-    ? `Норма: ${explanation.target == null ? '1% за инициативу' : number(explanation.target)}
+    ? `Норма: ${explanation.target == null ? `${percent(explanation.bonus_per_item)} за инициативу` : number(explanation.target)}
        · вклад ${signedPercent(explanation.contribution_pct)}`
     : 'Показать записи';
   return `
@@ -534,6 +560,10 @@ function renderDialog(employee) {
     ${metric('Сертификаты', 'certificates', employee.certificates, employee.certificates_pct, explanation.certificates)}
     ${metric('Абонементы', 'subscriptions', employee.subscriptions, employee.subscriptions_pct, explanation.subscriptions)}
     ${metric('Инициативы', 'initiatives', employee.initiatives, employee.initiatives_pct, explanation.initiatives)}
+    ${(employee.extra_hashtags || []).length ? `
+      <h3 class="section-title">Другие активности</h3>
+      ${hashtagChips(employee, true)}
+    ` : ''}
     <h3 class="section-title">Штрафы</h3>
     <div class="penalty-list">
       ${penalties.length ? penalties.map((item) => `
@@ -561,7 +591,10 @@ function renderDialog(employee) {
 }
 
 async function showMetricEntries(metricKey) {
-  const label = metricLabels[metricKey] || metricKey;
+  const hashtag = metricKey.startsWith('hashtag:')
+    ? metricKey.slice('hashtag:'.length)
+    : '';
+  const label = hashtag || metricLabels[metricKey] || metricKey;
   $('#entriesEmployee').textContent = state.selected.nickname;
   $('#entriesTitle').textContent = label;
   $('#entriesPeriod').textContent = `С начала ${monthLabel(state.month)} по ${dayLabel(state.day, { year: true })}`;
@@ -580,7 +613,9 @@ async function showMetricEntries(metricKey) {
         <article class="entry">
           <div class="entry-head">
             <time>${dayLabel(item.date, { year: true })}</time>
-            <strong>${number(item.value)}</strong>
+            ${item.value == null ? '' : `<strong>${number(item.value)}${
+              item.value_unit === 'hours' ? ' ч' : ''
+            }</strong>`}
           </div>
           ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ''}
           ${(item.club || item.status) ? `
@@ -1221,6 +1256,11 @@ document.addEventListener('click', (event) => {
 });
 
 employeeDialog.addEventListener('click', async (event) => {
+  const hashtagButton = event.target.closest('[data-hashtag]');
+  if (hashtagButton) {
+    await showMetricEntries(`hashtag:${hashtagButton.dataset.hashtag}`);
+    return;
+  }
   const metricButton = event.target.closest('[data-metric]');
   if (metricButton) {
     await showMetricEntries(metricButton.dataset.metric);

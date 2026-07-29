@@ -18,6 +18,8 @@ from kpi_calculator import (
     calculate_daily_kpi_series,
     calculate_monthly_kpi,
     cancel_penalty,
+    get_hashtag_entries,
+    get_hashtag_summaries,
     get_month_status,
     get_metric_entries,
     get_kpi_freshness,
@@ -387,11 +389,14 @@ def _employee_explanation(row):
         'label': 'Инициативы',
         'fact': initiative_fact,
         'plan_per_shift': None,
+        'bonus_per_item': float(
+            row.get('initiative_bonus_per_item', 0.10) or 0.10
+        ),
         'target': None,
         'needed': 0,
         'ratio': initiative_ratio,
-        'weight': 0.10,
-        'contribution_pct': initiative_ratio * 0.10,
+        'weight': 1.0,
+        'contribution_pct': initiative_ratio,
     })
 
     metric_contribution = sum(
@@ -665,6 +670,12 @@ def api_kpi():
         )
     week_by_login = {row['login']: row for row in week_rows}
     metadata = _employee_metadata(employee_logins, month)
+    hashtag_summaries = get_hashtag_summaries(
+        employee_logins,
+        month,
+        period_end=selected_day,
+        db_path=DB_PATH,
+    )
     for row in rows:
         previous = previous_by_login.get(row['login'])
         week_previous = week_by_login.get(row['login'])
@@ -692,6 +703,7 @@ def api_kpi():
         }))
         row['attention_reasons'] = _attention_reasons(row)
         row['needs_attention'] = bool(row['attention_reasons'])
+        row['extra_hashtags'] = hashtag_summaries.get(row['login'], [])
         row['explanation'] = _employee_explanation(row)
     penalties = list_penalties(month)
     current_login = _actor_login()
@@ -713,6 +725,10 @@ def api_kpi():
             current_employee = personal_rows[0]
             current_employee['kpi_change'] = None
             current_employee['rank_change'] = None
+            current_employee['extra_hashtags'] = hashtag_summaries.get(
+                current_employee['login'],
+                [],
+            )
             current_employee['explanation'] = _employee_explanation(
                 current_employee
             )
@@ -738,12 +754,21 @@ def api_kpi_details():
     metric = str(request.args.get('metric') or '').strip()
     if employee_login.lower() not in set(_active_employee_logins()):
         raise ValueError('Сотрудник не найден или неактивен')
-    entries = get_metric_entries(
-        employee_login,
-        month,
-        metric,
-        period_end=selected_day,
-    )
+    if metric.startswith('hashtag:'):
+        entries = get_hashtag_entries(
+            employee_login,
+            month,
+            metric.removeprefix('hashtag:'),
+            period_end=selected_day,
+            db_path=DB_PATH,
+        )
+    else:
+        entries = get_metric_entries(
+            employee_login,
+            month,
+            metric,
+            period_end=selected_day,
+        )
     return jsonify({
         'employee_login': employee_login.lower(),
         'metric': metric,

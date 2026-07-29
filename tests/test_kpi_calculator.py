@@ -240,6 +240,74 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertEqual(early['penalty_impact'], 0.10)
         self.assertEqual(early['stream_bonus'], 0.05)
 
+    def test_dynamic_hashtag_summary_counts_events_and_hides_money(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            '''
+            CREATE TABLE hashtag_events (
+                id INTEGER PRIMARY KEY,
+                telegram TEXT NOT NULL,
+                hashtag TEXT NOT NULL,
+                value REAL,
+                value_unit TEXT,
+                comment TEXT,
+                event_date TEXT NOT NULL,
+                club TEXT,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL
+            );
+            '''
+        )
+        conn.executemany(
+            '''
+            INSERT INTO hashtag_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            [
+                (1, '@Alice', '#автосим', 500, 'rubles', '', '2026-07-05', None, 'applied', 'api'),
+                (2, '@Alice', '#автосим', 700, 'rubles', '', '2026-07-06', None, 'applied', 'api'),
+                (3, '@Alice', '#двойная', 2, 'hours', 'Вечер', '2026-07-07', 'Марьино', 'applied', 'api'),
+                (4, '@Alice', '#др', 500, 'rubles', '', '2026-07-08', None, 'pending', 'api'),
+                (5, '@Alice', '#новый', 3, 'points', '', '2026-08-01', None, 'applied', 'api'),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        summaries = kpi_calculator.get_hashtag_summaries(
+            ['@Alice'],
+            '2026-07',
+            period_end='2026-07-31',
+            db_path=self.db_path,
+        )['@alice']
+        entries = kpi_calculator.get_hashtag_entries(
+            '@Alice',
+            '2026-07',
+            '#автосим',
+            period_end='2026-07-31',
+            db_path=self.db_path,
+        )
+
+        self.assertEqual(
+            summaries,
+            [
+                {
+                    'hashtag': '#автосим',
+                    'count': 2,
+                    'total_value': None,
+                    'value_unit': None,
+                },
+                {
+                    'hashtag': '#двойная',
+                    'count': 1,
+                    'total_value': 2.0,
+                    'value_unit': 'hours',
+                },
+            ],
+        )
+        self.assertEqual(len(entries), 2)
+        self.assertIsNone(entries[0]['value'])
+        self.assertIsNone(entries[0]['value_unit'])
+
     def test_legacy_metric_price_column_is_removed(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute(

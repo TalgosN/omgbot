@@ -609,6 +609,28 @@ em {
   font-weight: 650;
 }
 
+.employee-hashtags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.employee-hashtags span,
+.employee-hashtags button {
+  padding: 3px 6px;
+  border: 1px solid rgba(174, 151, 255, 0.12);
+  border-radius: 999px;
+  color: #aaa0d2;
+  background: rgba(174, 151, 255, 0.06);
+  font: inherit;
+  font-size: 7px;
+  line-height: 1.2;
+}
+
+.employee-hashtags button { cursor: pointer; }
+.employee-hashtags b { color: #d1c8f2; font-weight: 700; }
+
 .attention-reasons {
   display: flex;
   flex-wrap: wrap;

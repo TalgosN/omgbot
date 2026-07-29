@@ -198,6 +198,13 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(explanation['pace']['projected_pct'], 0.8)
         self.assertAlmostEqual(explanation['pace']['gap_to_green_pct'], 0.1)
         self.assertEqual(explanation['metrics'][1]['needed'], 1)
+        initiative = next(
+            item
+            for item in explanation['metrics']
+            if item['key'] == 'initiatives'
+        )
+        self.assertEqual(initiative['bonus_per_item'], 0.1)
+        self.assertEqual(initiative['contribution_pct'], 0.1)
         self.assertEqual(
             payload['freshness']['latest_metric_date'],
             '2026-07-14',
@@ -365,6 +372,37 @@ class KpiWebTest(unittest.TestCase):
             '2026-07-01',
             'reviews',
             period_end='2026-07-15',
+        )
+
+    def test_dynamic_hashtag_details_are_available_to_employee(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_active_employee_logins', return_value=['@one']),
+            patch.object(kpi_web, 'get_hashtag_entries', return_value=[{
+                'id': 1,
+                'date': '2026-07-05',
+                'value': None,
+                'value_unit': None,
+                'description': 'Автосим',
+                'club': 'Марьино',
+                'status': None,
+            }]) as get_entries,
+        ):
+            response = self.client.get(
+                '/api/kpi/details?month=2026-07&date=2026-07-15'
+                '&employee_login=@one&metric=hashtag:%23автосим',
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['entries'][0]['date'], '2026-07-05')
+        get_entries.assert_called_once_with(
+            '@one',
+            '2026-07-01',
+            '#автосим',
+            period_end='2026-07-15',
+            db_path=kpi_web.DB_PATH,
         )
 
     def test_daily_analytics_are_available_to_employee(self):

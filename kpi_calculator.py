@@ -1311,6 +1311,142 @@ def get_metric_entries(
     ]
 
 
+def get_hashtag_summaries(
+    employee_logins,
+    period_month,
+    period_end=None,
+    db_path=DB_PATH,
+):
+    month = _month_start(period_month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+    logins = sorted({_normalize_login(login) for login in employee_logins})
+    result = {login: [] for login in logins}
+    if not logins:
+        return result
+
+    conn = sqlite3.connect(db_path)
+    try:
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='hashtag_events'"
+        ).fetchone()
+        if not table_exists:
+            return result
+        placeholders = ','.join('?' for _ in logins)
+        rows = conn.execute(
+            f'''
+            SELECT lower(telegram), lower(hashtag), value, lower(value_unit)
+            FROM hashtag_events
+            WHERE lower(telegram) IN ({placeholders})
+              AND status='applied'
+              AND date(event_date) BETWEEN date(?) AND date(?)
+            ORDER BY lower(hashtag), event_date, id
+            ''',
+            (*logins, month.isoformat(), end.isoformat()),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    grouped = defaultdict(lambda: {
+        'count': 0,
+        'total_value': 0.0,
+        'units': set(),
+    })
+    for login, hashtag, value, value_unit in rows:
+        item = grouped[(login, hashtag)]
+        item['count'] += 1
+        if value is not None:
+            item['total_value'] += float(value)
+        if value_unit:
+            item['units'].add(value_unit)
+
+    money_units = {'rubles', 'ruble', 'rub', '₽'}
+    for (login, hashtag), values in grouped.items():
+        units = values.pop('units')
+        value_unit = next(iter(units)) if len(units) == 1 else None
+        total_value = values['total_value']
+        if value_unit is None or value_unit in money_units:
+            total_value = None
+        result.setdefault(login, []).append({
+            'hashtag': hashtag,
+            'count': values['count'],
+            'total_value': total_value,
+            'value_unit': value_unit if total_value is not None else None,
+        })
+    return result
+
+
+def get_hashtag_entries(
+    employee_login,
+    period_month,
+    hashtag,
+    period_end=None,
+    db_path=DB_PATH,
+):
+    month = _month_start(period_month)
+    end = _day(period_end) if period_end is not None else _month_end(month)
+    if end.replace(day=1) != month:
+        raise ValueError('KPI period end must belong to the selected month')
+    normalized_hashtag = str(hashtag or '').strip().lower()
+    if (
+        not normalized_hashtag.startswith('#')
+        or len(normalized_hashtag) > 64
+    ):
+        raise ValueError('Unsupported hashtag')
+
+    conn = sqlite3.connect(db_path)
+    try:
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='hashtag_events'"
+        ).fetchone()
+        if not table_exists:
+            return []
+        rows = conn.execute(
+            '''
+            SELECT id, date(event_date), value, lower(value_unit), comment,
+                   club, source
+            FROM hashtag_events
+            WHERE lower(telegram)=?
+              AND lower(hashtag)=?
+              AND status='applied'
+              AND date(event_date) BETWEEN date(?) AND date(?)
+            ORDER BY date(event_date) DESC, id DESC
+            ''',
+            (
+                _normalize_login(employee_login),
+                normalized_hashtag,
+                month.isoformat(),
+                end.isoformat(),
+            ),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    money_units = {'rubles', 'ruble', 'rub', '₽'}
+    return [
+        {
+            'id': row[0],
+            'date': row[1],
+            'value': (
+                None
+                if row[3] in money_units or row[2] is None
+                else float(row[2])
+            ),
+            'value_unit': (
+                None if row[3] in money_units else row[3]
+            ),
+            'description': row[4],
+            'club': row[5],
+            'status': None,
+            'source': row[6],
+        }
+        for row in rows
+    ]
+
+
 def get_kpi_freshness(period_month, period_end=None, db_path=DB_PATH):
     month = _month_start(period_month)
     end = _day(period_end) if period_end is not None else _month_end(month)
