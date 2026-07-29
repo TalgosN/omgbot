@@ -561,21 +561,26 @@ def do_club_action(hashtag, message, text_args):
 def do_bonus(hashtag, message, text_args):
     """Обработчик для #серт и #абик"""
     parts = text_args.split()
-    if len(parts) != 2 or not parts[0].isnumeric() or not parts[1].isnumeric():
+    if (
+        len(parts) != 2
+        or not parts[0].isnumeric()
+        or not re.fullmatch(r'[0-9]+(?:[,.][0-9]+)?', parts[1])
+    ):
         return KPI_INVALID, "Неверно написан хештег! Формат:", f"```Правильно!\n{hashtag} *номер* *сумма*```"
         
     num = parts[0]
-    sale = parts[1]
-    
-    if (hashtag == "#абик" and int(num) < 1000) or (hashtag == "#серт" and int(num) >= 3000):
-        table = bonus[hashtag]
-        today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
-        who = "@" + message.from_user.username
-        Insert_bonus(table, num, today, who, sale)
-        update_table(table)
-        return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
-    else:
-        return KPI_INVALID, "Неверно написан хештег!", "```Правильно!\nАбики имеют номер < 1000, серты >= 3000```"
+    sale = float(parts[1].replace(',', '.'))
+    if sale <= 0:
+        return KPI_INVALID, "Сумма должна быть больше нуля!", f"```Правильно!\n{hashtag} *номер* *сумма*```"
+    if sale.is_integer():
+        sale = int(sale)
+
+    table = bonus[hashtag]
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    who = "@" + message.from_user.username
+    Insert_bonus(table, num, today, who, sale)
+    update_table(table)
+    return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
 
 
 def do_review(message, text_args):
@@ -654,6 +659,33 @@ kpi_dict = {
     '#отзывы': do_review,
 }
 
+
+def _combine_hashtag_results(local_result, remote_result):
+    local_status, local_text, local_desc = local_result
+    remote_status, remote_text, remote_desc = remote_result
+
+    if remote_status in (KPI_REMOTE_SUCCESS, KPI_IGNORED):
+        return local_result
+
+    if local_status in (KPI_SUCCESS, KPI_SAVED_ERROR):
+        details = "\n".join(
+            part
+            for part in (
+                local_text if local_status == KPI_SAVED_ERROR else "",
+                remote_text,
+                remote_desc,
+            )
+            if part
+        )
+        return (
+            KPI_SAVED_ERROR,
+            details or "Локальная запись сохранена, но OMG Shift не подтвердил хештег.",
+            "",
+        )
+
+    return local_result
+
+
 def hash_handle(message):
     try:
         # Разделяем на 2 части: хештег и всё остальное (аргументы)
@@ -665,8 +697,11 @@ def hash_handle(message):
         text_args = parts[1].strip() if len(parts) > 1 else ""
         
         if hashtag in kpi_dict:
-            flag, answer, desc = kpi_dict[hashtag](message, text_args)
-            return flag, answer, desc
+            local_result = kpi_dict[hashtag](message, text_args)
+            if local_result[0] == KPI_INVALID or hashtag == '#штраф':
+                return local_result
+            remote_result = do_remote_hashtag(hashtag, message, text_args)
+            return _combine_hashtag_results(local_result, remote_result)
         return do_remote_hashtag(hashtag, message, text_args)
     except Exception as e:
         print(f"Ошибка в hash_handle: {e}")

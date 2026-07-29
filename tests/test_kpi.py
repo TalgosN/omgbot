@@ -122,24 +122,137 @@ class KpiTest(unittest.TestCase):
             received.append((message.text, args))
             return self.kpi.KPI_SUCCESS, "ok", ""
 
-        with patch.object(self.kpi, "kpi_dict", {"#продление": handler}):
+        with patch.object(self.kpi, "kpi_dict", {"#продление": handler}), \
+                patch.object(
+                    self.kpi,
+                    "do_remote_hashtag",
+                    return_value=(self.kpi.KPI_IGNORED, "", ""),
+                ) as remote:
             result = self.kpi.hash_handle(self.message("#ПРОДЛЕНИЕ Татьяна 15:00-16:00"))
 
         self.assertEqual(result, (self.kpi.KPI_SUCCESS, "ok", ""))
         self.assertEqual(received, [("#ПРОДЛЕНИЕ Татьяна 15:00-16:00", "Татьяна 15:00-16:00")])
+        remote.assert_called_once_with(
+            "#продление",
+            unittest.mock.ANY,
+            "Татьяна 15:00-16:00",
+        )
 
-    def test_bonus_number_boundaries(self):
-        invalid_cert = self.kpi.do_bonus("#серт", self.message(""), "2999 5000")
-        invalid_subscription = self.kpi.do_bonus("#абик", self.message(""), "1000 5000")
-        self.assertEqual(invalid_cert[0], self.kpi.KPI_INVALID)
-        self.assertEqual(invalid_subscription[0], self.kpi.KPI_INVALID)
+    def test_bonus_accepts_site_numbering_and_fractional_amount(self):
+        with patch.object(self.kpi, "Insert_bonus", create=True) as insert, \
+                patch.object(self.kpi, "update_table", create=True):
+            valid_cert = self.kpi.do_bonus("#серт", self.message(""), "1234 1800")
+            valid_subscription = self.kpi.do_bonus("#абик", self.message(""), "1000 125,50")
 
-        self.kpi.Insert_bonus = lambda *args: None
-        self.kpi.update_table = lambda *args: None
-        valid_cert = self.kpi.do_bonus("#серт", self.message(""), "3000 5000")
-        valid_subscription = self.kpi.do_bonus("#абик", self.message(""), "999 5000")
         self.assertEqual(valid_cert[0], self.kpi.KPI_SUCCESS)
         self.assertEqual(valid_subscription[0], self.kpi.KPI_SUCCESS)
+        self.assertEqual(insert.call_args_list[0].args[1], "1234")
+        self.assertEqual(insert.call_args_list[0].args[4], 1800)
+        self.assertEqual(insert.call_args_list[1].args[4], 125.5)
+
+    def test_invalid_local_hashtag_is_not_sent_to_omg_shift(self):
+        handler = unittest.mock.Mock(
+            return_value=(self.kpi.KPI_INVALID, "bad", "")
+        )
+        with patch.object(self.kpi, "kpi_dict", {"#серт": handler}), \
+                patch.object(self.kpi, "do_remote_hashtag") as remote:
+            result = self.kpi.hash_handle(self.message("#серт неверно"))
+
+        self.assertEqual(result[0], self.kpi.KPI_INVALID)
+        remote.assert_not_called()
+
+    def test_penalty_is_never_sent_to_omg_shift(self):
+        handler = unittest.mock.Mock(
+            return_value=(self.kpi.KPI_SUCCESS, "ok", "")
+        )
+        with patch.object(self.kpi, "kpi_dict", {"#штраф": handler}), \
+                patch.object(self.kpi, "do_remote_hashtag") as remote:
+            result = self.kpi.hash_handle(self.message("#штраф @user причина"))
+
+        self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
+        remote.assert_not_called()
+
+    def test_remote_failure_keeps_local_kpi_result_as_saved_error(self):
+        handler = unittest.mock.Mock(
+            return_value=(self.kpi.KPI_SUCCESS, "ok", "")
+        )
+        with patch.object(self.kpi, "kpi_dict", {"#серт": handler}), \
+                patch.object(
+                    self.kpi,
+                    "do_remote_hashtag",
+                    return_value=(self.kpi.KPI_ERROR, "OMG недоступен", ""),
+                ):
+            result = self.kpi.hash_handle(self.message("#серт 1234 1800"))
+
+        self.assertEqual(result[0], self.kpi.KPI_SAVED_ERROR)
+        self.assertIn("OMG недоступен", result[1])
+
+    def test_certificate_is_saved_locally_and_sent_to_omg_shift(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connect = lambda _path: real_connect(db_path)
+            self.kpi._hashtag_rules_cache_until = 0
+            get = unittest.mock.Mock(return_value=Response({
+                "ok": True,
+                "hashtags": [{
+                    "hashtag": "#серт",
+                    "type": "reported_percent",
+                    "valueUnit": "percent_base",
+                    "percent": 10,
+                }],
+            }))
+            post = unittest.mock.Mock(return_value=Response({"ok": True}))
+
+            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+                    patch.object(self.kpi.requests, "get", get), \
+                    patch.object(self.kpi.requests, "post", post), \
+                    patch.object(self.kpi, "Insert_bonus", create=True) as insert, \
+                    patch.object(self.kpi, "update_table", create=True):
+                result = self.kpi.hash_handle(
+                    self.message("#серт 1234 1800")
+                )
+
+            self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
+            insert.assert_called_once_with(
+                "sert",
+                "1234",
+                unittest.mock.ANY,
+                "@employee",
+                1800,
+            )
+            get.assert_called_once()
+            post.assert_called_once()
+            self.assertEqual(
+                post.call_args.kwargs["json"],
+                {
+                    "telegram": "@employee",
+                    "hashtag": "#серт",
+                    "value": "1234",
+                    "comment": "1800",
+                    "date": unittest.mock.ANY,
+                },
+            )
+            connection = real_connect(db_path)
+            event = connection.execute(
+                """SELECT hashtag, value, value_unit, comment, status
+                   FROM hashtag_events"""
+            ).fetchone()
+            connection.close()
+            self.assertEqual(
+                event,
+                ("#серт", 1234, "percent_base", "1800", "applied"),
+            )
 
     def test_remote_hashtag_uses_generic_api_and_saves_applied_event(self):
         class Response:
