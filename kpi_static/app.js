@@ -19,6 +19,7 @@ const state = {
   selected: null,
   analytics: null,
   analyticsEmployees: new Set(),
+  settings: null,
   filters: {
     club: '',
     role: '',
@@ -38,6 +39,14 @@ const metricLabels = {
   subscriptions: 'Абонементы',
   initiatives: 'Инициативы',
   shifts: 'Смены',
+};
+const settingsMetricUnits = {
+  'Отзывы': 'на одну смену',
+  'Анкеты': 'на одну смену',
+  'Продления': 'на одну смену',
+  'Сертификаты': 'на одну смену',
+  'Абонементы': 'на одну смену',
+  'Инициативы': '% к итоговому KPI за одну инициативу',
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -956,6 +965,62 @@ async function loadAnalytics(force = false) {
   }
 }
 
+function renderSettings() {
+  if (!state.settings) return;
+  $('#settingsMetrics').innerHTML = state.settings.metrics.map((item) => {
+    const initiative = item.kind === 'initiative_bonus';
+    const value = initiative ? item.value * 100 : item.value;
+    return `
+      <label class="setting-field">
+        <span>${escapeHtml(item.metric)}</span>
+        <div class="setting-input">
+          <input
+            type="number"
+            min="0.001"
+            step="0.001"
+            value="${value}"
+            data-setting-metric="${escapeHtml(item.metric)}"
+            data-kind="${escapeHtml(item.kind)}"
+            required
+          >
+          <b>${initiative ? '%' : '×'}</b>
+        </div>
+        <small>${escapeHtml(settingsMetricUnits[item.metric] || '')}</small>
+      </label>
+    `;
+  }).join('');
+
+  $('#settingsClubs').innerHTML = state.settings.clubs.map((item) => `
+    <article class="club-setting" data-setting-club="${escapeHtml(item.club)}">
+      <strong>${escapeHtml(item.club)}</strong>
+      <label>
+        <span>Будни</span>
+        <input type="number" min="0" step="0.01" value="${item.weekday_weight}" data-weight="weekday_weight" required>
+      </label>
+      <label>
+        <span>Выходные</span>
+        <input type="number" min="0" step="0.01" value="${item.weekend_weight}" data-weight="weekend_weight" required>
+      </label>
+    </article>
+  `).join('');
+}
+
+async function loadSettings() {
+  const month = $('#settingsMonth').value || state.month;
+  $('#settingsMetrics').innerHTML = '<div class="loading-card"></div>';
+  $('#settingsClubs').innerHTML = '<div class="loading-card"></div>';
+  try {
+    state.settings = await api(
+      `/api/kpi/settings?month=${encodeURIComponent(month)}`,
+    );
+    renderSettings();
+  } catch (error) {
+    $('#settingsMetrics').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    $('#settingsClubs').innerHTML = '';
+    showToast(error.message, true);
+  }
+}
+
 async function initialize() {
   $('#datePicker').value = state.day;
   $('#dateDisplay').textContent = numericDayLabel(state.day);
@@ -965,6 +1030,11 @@ async function initialize() {
     state.me = await api('/api/me');
     $('#userBadge').textContent = `${state.me.name} · ${state.me.role_name}`;
     $('#userBadge').classList.remove('skeleton');
+    if (state.me.can_edit_settings) {
+      $('#settingsTab').hidden = false;
+      document.querySelector('.view-tabs').classList.add('owner-tabs');
+      $('#settingsMonth').value = state.month;
+    }
     await loadData();
   } catch (error) {
     employeeList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -1037,11 +1107,14 @@ document.querySelector('.view-tabs').addEventListener('click', async (event) => 
   );
   const view = tab.dataset.view;
   const analytics = view === 'analytics';
+  const settings = view === 'settings';
   $('#myView').hidden = view !== 'my';
   $('#ratingView').hidden = view !== 'rating';
   $('#analyticsView').hidden = !analytics;
-  document.querySelector('.period-panel').hidden = analytics;
+  $('#settingsView').hidden = !settings;
+  document.querySelector('.period-panel').hidden = analytics || settings;
   if (analytics && !state.analytics) await loadAnalytics();
+  if (settings && !state.settings) await loadSettings();
 });
 
 $('#myKpi').addEventListener('click', async (event) => {
@@ -1067,6 +1140,53 @@ $('#analyticsScope').addEventListener('change', updateChartOptions);
 $('#analyticsChart').addEventListener('change', renderAnalytics);
 $('#analyticsMetric').addEventListener('change', renderAnalytics);
 $('#analyticsWeighted').addEventListener('change', renderAnalytics);
+$('#settingsMonth').addEventListener('change', (event) => {
+  if (!event.target.value) return;
+  state.settings = null;
+  loadSettings();
+});
+$('#settingsForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const metrics = {};
+  document.querySelectorAll('[data-setting-metric]').forEach((input) => {
+    const rawValue = input.valueAsNumber;
+    metrics[input.dataset.settingMetric] = (
+      input.dataset.kind === 'initiative_bonus'
+        ? rawValue / 100
+        : rawValue
+    );
+  });
+  const clubs = {};
+  document.querySelectorAll('[data-setting-club]').forEach((row) => {
+    clubs[row.dataset.settingClub] = {
+      weekday_weight: row.querySelector('[data-weight="weekday_weight"]').valueAsNumber,
+      weekend_weight: row.querySelector('[data-weight="weekend_weight"]').valueAsNumber,
+    };
+  });
+  const saveButton = $('#saveSettings');
+  saveButton.disabled = true;
+  saveButton.textContent = 'Сохраняю…';
+  try {
+    state.settings = await api('/api/kpi/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        month: $('#settingsMonth').value,
+        metrics,
+        clubs,
+      }),
+    });
+    analyticsCache.clear();
+    state.analytics = null;
+    renderSettings();
+    showToast(`Настройки действуют с ${monthLabel($('#settingsMonth').value)}`);
+    await loadData();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = 'Сохранить настройки';
+  }
+});
 $('#employeeChips').addEventListener('click', (event) => {
   const chip = event.target.closest('[data-login]');
   if (!chip) return;

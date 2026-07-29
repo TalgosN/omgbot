@@ -18,7 +18,7 @@ DEFAULT_METRIC_SETTINGS = {
     'Продления': 0.25,
     'Сертификаты': 125.0,
     'Абонементы': 250.0,
-    'Инициативы': 0.025,
+    'Инициативы': 0.10,
 }
 
 DEFAULT_CLUB_WEIGHTS = {
@@ -191,6 +191,17 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                     (metric, seed_month, plan)
                     for metric, plan in DEFAULT_METRIC_SETTINGS.items()
                 ],
+            )
+            conn.execute(
+                '''
+                UPDATE kpi_metric_settings
+                SET plan=0.10,
+                    updated_by='system:initiative_bonus_migration',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE metric='Инициативы'
+                  AND effective_month='1970-01-01'
+                  AND plan=0.025
+                '''
             )
             supported_metrics = tuple(DEFAULT_METRIC_SETTINGS)
             conn.execute(
@@ -558,6 +569,161 @@ def _settings_for_month(conn, table, month, value_columns):
     return {row[0]: tuple(float(value) for value in row[1:]) for row in rows}
 
 
+def get_kpi_settings(period_month, db_path=DB_PATH):
+    month = _month_start(period_month)
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        metric_settings = conn.execute(
+            '''
+            SELECT settings.metric, settings.plan, settings.effective_month,
+                   settings.updated_by, settings.updated_at
+            FROM kpi_metric_settings settings
+            JOIN (
+                SELECT metric, MAX(effective_month) AS effective_month
+                FROM kpi_metric_settings
+                WHERE date(effective_month) <= date(?)
+                GROUP BY metric
+            ) latest
+              ON latest.metric=settings.metric
+             AND latest.effective_month=settings.effective_month
+            ''',
+            (month.isoformat(),),
+        ).fetchall()
+        club_weights = conn.execute(
+            '''
+            SELECT settings.club, settings.weekday_weight,
+                   settings.weekend_weight, settings.effective_month,
+                   settings.updated_by, settings.updated_at
+            FROM kpi_club_weights settings
+            JOIN (
+                SELECT club, MAX(effective_month) AS effective_month
+                FROM kpi_club_weights
+                WHERE date(effective_month) <= date(?)
+                GROUP BY club
+            ) latest
+              ON latest.club=settings.club
+             AND latest.effective_month=settings.effective_month
+            ''',
+            (month.isoformat(),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    metrics_by_name = {row[0]: row for row in metric_settings}
+    clubs_by_name = {row[0]: row for row in club_weights}
+    return {
+        'period_month': month.isoformat(),
+        'metrics': [
+            {
+                'metric': metric,
+                'value': float(metrics_by_name[metric][1]),
+                'kind': 'initiative_bonus' if metric == 'Инициативы' else 'plan',
+                'effective_month': metrics_by_name[metric][2],
+                'updated_by': metrics_by_name[metric][3],
+                'updated_at': metrics_by_name[metric][4],
+            }
+            for metric in DEFAULT_METRIC_SETTINGS
+            if metric in metrics_by_name
+        ],
+        'clubs': [
+            {
+                'club': club,
+                'weekday_weight': float(clubs_by_name[club][1]),
+                'weekend_weight': float(clubs_by_name[club][2]),
+                'effective_month': clubs_by_name[club][3],
+                'updated_by': clubs_by_name[club][4],
+                'updated_at': clubs_by_name[club][5],
+            }
+            for club in DEFAULT_CLUB_WEIGHTS
+            if club in clubs_by_name
+        ],
+    }
+
+
+def save_kpi_settings(
+    period_month,
+    metrics,
+    clubs,
+    updated_by,
+    db_path=DB_PATH,
+):
+    month = _month_start(period_month)
+    expected_metrics = set(DEFAULT_METRIC_SETTINGS)
+    expected_clubs = set(DEFAULT_CLUB_WEIGHTS)
+    if set(metrics) != expected_metrics:
+        raise ValueError('Передан неполный или неизвестный набор показателей KPI')
+    if set(clubs) != expected_clubs:
+        raise ValueError('Передан неполный или неизвестный набор клубов KPI')
+
+    try:
+        metric_values = {
+            metric: float(value)
+            for metric, value in metrics.items()
+        }
+        club_values = {
+            club: (float(values[0]), float(values[1]))
+            for club, values in clubs.items()
+        }
+    except (TypeError, ValueError) as error:
+        raise ValueError('Настройки KPI должны быть числами') from error
+    if any(not math.isfinite(value) or value <= 0 for value in metric_values.values()):
+        raise ValueError('Нормы и бонус инициативы должны быть больше нуля')
+    if any(
+        not math.isfinite(value) or value < 0
+        for weights in club_values.values()
+        for value in weights
+    ):
+        raise ValueError('Веса смен не могут быть отрицательными')
+
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.executemany(
+                '''
+                INSERT INTO kpi_metric_settings (
+                    metric, effective_month, plan, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(metric, effective_month) DO UPDATE SET
+                    plan=excluded.plan,
+                    updated_by=excluded.updated_by,
+                    updated_at=CURRENT_TIMESTAMP
+                ''',
+                [
+                    (metric, month.isoformat(), value, updated_by)
+                    for metric, value in metric_values.items()
+                ],
+            )
+            conn.executemany(
+                '''
+                INSERT INTO kpi_club_weights (
+                    club, effective_month, weekday_weight,
+                    weekend_weight, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(club, effective_month) DO UPDATE SET
+                    weekday_weight=excluded.weekday_weight,
+                    weekend_weight=excluded.weekend_weight,
+                    updated_by=excluded.updated_by,
+                    updated_at=CURRENT_TIMESTAMP
+                ''',
+                [
+                    (
+                        club,
+                        month.isoformat(),
+                        weekday_weight,
+                        weekend_weight,
+                        updated_by,
+                    )
+                    for club, (weekday_weight, weekend_weight)
+                    in club_values.items()
+                ],
+            )
+    finally:
+        conn.close()
+    return get_kpi_settings(month, db_path=db_path)
+
+
 def _employees(conn, employee_logins):
     params = []
     where = "WHERE login IS NOT NULL AND trim(login) <> ''"
@@ -723,7 +889,10 @@ def _build_kpi_rows(
             row[f'{field}_plan_per_shift'] = plan
             row[f'{field}_target'] = denominator
             row[f'{field}_pct'] = row[field] / denominator if denominator else 0.0
-        row['initiatives_pct'] = row['initiatives'] * 0.10
+        row['initiative_bonus_per_item'] = metric_settings['Инициативы'][0]
+        row['initiatives_pct'] = (
+            row['initiatives'] * row['initiative_bonus_per_item']
+        )
 
         primary = (
             row['reviews_pct'] + row['forms_pct'] + row['extensions_pct']
@@ -731,7 +900,6 @@ def _build_kpi_rows(
         secondary = 0.10 * (
             row['certificates_pct']
             + row['subscriptions_pct']
-            + row['initiatives_pct']
         )
         penalty = penalties.get(login, {'count': 0, 'impact': 0.0})
         stream_bonus = streams.get(login, 0.0)
@@ -739,7 +907,13 @@ def _build_kpi_rows(
         row['penalty_impact'] = penalty['impact']
         row['stream'] = bool(stream_bonus)
         row['stream_bonus'] = stream_bonus
-        row['total_pct'] = primary + secondary - penalty['impact'] + stream_bonus
+        row['total_pct'] = (
+            primary
+            + secondary
+            + row['initiatives_pct']
+            - penalty['impact']
+            + stream_bonus
+        )
         row['weighted_pct'] = (
             row['total_pct'] * shifts / weighted if weighted else 0.0
         )

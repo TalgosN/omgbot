@@ -25,6 +25,7 @@
       <button class="view-tab active" type="button" data-view="my">Мой KPI</button>
       <button class="view-tab" type="button" data-view="rating">Рейтинг</button>
       <button class="view-tab" type="button" data-view="analytics">Аналитика</button>
+      <button id="settingsTab" class="view-tab" type="button" data-view="settings" hidden>Настройки</button>
     </nav>
 
     <section class="period-panel">
@@ -177,6 +178,55 @@
       </section>
 
       <section id="analyticsSummary" class="analytics-summary"></section>
+    </section>
+
+    <section id="settingsView" class="settings-view" hidden>
+      <form id="settingsForm">
+        <section class="settings-heading">
+          <div>
+            <p class="eyebrow">Только для владельцев</p>
+            <h2>Настройки KPI</h2>
+          </div>
+          <label class="control-field settings-month">
+            <span>Действуют с месяца</span>
+            <input id="settingsMonth" type="month" required>
+          </label>
+        </section>
+
+        <p class="settings-note">
+          Новая запись действует с выбранного месяца и не меняет настройки предыдущих месяцев.
+        </p>
+
+        <section class="settings-card">
+          <div class="settings-section-title">
+            <div>
+              <p class="eyebrow">Нормы</p>
+              <h3>Показатели KPI</h3>
+            </div>
+            <small>Норма указана на одну обычную смену</small>
+          </div>
+          <div id="settingsMetrics" class="settings-grid">
+            <div class="loading-card"></div>
+          </div>
+        </section>
+
+        <section class="settings-card">
+          <div class="settings-section-title">
+            <div>
+              <p class="eyebrow">Коэффициенты</p>
+              <h3>Веса смен по клубам</h3>
+            </div>
+            <small>Отдельно для будней и выходных</small>
+          </div>
+          <div id="settingsClubs" class="club-settings">
+            <div class="loading-card"></div>
+          </div>
+        </section>
+
+        <button id="saveSettings" class="primary-button settings-save" type="submit">
+          Сохранить настройки
+        </button>
+      </form>
     </section>
   </main>
 

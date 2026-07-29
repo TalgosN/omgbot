@@ -21,8 +21,10 @@ from kpi_calculator import (
     get_month_status,
     get_metric_entries,
     get_kpi_freshness,
+    get_kpi_settings,
     initialize_kpi_calculation_schema,
     list_penalties,
+    save_kpi_settings,
     set_month_status,
     set_monthly_stream,
 )
@@ -30,6 +32,7 @@ from permissions import (
     ACTIVE_ROLES,
     ROLE_MANAGER,
     ROLE_NAMES,
+    ROLE_OWNER,
     get_user,
 )
 
@@ -221,6 +224,18 @@ def require_manager(handler):
     def wrapped(*args, **kwargs):
         if int(g.kpi_user['status']) < ROLE_MANAGER:
             return jsonify({'error': 'Действие доступно менеджерам и руководству.'}), 403
+        return handler(*args, **kwargs)
+    return wrapped
+
+
+def require_owner(handler):
+    @wraps(handler)
+    @require_user
+    def wrapped(*args, **kwargs):
+        if int(g.kpi_user['status']) != ROLE_OWNER:
+            return jsonify({
+                'error': 'Настройки KPI доступны только руководству.',
+            }), 403
         return handler(*args, **kwargs)
     return wrapped
 
@@ -607,6 +622,7 @@ def api_me():
         'role': role,
         'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
+        'can_edit_settings': role == ROLE_OWNER,
     })
 
 
@@ -860,6 +876,48 @@ def api_kpi_analytics():
             )
             _analytics_cache.pop(oldest_key, None)
     return jsonify(payload)
+
+
+@app.get('/api/kpi/settings')
+@require_owner
+def api_kpi_settings():
+    month = _validate_month(
+        request.args.get('month') or date.today().strftime('%Y-%m')
+    )
+    return jsonify(get_kpi_settings(month))
+
+
+@app.put('/api/kpi/settings')
+@require_owner
+def api_save_kpi_settings():
+    payload = request.get_json(silent=True) or {}
+    month = _validate_month(payload.get('month'))
+    raw_metrics = payload.get('metrics')
+    raw_clubs = payload.get('clubs')
+    if not isinstance(raw_metrics, dict) or not isinstance(raw_clubs, dict):
+        raise ValueError('Передайте нормы показателей и веса клубов')
+
+    metrics = {
+        str(metric): value
+        for metric, value in raw_metrics.items()
+    }
+    clubs = {}
+    for club, weights in raw_clubs.items():
+        if not isinstance(weights, dict):
+            raise ValueError('Для каждого клуба нужны веса будней и выходных')
+        clubs[str(club)] = (
+            weights.get('weekday_weight'),
+            weights.get('weekend_weight'),
+        )
+
+    settings = save_kpi_settings(
+        month,
+        metrics,
+        clubs,
+        _actor_login(),
+    )
+    _clear_analytics_cache()
+    return jsonify(settings)
 
 
 @app.post('/api/penalties')

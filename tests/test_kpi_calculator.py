@@ -172,7 +172,8 @@ class KpiCalculatorTest(unittest.TestCase):
         self.assertTrue(row['stream'])
         self.assertEqual(row['birthdays'], 1)
         self.assertAlmostEqual(row['initiatives_pct'], 0.1)
-        self.assertAlmostEqual(row['total_pct'], 2.4133333333)
+        self.assertEqual(row['initiative_bonus_per_item'], 0.1)
+        self.assertAlmostEqual(row['total_pct'], 2.5033333333)
         self.assertAlmostEqual(row['weighted_pct'], row['total_pct'] * 2.5 / 3.5)
         self.assertNotIn('amount', row)
         self.assertEqual(row['rank'], 1)
@@ -270,6 +271,52 @@ class KpiCalculatorTest(unittest.TestCase):
         }
         conn.close()
         self.assertNotIn('price', columns)
+
+    def test_owner_settings_apply_from_selected_month(self):
+        july = kpi_calculator.get_kpi_settings(
+            '2026-07',
+            db_path=self.db_path,
+        )
+        metrics = {
+            item['metric']: item['value']
+            for item in july['metrics']
+        }
+        clubs = {
+            item['club']: (
+                item['weekday_weight'],
+                item['weekend_weight'],
+            )
+            for item in july['clubs']
+        }
+        metrics['Отзывы'] = 0.5
+        metrics['Инициативы'] = 0.2
+        first_club = next(iter(clubs))
+        clubs[first_club] = (1.1, 2.2)
+
+        august = kpi_calculator.save_kpi_settings(
+            '2026-08',
+            metrics,
+            clubs,
+            '@owner',
+            db_path=self.db_path,
+        )
+        july_after = kpi_calculator.get_kpi_settings(
+            '2026-07',
+            db_path=self.db_path,
+        )
+
+        august_metrics = {
+            item['metric']: item
+            for item in august['metrics']
+        }
+        july_metrics = {
+            item['metric']: item
+            for item in july_after['metrics']
+        }
+        self.assertEqual(august_metrics['Отзывы']['value'], 0.5)
+        self.assertEqual(august_metrics['Инициативы']['value'], 0.2)
+        self.assertEqual(august_metrics['Отзывы']['updated_by'], '@owner')
+        self.assertEqual(july_metrics['Отзывы']['value'], 0.25)
 
     def test_metric_entries_return_records_up_to_selected_day(self):
         conn = sqlite3.connect(self.db_path)

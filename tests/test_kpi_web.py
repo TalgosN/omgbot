@@ -472,6 +472,65 @@ class KpiWebTest(unittest.TestCase):
             source='telegram_mini_app',
         )
 
+    def test_settings_are_forbidden_to_manager(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+        ):
+            response = self.client.get(
+                '/api/kpi/settings?month=2026-07',
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_owner_can_save_kpi_settings(self):
+        saved = {
+            'period_month': '2026-08-01',
+            'metrics': [],
+            'clubs': [],
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(
+                kpi_web,
+                'save_kpi_settings',
+                return_value=saved,
+            ) as save_settings,
+        ):
+            response = self.client.put(
+                '/api/kpi/settings',
+                headers=self.headers,
+                json={
+                    'month': '2026-08',
+                    'metrics': {
+                        'Отзывы': 0.25,
+                        'Инициативы': 0.10,
+                    },
+                    'clubs': {
+                        'Дмитровка': {
+                            'weekday_weight': 0.75,
+                            'weekend_weight': 2,
+                        },
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['period_month'], '2026-08-01')
+        save_settings.assert_called_once_with(
+            '2026-08-01',
+            {
+                'Отзывы': 0.25,
+                'Инициативы': 0.10,
+            },
+            {
+                'Дмитровка': (0.75, 2),
+            },
+            '@tester',
+        )
+
     def test_month_close_preview_only_warns_about_detected_problems(self):
         rows = [
             {
