@@ -67,6 +67,30 @@ class KpiWebTest(unittest.TestCase):
         )
         self.assertIsNone(kpi_web._validate_init_data('hash=wrong', BOT_TOKEN))
 
+    def test_owner_is_excluded_from_active_kpi_employees(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'roles.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''
+                CREATE TABLE users (
+                    ID INTEGER PRIMARY KEY,
+                    login TEXT,
+                    status INTEGER
+                );
+                INSERT INTO users VALUES (1, '@employee', 0);
+                INSERT INTO users VALUES (2, '@manager', 2);
+                INSERT INTO users VALUES (3, '@owner', 3);
+                '''
+            )
+            conn.commit()
+            conn.close()
+
+            with patch.object(kpi_web, 'DB_PATH', str(db_path)):
+                logins = kpi_web._active_employee_logins()
+
+        self.assertEqual(logins, ['@employee', '@manager'])
+
     def test_all_active_users_can_read_every_employee_kpi(self):
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),

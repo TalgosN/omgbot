@@ -436,6 +436,81 @@ input, textarea {
 .formula-total strong { color: #c8baff; }
 .my-empty { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 
+.owner-dashboard {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(circle at 100% 0, rgba(177, 76, 255, 0.2), transparent 15rem),
+    linear-gradient(145deg, rgba(21, 17, 84, 0.98), rgba(9, 9, 58, 0.98));
+}
+
+.owner-dashboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.owner-dashboard-head h2 { margin-top: 3px; font-size: 21px; }
+.owner-dashboard-head .secondary-button { width: auto; white-space: nowrap; }
+
+.owner-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.owner-summary-grid > div {
+  min-width: 0;
+  padding: 11px 9px;
+  border: 1px solid rgba(174, 151, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(1, 3, 43, 0.42);
+}
+
+.owner-summary-grid span,
+.owner-summary-grid strong,
+.owner-movement span,
+.owner-movement strong,
+.owner-movement small {
+  display: block;
+}
+
+.owner-summary-grid span,
+.owner-movement span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.owner-summary-grid strong { margin-top: 4px; font-size: 18px; }
+
+.owner-movements {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.owner-movement {
+  padding: 11px;
+  border-radius: 14px;
+  background: rgba(1, 3, 43, 0.42);
+}
+
+.owner-movement strong {
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.owner-movement small { margin-top: 3px; font-size: 9px; }
+.owner-movement.positive small { color: var(--success); }
+.owner-movement.negative small { color: var(--danger); }
+
 .manager-filters {
   margin-top: 12px;
   padding: 14px;

@@ -281,6 +281,57 @@ function explanationMetric(item, compact = false) {
 
 function renderMyKpi() {
   const container = $('#myKpi');
+  if (state.me?.can_edit_settings) {
+    const participants = state.employees.filter((item) => Number(item.shifts || 0) > 0);
+    const average = participants.length
+      ? participants.reduce((sum, item) => sum + Number(item.total_pct || 0), 0)
+        / participants.length
+      : 0;
+    const activePenaltiesCount = state.penalties.filter(
+      (item) => item.status === 'active',
+    ).length;
+    const redZone = participants.filter((item) => item.zone === '🔴').length;
+    const noShifts = state.employees.length - participants.length;
+    const movements = participants
+      .filter((item) => item.kpi_change_7d != null)
+      .sort((a, b) => Number(b.kpi_change_7d) - Number(a.kpi_change_7d));
+    const growth = movements.find((item) => Number(item.kpi_change_7d) > 0);
+    const decline = [...movements].reverse().find(
+      (item) => Number(item.kpi_change_7d) < 0,
+    );
+    const movementCard = (label, employee, tone) => `
+      <div class="owner-movement ${tone}">
+        <span>${label}</span>
+        <strong>${employee ? escapeHtml(employee.nickname) : 'Нет данных'}</strong>
+        <small>${employee ? signedPercent(employee.kpi_change_7d) : 'за последние 7 дней'}</small>
+      </div>
+    `;
+    container.innerHTML = `
+      <article class="owner-dashboard">
+        <div class="owner-dashboard-head">
+          <div>
+            <p class="eyebrow">Сводка владельца · ${dayLabel(state.day)}</p>
+            <h2>Команда сегодня</h2>
+          </div>
+          <button class="secondary-button open-owner-settings" type="button">
+            Настройки KPI
+          </button>
+        </div>
+        <div class="owner-summary-grid">
+          <div><span>В рейтинге</span><strong>${participants.length}</strong></div>
+          <div><span>Средний KPI</span><strong>${percent(average)}</strong></div>
+          <div><span>Красная зона</span><strong>${redZone}</strong></div>
+          <div><span>Штрафы</span><strong>${activePenaltiesCount}</strong></div>
+          <div><span>Без смен</span><strong>${noShifts}</strong></div>
+        </div>
+        <div class="owner-movements">
+          ${movementCard('Лучший рост', growth, 'positive')}
+          ${movementCard('Снижение', decline, 'negative')}
+        </div>
+      </article>
+    `;
+    return;
+  }
   const employee = state.myKpi;
   if (!employee) {
     container.innerHTML = `
@@ -1153,6 +1204,10 @@ document.querySelector('.view-tabs').addEventListener('click', async (event) => 
 });
 
 $('#myKpi').addEventListener('click', async (event) => {
+  if (event.target.closest('.open-owner-settings')) {
+    document.querySelector('[data-view="settings"]')?.click();
+    return;
+  }
   if (!state.myKpi) return;
   const metricButton = event.target.closest('[data-metric]');
   if (metricButton) {

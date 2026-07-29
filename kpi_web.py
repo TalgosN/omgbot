@@ -249,7 +249,7 @@ def _active_employee_logins():
             '''
             SELECT lower(login)
             FROM users
-            WHERE status IN (0, 1, 2, 3)
+            WHERE status IN (0, 1, 2)
               AND login IS NOT NULL
               AND trim(login) <> ''
             ORDER BY ID
@@ -705,7 +705,13 @@ def api_kpi():
         row['needs_attention'] = bool(row['attention_reasons'])
         row['extra_hashtags'] = hashtag_summaries.get(row['login'], [])
         row['explanation'] = _employee_explanation(row)
-    penalties = list_penalties(month)
+    active_login_set = set(active_logins)
+    penalties = [
+        item
+        for item in list_penalties(month)
+        if str(item.get('employee_login') or '').strip().lower()
+        in active_login_set
+    ]
     current_login = _actor_login()
     current_employee = next(
         (
