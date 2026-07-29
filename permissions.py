@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 
@@ -19,6 +20,9 @@ ROLE_NAMES = {
 }
 
 ACTIVE_ROLES = {ROLE_EMPLOYEE, ROLE_TECHNICIAN, ROLE_MANAGER, ROLE_OWNER}
+
+_employee_mode_owners = set()
+_employee_mode_lock = threading.Lock()
 
 
 def initialize_permissions_schema():
@@ -63,7 +67,7 @@ def actor_id(update):
     return user_id
 
 
-def get_user(update=None, telegram_id=None):
+def _get_actual_user(update=None, telegram_id=None):
     telegram_id = telegram_id if telegram_id is not None else actor_id(update)
     if telegram_id is None:
         return None
@@ -78,6 +82,50 @@ def get_user(update=None, telegram_id=None):
         ).fetchone()
     finally:
         conn.close()
+
+
+def get_user(update=None, telegram_id=None):
+    """Возвращает пользователя с учётом временного режима сотрудника."""
+    user = _get_actual_user(update, telegram_id)
+    if not user:
+        return None
+    user_id = str(user['chatid'])
+    with _employee_mode_lock:
+        employee_mode = user_id in _employee_mode_owners
+        if employee_mode and int(user['status']) != ROLE_OWNER:
+            _employee_mode_owners.discard(user_id)
+            employee_mode = False
+    if not employee_mode:
+        return user
+    effective_user = dict(user)
+    effective_user['status'] = ROLE_EMPLOYEE
+    return effective_user
+
+
+def is_owner_employee_mode(update=None, telegram_id=None):
+    user = _get_actual_user(update, telegram_id)
+    if not user or int(user['status']) != ROLE_OWNER:
+        return False
+    with _employee_mode_lock:
+        return str(user['chatid']) in _employee_mode_owners
+
+
+def enable_owner_employee_mode(update):
+    user = _get_actual_user(update)
+    if not user or int(user['status']) != ROLE_OWNER:
+        return False
+    with _employee_mode_lock:
+        _employee_mode_owners.add(str(user['chatid']))
+    return True
+
+
+def disable_owner_employee_mode(update):
+    user = _get_actual_user(update)
+    if not user or int(user['status']) != ROLE_OWNER:
+        return False
+    with _employee_mode_lock:
+        _employee_mode_owners.discard(str(user['chatid']))
+    return True
 
 
 def role_of(update=None, telegram_id=None):

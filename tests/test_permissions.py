@@ -65,6 +65,31 @@ class PermissionsTest(unittest.TestCase):
         self.assertIsNone(permissions.require_role(update(20), bot, permissions.ROLE_OWNER))
         self.assertIsNone(permissions.require_role(update(10), bot, permissions.ROLE_TECHNICIAN))
 
+    def test_owner_employee_mode_uses_effective_role_without_changing_database(self):
+        bot = Mock()
+
+        self.assertTrue(permissions.enable_owner_employee_mode(update(30)))
+        self.assertTrue(permissions.is_owner_employee_mode(update(30)))
+        self.assertEqual(permissions.role_of(update(30)), permissions.ROLE_EMPLOYEE)
+        self.assertIsNone(
+            permissions.require_role(update(30), bot, permissions.ROLE_MANAGER)
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        stored_status = conn.execute(
+            "SELECT status FROM users WHERE login='@owner'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(stored_status, permissions.ROLE_OWNER)
+
+        self.assertTrue(permissions.disable_owner_employee_mode(update(30)))
+        self.assertFalse(permissions.is_owner_employee_mode(update(30)))
+        self.assertEqual(permissions.role_of(update(30)), permissions.ROLE_OWNER)
+
+    def test_employee_cannot_enable_owner_employee_mode(self):
+        self.assertFalse(permissions.enable_owner_employee_mode(update(10)))
+        self.assertFalse(permissions.is_owner_employee_mode(update(10)))
+
     def test_role_change_is_audited_and_last_owner_is_protected(self):
         permissions.initialize_permissions_schema()
         conn = sqlite3.connect(self.db_path)

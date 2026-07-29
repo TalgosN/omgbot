@@ -36,6 +36,8 @@ def load_menu_module():
     constants.funclist = {}
     constants.admin_funclist = ()
     constants.owner_admin_funclist = ()
+    constants.OWNER_EMPLOYEE_MODE_BUTTON = '🧑🏻 Режим сотрудника'
+    constants.OWNER_MODE_BUTTON = '👑 Вернуться в режим владельца'
 
     admin_panel = types.ModuleType('admin_panel')
     admin_panel.sync_config = Mock()
@@ -44,6 +46,10 @@ def load_menu_module():
     permissions.ROLE_EMPLOYEE = 0
     permissions.ROLE_MANAGER = 2
     permissions.ROLE_OWNER = 3
+    permissions.disable_owner_employee_mode = Mock(return_value=True)
+    permissions.enable_owner_employee_mode = Mock(return_value=True)
+    permissions.get_user = Mock()
+    permissions.is_owner_employee_mode = Mock(return_value=False)
     permissions.require_role = Mock(return_value={'status': 0})
 
     with patch.dict(sys.modules, {
@@ -111,6 +117,38 @@ class HelpMenuTest(unittest.TestCase):
             self.menu.func(message, bot)
 
         tracker_admin.promotion_admin_menu.assert_called_once_with(message, bot)
+
+    def test_owner_main_menu_contains_employee_mode_button(self):
+        bot = Mock()
+        bot.send_message.return_value = object()
+        self.menu.funclist = {3: ('Обычная кнопка',)}
+        self.menu.get_user.return_value = {'status': 3, 'nick_name': 'Владелец'}
+        self.menu.is_owner_employee_mode.return_value = False
+
+        self.menu.hello(30, bot)
+
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        buttons = [button for row in markup.rows for button in row]
+        self.assertEqual(
+            buttons,
+            ['Обычная кнопка', self.menu.OWNER_EMPLOYEE_MODE_BUTTON],
+        )
+
+    def test_employee_mode_main_menu_contains_owner_return_button(self):
+        bot = Mock()
+        bot.send_message.return_value = object()
+        self.menu.funclist = {0: ('Кнопка сотрудника',)}
+        self.menu.get_user.return_value = {'status': 0, 'nick_name': 'Владелец'}
+        self.menu.is_owner_employee_mode.return_value = True
+
+        self.menu.hello(30, bot)
+
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        buttons = [button for row in markup.rows for button in row]
+        self.assertEqual(
+            buttons,
+            ['Кнопка сотрудника', self.menu.OWNER_MODE_BUTTON],
+        )
 
     def test_steamtracker_follows_schedule_in_every_main_menu(self):
         import constants

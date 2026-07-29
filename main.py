@@ -544,7 +544,7 @@ def repair_list(message):
 
         bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', parse_mode='HTML')
        
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки'])
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
 def handle_main_menu(message):
     if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         bot.clear_step_handler_by_chat_id(message.chat.id)

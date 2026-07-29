@@ -4,7 +4,16 @@ import os
 import sqlite3
 from constants import *
 from admin_panel import sync_config
-from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, ROLE_OWNER, require_role
+from permissions import (
+    ROLE_EMPLOYEE,
+    ROLE_MANAGER,
+    ROLE_OWNER,
+    disable_owner_employee_mode,
+    enable_owner_employee_mode,
+    get_user,
+    is_owner_employee_mode,
+    require_role,
+)
 
 HELP_MENU_BUTTONS = (
     '🚀 Быстрый старт',
@@ -43,17 +52,20 @@ def chatid_to_users(chatid):
     return users
 
 def hello(chatid, bot):
-    bot.clear_step_handler_by_chat_id(chatid) 
-    users = chatid_to_users(chatid)
+    bot.clear_step_handler_by_chat_id(chatid)
+    user = get_user(telegram_id=chatid)
 
-    if len(users) == 0 or users[0][8] not in funclist:
+    if not user or user['status'] not in funclist:
         bot.send_message(chatid, 'Доступ запрещен!')
     else:
-        # users[0][4] - это имя, users[0][8] - это роль (индекс списка кнопок)
-        bot.send_message(chatid, f'Привет, {users[0][4]}!')
+        bot.send_message(chatid, f'Привет, {user["nick_name"]}!')
         
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        buttons = funclist[users[0][8]]
+        buttons = list(funclist[user['status']])
+        if is_owner_employee_mode(telegram_id=chatid):
+            buttons.append(OWNER_MODE_BUTTON)
+        elif user['status'] == ROLE_OWNER:
+            buttons.append(OWNER_EMPLOYEE_MODE_BUTTON)
         markup.add(*buttons)
 
         msg = bot.send_message(chatid, 'Что вы хотите сделать? 👀', reply_markup=markup)
@@ -64,7 +76,17 @@ def func(message, bot):
         return
     a = message.text
 
-    if a == '👨🏻‍💻 Смена':
+    if a == OWNER_EMPLOYEE_MODE_BUTTON:
+        if enable_owner_employee_mode(message):
+            bot.send_message(message.chat.id, 'Включён режим сотрудника с уровнем доступа 0.')
+        hello(message.chat.id, bot)
+
+    elif a == OWNER_MODE_BUTTON:
+        if disable_owner_employee_mode(message):
+            bot.send_message(message.chat.id, 'Режим владельца восстановлен.')
+        hello(message.chat.id, bot)
+
+    elif a == '👨🏻‍💻 Смена':
         from openclose import func_today
         func_today(message, bot)
 
