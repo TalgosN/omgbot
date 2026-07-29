@@ -62,6 +62,70 @@ class TrackerBotManagementTests(unittest.TestCase):
         self.assertEqual(row["is_approved"], 1)
         self.assertEqual(row["owned_count"], 1)
 
+    def test_employee_catalog_filters_only_active_games(self):
+        for app_id, name, players in (
+            (10, "Single Game", 1),
+            (20, "Team Game", 4),
+            (30, "Draft Game", 1),
+        ):
+            self.storage.add_managed_game(
+                app_id=app_id,
+                steam_name=name,
+                actor_id="manager",
+                actor_name="Manager",
+            )
+            self.storage.update_managed_game(
+                app_id,
+                player_count=players,
+                manager_description=None,
+                manager_comment=None,
+                actor_id="manager",
+                actor_name="Manager",
+            )
+        self.storage.upsert_managed_account(
+            steam_id="76561198000000001",
+            vanity_url="zone-1",
+            club_name="Клуб",
+            actor_id="owner",
+            actor_name="Owner",
+        )
+        self.storage.record_account_scan(
+            "76561198000000001",
+            [
+                OwnedGame(10, "Single Game", 10),
+                OwnedGame(20, "Team Game", 10),
+            ],
+        )
+        self.storage.upsert_managed_account(
+            steam_id="76561198000000002",
+            vanity_url="zone-2",
+            club_name="Клуб",
+            actor_id="owner",
+            actor_name="Owner",
+        )
+        self.storage.record_account_scan(
+            "76561198000000002",
+            [OwnedGame(10, "Single Game", 10)],
+        )
+        for app_id in (10, 20):
+            self.storage.set_game_catalog_status(
+                app_id,
+                "active",
+                actor_id="manager",
+                actor_name="Manager",
+            )
+
+        def app_ids(status):
+            return {
+                row["app_id"]
+                for row in self.storage.managed_games(status=status)
+            }
+
+        self.assertEqual(app_ids("single_player"), {10})
+        self.assertEqual(app_ids("multiplayer"), {20})
+        self.assertEqual(app_ids("fully_licensed"), {10})
+        self.assertEqual(app_ids("missing_pc"), {20})
+
     def test_deactivating_last_account_pauses_active_game(self):
         self.storage.add_managed_game(
             app_id=10,

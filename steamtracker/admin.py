@@ -32,6 +32,13 @@ from .weekly import (
 CALLBACK_PREFIX = "stpa"
 PAGE_SIZE = 8
 REPORT_PAGE_SIZE = 5
+EMPLOYEE_CATALOG_FILTERS = {
+    "active",
+    "single_player",
+    "multiplayer",
+    "fully_licensed",
+    "missing_pc",
+}
 _context_messages: dict[int, set[int]] = {}
 _context_lock = threading.Lock()
 _promotion_action_locks: dict[int, threading.Lock] = {}
@@ -1594,7 +1601,7 @@ def show_catalog(
     if not user:
         return
     can_manage = _is_manager(user)
-    if not can_manage:
+    if not can_manage and status not in EMPLOYEE_CATALOG_FILTERS:
         status = "active"
     _, storage = _runtime()
     query_status = None if status == "all" else status
@@ -1654,6 +1661,39 @@ def show_catalog(
                 callback_data=f"{CALLBACK_PREFIX}:catalog:all:0",
             ),
         )
+    else:
+        markup.add(
+            types.InlineKeyboardButton(
+                "🔎 Найти игру",
+                callback_data=f"{CALLBACK_PREFIX}:gsearch:0",
+            )
+        )
+        markup.row(
+            types.InlineKeyboardButton(
+                "🎮 Все игры",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:active:0",
+            ),
+            types.InlineKeyboardButton(
+                "👤 1 игрок",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:single_player:0",
+            ),
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                "👥 2+ игроков",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:multiplayer:0",
+            )
+        )
+        markup.row(
+            types.InlineKeyboardButton(
+                "✅ Есть на всех ПК",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:fully_licensed:0",
+            ),
+            types.InlineKeyboardButton(
+                "⚠️ Не на всех ПК",
+                callback_data=f"{CALLBACK_PREFIX}:catalog:missing_pc:0",
+            ),
+        )
     status_icons = {
         "active": "🟢",
         "draft": "📝",
@@ -1706,6 +1746,10 @@ def show_catalog(
         "paused": "на паузе",
         "excluded": "исключённые",
         "no_license": "без лицензии",
+        "single_player": "на 1 игрока",
+        "multiplayer": "на 2+ игроков",
+        "fully_licensed": "есть на всех ПК",
+        "missing_pc": "отсутствуют на части ПК",
     }
     body = (
         "🕹 <b>Каталог игр</b>\n\n"
@@ -1717,9 +1761,10 @@ def show_catalog(
     if not can_manage:
         body = (
             "🕹 <b>Каталог игр</b>\n\n"
+            f"Фильтр: {filter_labels.get(status, status)}\n"
             f"Страница: {page + 1}\n\n"
-            "Выберите игру, чтобы открыть карточку и проверить "
-            "наличие на ПК."
+            "Найдите или выберите игру, чтобы открыть карточку "
+            "и проверить наличие на ПК."
         )
     if notice:
         body = f"{escape(notice)}\n\n{body}"
@@ -2166,23 +2211,34 @@ def save_game_add(message, bot):
 
 
 def request_game_search(message, bot, *, source_message=None):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
+    scope = (
+        ""
+        if _is_manager(user)
+        else "\nПоиск выполняется только среди активных игр."
+    )
     prompt = _send_context_message(
         message.chat.id,
         bot,
-        "Введите часть названия или AppID.",
+        f"Введите часть названия или AppID.{scope}",
         source_message=source_message,
     )
     bot.register_next_step_handler(prompt, show_game_search_results, bot)
 
 
 def show_game_search_results(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
+    user = require_role(message, bot, ROLE_EMPLOYEE)
+    if not user:
         return
     query = str(message.text or "").strip()
     _, storage = _runtime()
-    rows = storage.managed_games(search=query, limit=20)
+    rows = storage.managed_games(
+        status=None if _is_manager(user) else "active",
+        search=query,
+        limit=20,
+    )
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup(row_width=1)
     for row in rows:
@@ -3144,11 +3200,12 @@ def register_promo_admin_callbacks(bot) -> None:
                 "tracker",
                 "catalog",
                 "game",
+                "gsearch",
                 "glicenses",
             }:
                 raise PermissionError(
-                    "Сотрудникам доступны только каталог, карточки игр "
-                    "и проверка наличия"
+                    "Сотрудникам доступны только каталог, поиск, "
+                    "карточки игр и проверка наличия"
                 )
             if action in {
                 "admin",
@@ -3161,6 +3218,7 @@ def register_promo_admin_callbacks(bot) -> None:
                 "settings",
                 "catalog",
                 "game",
+                "gsearch",
                 "geditmenu",
                 "gdescgenerate",
                 "gdescapply",

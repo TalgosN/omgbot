@@ -950,6 +950,67 @@ class TrackerStorage:
                     )
                     """
                 )
+            elif status == "single_player":
+                conditions.extend(
+                    (
+                        "g.catalog_status = 'active'",
+                        "g.player_count = 1",
+                    )
+                )
+            elif status == "multiplayer":
+                conditions.extend(
+                    (
+                        "g.catalog_status = 'active'",
+                        "g.player_count >= 2",
+                    )
+                )
+            elif status == "fully_licensed":
+                conditions.extend(
+                    (
+                        "g.catalog_status = 'active'",
+                        """
+                        EXISTS (
+                            SELECT 1
+                            FROM accounts a
+                            WHERE a.active = 1
+                        )
+                        """,
+                        """
+                        NOT EXISTS (
+                            SELECT 1
+                            FROM accounts a
+                            WHERE a.active = 1
+                                AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM account_games ag
+                                    WHERE ag.steam_id = a.steam_id
+                                        AND ag.app_id = g.app_id
+                                        AND ag.owned = 1
+                                )
+                        )
+                        """,
+                    )
+                )
+            elif status == "missing_pc":
+                conditions.extend(
+                    (
+                        "g.catalog_status = 'active'",
+                        """
+                        EXISTS (
+                            SELECT 1
+                            FROM accounts a
+                            WHERE a.active = 1
+                                AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM account_games ag
+                                    WHERE ag.steam_id = a.steam_id
+                                        AND ag.app_id = g.app_id
+                                        AND ag.owned = 1
+                                )
+                        )
+                        """,
+                    )
+                )
             elif status in GAME_CATALOG_STATUSES:
                 conditions.append("g.catalog_status = ?")
                 params.append(status)

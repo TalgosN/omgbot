@@ -374,6 +374,124 @@ class StageTwoTests(unittest.TestCase):
         self.assertNotIn("stpa:grefresh:10", callbacks)
         promo_admin._context_messages.clear()
 
+    def test_employee_catalog_has_search_and_game_filters(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+            def row(self, *buttons):
+                self.keyboard.append(list(buttons))
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        storage = Mock()
+        storage.managed_games.return_value = []
+        bot = Mock()
+        bot.send_message.return_value = types.SimpleNamespace(message_id=33)
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=100))
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        promo_admin._context_messages.clear()
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value={"status": promo_admin.ROLE_EMPLOYEE},
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ), patch.object(
+            promo_admin,
+            "_runtime",
+            return_value=(Mock(), storage),
+        ):
+            promo_admin.show_catalog(
+                message,
+                bot,
+                status="missing_pc",
+            )
+
+        storage.managed_games.assert_called_once_with(
+            status="missing_pc",
+            limit=promo_admin.PAGE_SIZE + 1,
+            offset=0,
+        )
+        markup = bot.send_message.call_args.kwargs["reply_markup"]
+        callbacks = {
+            button.callback_data
+            for row in markup.keyboard
+            for button in row
+        }
+        self.assertIn("stpa:gsearch:0", callbacks)
+        self.assertIn("stpa:catalog:active:0", callbacks)
+        self.assertIn("stpa:catalog:single_player:0", callbacks)
+        self.assertIn("stpa:catalog:multiplayer:0", callbacks)
+        self.assertIn("stpa:catalog:fully_licensed:0", callbacks)
+        self.assertIn("stpa:catalog:missing_pc:0", callbacks)
+        self.assertNotIn("stpa:gadd:0", callbacks)
+        self.assertNotIn("stpa:missingreport:0", callbacks)
+        promo_admin._context_messages.clear()
+
+    def test_employee_search_is_limited_to_active_games(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.keyboard = []
+
+            def add(self, *buttons):
+                for button in buttons:
+                    self.keyboard.append([button])
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get("callback_data")
+
+        storage = Mock()
+        storage.managed_games.return_value = []
+        bot = Mock()
+        bot.send_message.return_value = types.SimpleNamespace(message_id=34)
+        message = types.SimpleNamespace(
+            chat=types.SimpleNamespace(id=100),
+            text="beat",
+        )
+        telegram_types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        promo_admin._context_messages.clear()
+
+        with patch.object(
+            promo_admin,
+            "require_role",
+            return_value={"status": promo_admin.ROLE_EMPLOYEE},
+        ), patch.object(
+            promo_admin,
+            "_telegram_types",
+            return_value=telegram_types,
+        ), patch.object(
+            promo_admin,
+            "_runtime",
+            return_value=(Mock(), storage),
+        ):
+            promo_admin.show_game_search_results(message, bot)
+
+        storage.managed_games.assert_called_once_with(
+            status="active",
+            search="beat",
+            limit=20,
+        )
+        promo_admin._context_messages.clear()
+
     def test_employee_callback_rejects_management_action(self):
         handlers = []
         bot = Mock()
