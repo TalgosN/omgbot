@@ -303,13 +303,15 @@ class KpiTest(unittest.TestCase):
                 ("@employee", "#активация", 125.5, "rubles", "вечерняя продажа", "applied"),
             )
 
-    def test_unconfigured_remote_hashtag_is_ignored_but_audited(self):
+    def test_local_hashtag_ignores_unconfigured_remote_http_error(self):
         class Response:
-            def __init__(self, payload):
+            def __init__(self, payload, status_code=200):
                 self.payload = payload
+                self.status_code = status_code
 
             def raise_for_status(self):
-                return None
+                if self.status_code >= 400:
+                    raise RuntimeError(f"HTTP {self.status_code}")
 
             def json(self):
                 return self.payload
@@ -320,7 +322,11 @@ class KpiTest(unittest.TestCase):
             connect = lambda _path: real_connect(db_path)
             self.kpi._hashtag_rules_cache_until = 0
 
-            with patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+            local_handler = unittest.mock.Mock(
+                return_value=(self.kpi.KPI_SUCCESS, "Локально сохранено", "")
+            )
+            with patch.object(self.kpi, "kpi_dict", {"#отзывы": local_handler}), \
+                    patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
                     patch.object(
                         self.kpi.requests,
                         "get",
@@ -332,16 +338,21 @@ class KpiTest(unittest.TestCase):
                         return_value=Response({
                             "ok": False,
                             "error": "hashtag_not_configured",
-                        }),
+                        }, status_code=404),
                     ):
-                result = self.kpi.hash_handle(self.message("#неизвестный текст"))
+                result = self.kpi.hash_handle(self.message("#отзывы 1 каш гугл"))
 
-            self.assertEqual(result[0], self.kpi.KPI_IGNORED)
+            self.assertEqual(
+                result,
+                (self.kpi.KPI_SUCCESS, "Локально сохранено", ""),
+            )
+            local_handler.assert_called_once()
             connection = real_connect(db_path)
-            status = connection.execute(
-                "SELECT status FROM hashtag_events"
-            ).fetchone()[0]
+            hashtag, status = connection.execute(
+                "SELECT hashtag, status FROM hashtag_events"
+            ).fetchone()
             connection.close()
+            self.assertEqual(hashtag, "#отзывы")
             self.assertEqual(status, "ignored")
 
     def test_birthday_uses_fixed_amount_from_omg_shift_rule(self):

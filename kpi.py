@@ -499,7 +499,6 @@ def do_remote_hashtag(hashtag, message, text_args):
             headers=headers,
             timeout=5,
         )
-        response.raise_for_status()
         result = response.json()
     except Exception as error:
         _finish_hashtag_event(event_id, 'failed', {"error": str(error)}, "request_failed")
