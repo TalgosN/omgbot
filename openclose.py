@@ -8,7 +8,126 @@ from sheets import *
 from datetime import datetime,timedelta
 import math
 import random
+import threading
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
+
+DB_PATH = 'db/omgbot.sql'
+_club_status_dashboard_lock = threading.Lock()
+
+
+def initialize_club_status_dashboard_schema(db_path=DB_PATH):
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS club_status_dashboard (
+                       id INTEGER PRIMARY KEY CHECK (id = 1),
+                       message_id INTEGER
+                   )'''
+            )
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS club_status_updates (
+                       club TEXT PRIMARY KEY,
+                       changed_at TEXT NOT NULL
+                   )'''
+            )
+    finally:
+        conn.close()
+
+
+def _club_status_dashboard_text(conn):
+    rows = conn.execute(
+        '''SELECT c.club, c.status, u.changed_at
+             FROM clubs AS c
+             LEFT JOIN club_status_updates AS u ON u.club = c.club
+            ORDER BY c.club COLLATE NOCASE'''
+    ).fetchall()
+    now = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%d.%m.%Y %H:%M')
+    lines = ['🏢 Статусы клубов', f'Обновлено: {now}', '']
+    for club, status, changed_at in rows:
+        if status == 'Открыт':
+            icon, label = '🟢', 'открыт'
+        elif status == 'Закрыт':
+            icon, label = '🔴', 'закрыт'
+        else:
+            icon, label = '⚪', 'статус неизвестен'
+        changed_label = (
+            f'{changed_at[8:10]}.{changed_at[5:7]} {changed_at[11:16]}'
+            if changed_at else 'время неизвестно'
+        )
+        lines.append(f'{icon} {club} — {label} ({changed_label})')
+    return '\n'.join(lines)
+
+
+def _dashboard_message_missing(error):
+    text = str(error).lower()
+    return 'message to edit not found' in text or 'message_id_invalid' in text
+
+
+def refresh_club_status_dashboard(bot, db_path=DB_PATH):
+    """Обновляет закреп со статусами, не прерывая основной сценарий смены при ошибке."""
+    with _club_status_dashboard_lock:
+        conn = None
+        try:
+            initialize_club_status_dashboard_schema(db_path)
+            conn = sqlite3.connect(db_path)
+            text = _club_status_dashboard_text(conn)
+            row = conn.execute(
+                'SELECT message_id FROM club_status_dashboard WHERE id=1'
+            ).fetchone()
+            message_id = row[0] if row else None
+
+            if message_id:
+                try:
+                    bot.edit_message_text(
+                        text=text,
+                        chat_id=CHATS['reports'],
+                        message_id=message_id,
+                    )
+                except Exception as error:
+                    if 'message is not modified' in str(error).lower():
+                        pass
+                    elif _dashboard_message_missing(error):
+                        message_id = None
+                    else:
+                        print(f'Ошибка обновления статусов клубов: {error}')
+                        return False
+
+            if not message_id:
+                message = bot.send_message(CHATS['reports'], text)
+                message_id = message.message_id
+                with conn:
+                    conn.execute(
+                        '''INSERT INTO club_status_dashboard (id, message_id)
+                           VALUES (1, ?)
+                           ON CONFLICT(id) DO UPDATE SET message_id=excluded.message_id''',
+                        (message_id,),
+                    )
+
+            try:
+                bot.pin_chat_message(
+                    CHATS['reports'],
+                    message_id,
+                    disable_notification=True,
+                )
+            except Exception as error:
+                print(f'Ошибка закрепления статусов клубов: {error}')
+            return True
+        except Exception as error:
+            print(f'Ошибка формирования статусов клубов: {error}')
+            return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+
+def _record_club_status_change(cur, club, changed_at):
+    cur.execute(
+        '''INSERT INTO club_status_updates (club, changed_at)
+           VALUES (?, ?)
+           ON CONFLICT(club) DO UPDATE SET changed_at=excluded.changed_at''',
+        (club, changed_at),
+    )
 
 ############################# core openclose
 
@@ -271,9 +390,15 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
     cur.execute("UPDATE clubs SET status = ? WHERE club = ?", (new_status, club))
+    _record_club_status_change(
+        cur,
+        club,
+        datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S'),
+    )
     conn.commit()
     cur.close()
     conn.close()
+    refresh_club_status_dashboard(bot)
     
     # 2. Подготовка данных
     current_clubs = get_clubs()
@@ -592,10 +717,17 @@ def close_club (club,bot):
    cur = conn.cursor()
    cur.execute("UPDATE clubs SET status='Закрыт' WHERE status='Открыт' and club=?", (club,))
    rows_affected = cur.rowcount  # Количество измененных строк
+   if rows_affected > 0:
+       _record_club_status_change(
+           cur,
+           club,
+           datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d %H:%M:%S'),
+       )
    conn.commit()
    cur.close()
    conn.close()
 
    # Отправляем сообщение только если были изменения (rows_affected > 0)
    if rows_affected > 0:
+       refresh_club_status_dashboard(bot)
        bot.send_message(CHATS['main_group'], f'Закрыл {club} за тебя. Да-да, я к тебе обращаюсь 🙄')

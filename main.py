@@ -10,7 +10,13 @@ import threading
 from menu import hello
 from datetime import datetime, timedelta
 import time
-from openclose import send_status_close, send_status_open, close_club
+from openclose import (
+    close_club,
+    initialize_club_status_dashboard_schema,
+    refresh_club_status_dashboard,
+    send_status_close,
+    send_status_open,
+)
 import kpi
 from kpi import init
 import requests
@@ -394,6 +400,7 @@ Indexes of users
 ############################# start
 create_tables()
 initialize_permissions_schema()
+initialize_club_status_dashboard_schema()
 create_tables_KPI()
 initialize_kpi_calculation_schema()
 finalize_legacy_kpi_approval()
@@ -749,6 +756,8 @@ register_promo_admin_callbacks(bot)
 
 if __name__ == "__main__":
     threading.Thread(target=schedule_func, args=(bot,), name="omgbot-scheduler", daemon=True).start()
+
+    refresh_club_status_dashboard(bot)
 
     for task_name, startup_task in (("сотрудников", update_users), ("KPI", init)):
         try:
