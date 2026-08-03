@@ -30,6 +30,14 @@ class FakeResponse:
 
 
 class StageTwoTests(unittest.TestCase):
+    def test_google_sheet_defaults_use_current_games_spreadsheet(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.from_env()
+
+        spreadsheet_id = "1h_pCl6tpwYAhZveVSfUVGh4awl0r3yVCv1EwIIhJBZw"
+        self.assertEqual(settings.spreadsheet_id, spreadsheet_id)
+        self.assertIn(spreadsheet_id, settings.catalog_url)
+
     def test_employee_chat_defaults_to_existing_main_group(self):
         with patch.dict(
             os.environ,

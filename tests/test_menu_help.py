@@ -96,10 +96,6 @@ class HelpMenuTest(unittest.TestCase):
             button.url.endswith('/current-steam-sheet/edit')
             for button in buttons
         ))
-        self.assertFalse(any(
-            '1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI' in button.url
-            for button in buttons
-        ))
         self.assertFalse(any('Расписание' in button.text for button in buttons))
 
     def test_main_menu_opens_steamtracker_for_employee(self):

@@ -4,12 +4,11 @@ from pathlib import Path
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_SPREADSHEET_ID = "1h_pCl6tpwYAhZveVSfUVGh4awl0r3yVCv1EwIIhJBZw"
 DEFAULT_CATALOG_URL = (
     "https://docs.google.com/spreadsheets/d/"
-    "1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI/"
-    "export?format=csv&gid=300268818"
+    f"{DEFAULT_SPREADSHEET_ID}/export?format=csv"
 )
-DEFAULT_SPREADSHEET_ID = "1VYcdmS5B6-cGpawVZZpc8qpiwDnjlSNaNyLM43eBJKI"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
