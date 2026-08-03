@@ -29,6 +29,19 @@ def _env_ids(name: str) -> frozenset[int]:
     return frozenset(result)
 
 
+def _env_optional_int(*names: str) -> int | None:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            try:
+                return int(value.strip())
+            except ValueError as error:
+                raise ValueError(
+                    f"{name} должен содержать числовой Telegram chat ID"
+                ) from error
+    return None
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -49,9 +62,22 @@ class Settings:
     catalog_sync_enabled: bool
     google_export_enabled: bool
     weekly_promo_enabled: bool
+    employee_delivery_enabled: bool
+    employee_chat_id: int | None
 
     @classmethod
     def from_env(cls) -> "Settings":
+        employee_delivery_enabled = _env_bool(
+            "EMPLOYEE_DELIVERY_ENABLED"
+        )
+        employee_chat_id = (
+            _env_optional_int(
+                "STEAMTRACKER_EMPLOYEE_CHAT_ID",
+                "CHAT_MAIN_GROUP",
+            )
+            if employee_delivery_enabled
+            else None
+        )
         return cls(
             db_path=Path(
                 os.getenv(
@@ -112,4 +138,6 @@ class Settings:
             weekly_promo_enabled=_env_bool(
                 "STEAMTRACKER_WEEKLY_PROMO_ENABLED"
             ),
+            employee_delivery_enabled=employee_delivery_enabled,
+            employee_chat_id=employee_chat_id,
         )

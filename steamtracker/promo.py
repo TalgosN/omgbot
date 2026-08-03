@@ -233,6 +233,31 @@ class DryRunPublisher:
         return PublishResult(status="ready_dry_run")
 
 
+class EmployeeTelegramPublisher:
+    """Отправляет сотруднический текст, сохраняя соцсети в dry-run."""
+
+    def __init__(self, bot, chat_id: int):
+        self.bot = bot
+        self.chat_id = int(chat_id)
+        self.dry_run = DryRunPublisher()
+
+    def publish(self, channel: str, payload: dict) -> PublishResult:
+        if channel != "employees":
+            return self.dry_run.publish(channel, payload)
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            raise ValueError("Пустой текст для сотрудников")
+        message = self.bot.send_message(
+            self.chat_id,
+            text,
+            parse_mode=payload.get("parse_mode") or "HTML",
+        )
+        return PublishResult(
+            status="sent",
+            external_id=str(message.message_id),
+        )
+
+
 class PromotionWorkflow:
     def __init__(
         self,

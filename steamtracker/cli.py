@@ -221,6 +221,11 @@ def command_generate(args: argparse.Namespace, settings: Settings) -> None:
 
 
 def command_approve(args: argparse.Namespace, settings: Settings) -> None:
+    if settings.employee_delivery_enabled:
+        raise RuntimeError(
+            "Рассылка сотрудникам включена. Согласуйте промо через "
+            "Telegram-интерфейс бота, чтобы выполнить отправку."
+        )
     _workflow(settings).approve_and_dispatch(
         args.promotion_id,
         approved_by=args.by,
@@ -483,6 +488,8 @@ def main() -> None:
         catalog_sync_enabled=settings.catalog_sync_enabled,
         google_export_enabled=settings.google_export_enabled,
         weekly_promo_enabled=settings.weekly_promo_enabled,
+        employee_delivery_enabled=settings.employee_delivery_enabled,
+        employee_chat_id=settings.employee_chat_id,
     )
     args.handler(args, settings)
 

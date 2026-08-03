@@ -671,6 +671,16 @@ def collect_steamtracker_health():
             "ℹ️ Игра недели: "
             f"режим {'автоматический' if fully_enabled else 'ручной'}"
         )
+        if settings.employee_delivery_enabled:
+            if settings.employee_chat_id is None:
+                lines.append(
+                    "❌ Рассылка сотрудникам: не задан ID рабочего чата"
+                )
+            else:
+                lines.append("✅ Рассылка сотрудникам: включена")
+        else:
+            lines.append("ℹ️ Рассылка сотрудникам: dry-run")
+        lines.append("ℹ️ Публикация Telegram и VK: dry-run")
         if settings.google_export_enabled:
             try:
                 GoogleSheetsManager(settings).open()

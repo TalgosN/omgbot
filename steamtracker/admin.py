@@ -17,7 +17,11 @@ from .description_backfill import (
     validate_manager_description,
 )
 from .llm import build_generator
-from .promo import DryRunPublisher, PromotionWorkflow
+from .promo import (
+    DryRunPublisher,
+    EmployeeTelegramPublisher,
+    PromotionWorkflow,
+)
 from .sheets import GoogleSheetsManager
 from .steam import LicenseSyncService, SteamClient
 from .store import SteamStoreClient
@@ -82,6 +86,8 @@ def _runtime() -> tuple[Settings, TrackerStorage]:
 def _workflow(
     settings: Settings,
     storage: TrackerStorage,
+    *,
+    publisher=None,
 ) -> PromotionWorkflow:
     if settings.publish_mode != "dry_run":
         raise RuntimeError(
@@ -90,8 +96,19 @@ def _workflow(
     return PromotionWorkflow(
         storage,
         build_generator(settings),
-        DryRunPublisher(),
+        publisher or DryRunPublisher(),
     )
+
+
+def _approval_publisher(settings: Settings, bot):
+    if not settings.employee_delivery_enabled:
+        return DryRunPublisher()
+    if settings.employee_chat_id is None:
+        raise RuntimeError(
+            "Рассылка сотрудникам включена, но не задан "
+            "STEAMTRACKER_EMPLOYEE_CHAT_ID или CHAT_MAIN_GROUP"
+        )
+    return EmployeeTelegramPublisher(bot, settings.employee_chat_id)
 
 
 def _weekly_service(
@@ -1537,13 +1554,11 @@ def show_outbox(
 ):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    _, storage = _runtime()
-    rows = storage.outbox_admin_rows(limit=30)
-    if promotion_id is not None:
-        rows = [
-            row for row in rows
-            if int(row["promotion_id"]) == promotion_id
-        ]
+    settings, storage = _runtime()
+    rows = storage.outbox_admin_rows(
+        promotion_id=promotion_id,
+        limit=30,
+    )
     if not rows:
         text = "📦 Очередь отправки пуста."
     else:
@@ -1562,6 +1577,22 @@ def show_outbox(
         text = "\n".join(lines)
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup()
+    if (
+        promotion_id is not None
+        and settings.employee_delivery_enabled
+        and any(
+            row["channel"] == "employees" and row["status"] == "error"
+            for row in rows
+        )
+    ):
+        markup.add(
+            types.InlineKeyboardButton(
+                "🔁 Повторить отправку сотрудникам",
+                callback_data=(
+                    f"{CALLBACK_PREFIX}:retryemployees:{promotion_id}"
+                ),
+            )
+        )
     markup.add(
         types.InlineKeyboardButton(
             "🔄 Обновить",
@@ -2562,6 +2593,11 @@ def show_promo_settings(
         values.get("weekly_promo_enabled") or ""
     )
     fully_enabled = settings.weekly_promo_enabled and bot_enabled
+    employee_delivery_label = (
+        "🟢 рабочий чат"
+        if settings.employee_delivery_enabled
+        else "🧪 dry-run"
+    )
     types = _telegram_types()
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -2611,7 +2647,8 @@ def show_promo_settings(
         f"Режим: "
         f"{'автоматический' if fully_enabled else 'ручной'}\n"
         f"Генератор: {escape(settings.generator_provider)}\n"
-        "Публикация: dry-run"
+        f"Сотрудникам: {employee_delivery_label}\n"
+        "Telegram и VK: 🧪 dry-run"
     )
     if notice:
         body = f"{escape(notice)}\n\n{body}"
@@ -3143,6 +3180,7 @@ def _show_callback_error(call, bot, error: Exception) -> None:
                 "release",
                 "generate",
                 "approve",
+                "retryemployees",
                 "texts",
                 "edit",
                 "more",
@@ -3231,6 +3269,7 @@ def register_promo_admin_callbacks(bot) -> None:
                 "audit",
                 "list",
                 "open",
+                "retryemployees",
             }:
                 _clear_next_step_handler(chat_id, bot)
 
@@ -3703,6 +3742,7 @@ def register_promo_admin_callbacks(bot) -> None:
                 "release",
                 "generate",
                 "approve",
+                "retryemployees",
                 "regenall",
                 "regenemployee",
                 "regensocial",
@@ -3864,7 +3904,12 @@ def register_promo_admin_callbacks(bot) -> None:
             elif action == "approve":
                 settings, storage = _runtime()
                 _claim_required(storage, promotion_id, call, user)
-                _workflow(settings, storage).approve_and_dispatch(
+                publisher = _approval_publisher(settings, bot)
+                _workflow(
+                    settings,
+                    storage,
+                    publisher=publisher,
+                ).approve_and_dispatch(
                     promotion_id,
                     approved_by=_actor_id(call),
                 )
@@ -3873,9 +3918,23 @@ def register_promo_admin_callbacks(bot) -> None:
                     storage,
                     promotion_id,
                 )
-                notice = (
-                    "✅ Промо согласовано. Создана только dry-run очередь."
-                )
+                delivery = dict(storage.promotion_admin_row(promotion_id))
+                if settings.employee_delivery_enabled:
+                    if delivery["outbox_errors"]:
+                        notice = (
+                            "✅ Промо согласовано.\n"
+                            "❌ Сообщение сотрудникам не отправлено. "
+                            "Ошибка сохранена в технической очереди."
+                        )
+                    else:
+                        notice = (
+                            "✅ Промо согласовано. Сообщение отправлено "
+                            "сотрудникам. Telegram и VK оставлены в dry-run."
+                        )
+                else:
+                    notice = (
+                        "✅ Промо согласовано. Создана только dry-run очередь."
+                    )
                 if warning:
                     notice += f"\n⚠️ {warning}"
                 send_promotion_card(
@@ -3885,6 +3944,24 @@ def register_promo_admin_callbacks(bot) -> None:
                     update=call,
                     user=user,
                     notice=notice,
+                    source_message=call.message,
+                )
+            elif action == "retryemployees":
+                settings, storage = _runtime()
+                publisher = _approval_publisher(settings, bot)
+                storage.retry_failed_outbox(promotion_id, "employees")
+                _workflow(
+                    settings,
+                    storage,
+                    publisher=publisher,
+                ).approve_and_dispatch(
+                    promotion_id,
+                    approved_by=_actor_id(call),
+                )
+                show_outbox(
+                    call.message,
+                    bot,
+                    promotion_id=promotion_id,
                     source_message=call.message,
                 )
             elif action == "edit":

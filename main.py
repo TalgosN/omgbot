@@ -575,6 +575,8 @@ def SaySmth(message): #fun talk
         
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and message.text.startswith('#'))
 def HashTags(message): #KPI handler
+    if str(message.chat.id) != str(CHATS['main_group']):
+        return
     if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
         try:
             from kpi import hash_handle

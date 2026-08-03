@@ -2187,6 +2187,29 @@ class TrackerStorage:
                 (status, external_id, error, utc_now(), outbox_id),
             )
 
+    def retry_failed_outbox(self, promotion_id: int, channel: str) -> None:
+        if channel not in {"employees", "telegram", "vk"}:
+            raise ValueError(f"Неизвестный канал: {channel}")
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'pending',
+                    external_id = NULL,
+                    error = NULL,
+                    updated_at = ?
+                WHERE promotion_id = ?
+                    AND channel = ?
+                    AND status = 'error'
+                """,
+                (utc_now(), promotion_id, channel),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "В технической очереди нет неудачной отправки "
+                    "для повторения"
+                )
+
     def set_promotion_status(self, promotion_id: int, status: str) -> None:
         if status not in PROMOTION_STATUSES:
             raise ValueError(f"Неизвестный статус промо: {status}")
@@ -2522,7 +2545,12 @@ class TrackerStorage:
                 )
             )
 
-    def outbox_admin_rows(self, *, limit: int = 30) -> list[sqlite3.Row]:
+    def outbox_admin_rows(
+        self,
+        *,
+        promotion_id: int | None = None,
+        limit: int = 30,
+    ) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return list(
                 conn.execute(
@@ -2539,10 +2567,11 @@ class TrackerStorage:
                     FROM outbox o
                     JOIN promotions p ON p.id = o.promotion_id
                     JOIN games g ON g.app_id = p.app_id
+                    WHERE (? IS NULL OR o.promotion_id = ?)
                     ORDER BY o.id DESC
                     LIMIT ?
                     """,
-                    (limit,),
+                    (promotion_id, promotion_id, limit),
                 )
             )
 

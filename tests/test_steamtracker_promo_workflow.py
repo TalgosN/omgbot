@@ -3,9 +3,15 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from steamtracker.db import OwnedGame, TrackerStorage
-from steamtracker.promo import DryRunPublisher, FakeGenerator, PromotionWorkflow
+from steamtracker.promo import (
+    DryRunPublisher,
+    EmployeeTelegramPublisher,
+    FakeGenerator,
+    PromotionWorkflow,
+)
 
 
 class PromotionWorkflowTests(unittest.TestCase):
@@ -135,6 +141,109 @@ class PromotionWorkflowTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 3)
         self.assertEqual(generations, 1)
+
+    def test_employee_text_is_sent_while_social_channels_stay_dry_run(self):
+        promotion_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="100 рублей",
+            valid_from="2026-08-03",
+            valid_to="2026-08-09",
+            manager_comment=None,
+            image_url=None,
+        )
+        bot = Mock()
+        bot.send_message.return_value = Mock(message_id=321)
+        workflow = PromotionWorkflow(
+            self.storage,
+            FakeGenerator(),
+            EmployeeTelegramPublisher(bot, -1001234567890),
+        )
+
+        texts = workflow.generate(promotion_id)
+        workflow.approve_and_dispatch(
+            promotion_id,
+            approved_by="manager",
+        )
+
+        bot.send_message.assert_called_once_with(
+            -1001234567890,
+            texts.employee,
+            parse_mode="HTML",
+        )
+        with self.storage.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT channel, status, external_id
+                FROM outbox
+                ORDER BY channel
+                """
+            ).fetchall()
+        statuses = {
+            row["channel"]: (row["status"], row["external_id"])
+            for row in rows
+        }
+        self.assertEqual(statuses["employees"], ("sent", "321"))
+        self.assertEqual(
+            statuses["telegram"],
+            ("ready_dry_run", None),
+        )
+        self.assertEqual(statuses["vk"], ("ready_dry_run", None))
+
+    def test_employee_delivery_error_is_saved_in_outbox(self):
+        promotion_id = self.storage.create_promotion(
+            app_id=10,
+            discount_text="100 рублей",
+            valid_from="2026-08-03",
+            valid_to="2026-08-09",
+            manager_comment=None,
+            image_url=None,
+        )
+        bot = Mock()
+        bot.send_message.side_effect = RuntimeError("telegram unavailable")
+        workflow = PromotionWorkflow(
+            self.storage,
+            FakeGenerator(),
+            EmployeeTelegramPublisher(bot, -1001234567890),
+        )
+
+        workflow.generate(promotion_id)
+        workflow.approve_and_dispatch(
+            promotion_id,
+            approved_by="manager",
+        )
+
+        with self.storage.connect() as conn:
+            employee = conn.execute(
+                """
+                SELECT status, error
+                FROM outbox
+                WHERE promotion_id = ? AND channel = 'employees'
+                """,
+                (promotion_id,),
+            ).fetchone()
+        self.assertEqual(employee["status"], "error")
+        self.assertEqual(employee["error"], "telegram unavailable")
+
+        bot.send_message.side_effect = None
+        bot.send_message.return_value = Mock(message_id=654)
+        self.storage.retry_failed_outbox(promotion_id, "employees")
+        workflow.approve_and_dispatch(
+            promotion_id,
+            approved_by="manager",
+        )
+
+        with self.storage.connect() as conn:
+            employee = conn.execute(
+                """
+                SELECT status, external_id, error
+                FROM outbox
+                WHERE promotion_id = ? AND channel = 'employees'
+                """,
+                (promotion_id,),
+            ).fetchone()
+        self.assertEqual(employee["status"], "sent")
+        self.assertEqual(employee["external_id"], "654")
+        self.assertIsNone(employee["error"])
 
     def test_approved_promotion_cannot_be_changed_or_cancelled(self):
         promotion_id = self.storage.create_promotion(

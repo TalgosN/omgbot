@@ -18,7 +18,7 @@ def load_hashtag_handler(namespace):
 
 
 class KpiResponsePolicyTest(unittest.TestCase):
-    def run_status(self, status):
+    def run_status(self, status, chat_id=100):
         bot = Mock()
         bot.message_handler.side_effect = lambda **_kwargs: (lambda function: function)
         send_react = Mock()
@@ -44,11 +44,14 @@ class KpiResponsePolicyTest(unittest.TestCase):
             "send_react": send_react,
             "random": SimpleNamespace(choice=lambda _items: "✅"),
             "emojis": {"confirm": ("✅",)},
-            "CHATS": {"me": 1},
+            "CHATS": {"me": 1, "main_group": "100"},
         }
         with patch.dict(sys.modules, {"kpi": kpi}):
             handler = load_hashtag_handler(namespace)
-            handler(SimpleNamespace(text="#тест"))
+            handler(SimpleNamespace(
+                text="#тест",
+                chat=SimpleNamespace(id=chat_id),
+            ))
         return bot, send_react, update_kpi
 
     def test_success_uses_only_confirm_reaction(self):
@@ -86,6 +89,12 @@ class KpiResponsePolicyTest(unittest.TestCase):
         update_kpi.assert_called_once_with()
         send_react.assert_not_called()
         bot.reply_to.assert_called_once()
+
+    def test_hashtag_outside_main_group_is_ignored(self):
+        bot, send_react, update_kpi = self.run_status("success", chat_id=200)
+        update_kpi.assert_not_called()
+        send_react.assert_not_called()
+        bot.reply_to.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from steamtracker.llm import OpenRouterGenerator
 from steamtracker import admin as promo_admin
 from steamtracker.admin import register_promo_admin_callbacks
+from steamtracker.config import Settings
 from steamtracker.jobs import (
     start_catalog_sync,
     start_license_sync,
@@ -29,6 +30,33 @@ class FakeResponse:
 
 
 class StageTwoTests(unittest.TestCase):
+    def test_employee_chat_defaults_to_existing_main_group(self):
+        with patch.dict(
+            os.environ,
+            {
+                "EMPLOYEE_DELIVERY_ENABLED": "true",
+                "STEAMTRACKER_EMPLOYEE_CHAT_ID": "",
+                "CHAT_MAIN_GROUP": "-1001234567890",
+            },
+            clear=False,
+        ):
+            settings = Settings.from_env()
+
+        self.assertTrue(settings.employee_delivery_enabled)
+        self.assertEqual(settings.employee_chat_id, -1001234567890)
+
+    def test_invalid_employee_chat_id_is_rejected(self):
+        with patch.dict(
+            os.environ,
+            {
+                "EMPLOYEE_DELIVERY_ENABLED": "true",
+                "STEAMTRACKER_EMPLOYEE_CHAT_ID": "not-a-chat",
+            },
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "Telegram chat ID"):
+                Settings.from_env()
+
     def test_store_client_falls_back_to_english(self):
         session = Mock()
         session.get.side_effect = [
