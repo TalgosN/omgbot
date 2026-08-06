@@ -723,11 +723,14 @@ def open_kpi_app(message):
 
 def today_sched():
     """Автоматическая рассылка расписания в 09:00"""
-    today_date = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    today = datetime.now(pytz.timezone('Europe/Moscow')).date()
+    today_date = today.strftime('%Y-%m-%d')
+    from bot_tips import append_daily_bot_tip
     from rasp import get_today_schedule
     
     line = '#сегодня\n'
     text = line + get_today_schedule(today_date)
+    text = append_daily_bot_tip(text, today)
     bot.send_message(CHATS['main_group'], text)
 
     
