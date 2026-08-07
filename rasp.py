@@ -19,12 +19,18 @@ emojis = ['💀', '🤖', '🍓', '😎', '🤓', '🙄', '👽', '👻', '😈'
 
 shifton_chat_sync_lock = threading.Lock()
 shifton_notifications_lock = threading.Lock()
+shifton_employee_sync_lock = threading.Lock()
+SHIFTON_DB_PATH = 'db/omgbot.sql'
+OMG_SHIFT_RATE_SOURCES = ('omg_shift:employee', 'omg_shift:position')
 shifton_runtime_status = {
     "last_notification_check": None,
     "last_notification_sent": None,
     "last_notification_error": None,
     "last_chat_sync": None,
-    "last_chat_sync_result": None
+    "last_chat_sync_result": None,
+    "last_employee_sync": None,
+    "last_employee_sync_result": None,
+    "last_employee_sync_error": None,
 }
 
 def moscow_timestamp():
@@ -34,6 +40,390 @@ funclist_rasp=('📄 Расписание на сегодня','📑 Распи�
 funclist_rasp_week=('👨🏻‍💻 По сотрудникам','🗓 По датам', '🔴 По клубам','⬅️ Вернуться')
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+def initialize_shifton_employee_schema():
+    """Создаёт постоянную схему связи users с карточками OMG Shift."""
+    conn = sqlite3.connect(SHIFTON_DB_PATH)
+    try:
+        with conn:
+            user_columns = {row[1] for row in conn.execute('PRAGMA table_info(users)')}
+            if 'omg_shift_employee_id' not in user_columns:
+                conn.execute('ALTER TABLE users ADD COLUMN omg_shift_employee_id TEXT')
+            conn.execute(
+                '''CREATE UNIQUE INDEX IF NOT EXISTS idx_users_omg_shift_employee
+                   ON users(omg_shift_employee_id)
+                   WHERE omg_shift_employee_id IS NOT NULL'''
+            )
+
+            rate_columns = {row[1] for row in conn.execute('PRAGMA table_info(payroll_rates)')}
+            if 'omg_shift_employee_id' not in rate_columns:
+                conn.execute('ALTER TABLE payroll_rates ADD COLUMN omg_shift_employee_id TEXT')
+            conn.execute(
+                '''CREATE INDEX IF NOT EXISTS idx_payroll_rates_omg_employee_dates
+                   ON payroll_rates(omg_shift_employee_id, valid_from, valid_to)'''
+            )
+
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS omg_shift_employees (
+                    employee_id TEXT PRIMARY KEY,
+                    telegram TEXT,
+                    full_name TEXT NOT NULL,
+                    phone TEXT,
+                    start_date DATE,
+                    end_date DATE,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    position_id TEXT,
+                    position_title TEXT,
+                    current_rate REAL,
+                    rate_source TEXT,
+                    manual_rate REAL,
+                    booking_percent_enabled INTEGER NOT NULL DEFAULT 0,
+                    booking_percent REAL,
+                    raw_payload TEXT NOT NULL,
+                    synced_at DATETIME NOT NULL
+                )'''
+            )
+            conn.execute(
+                '''CREATE INDEX IF NOT EXISTS idx_omg_shift_employees_telegram
+                   ON omg_shift_employees(telegram)'''
+            )
+    finally:
+        conn.close()
+
+
+def _normalize_telegram(value):
+    login = str(value or '').strip()
+    if not login:
+        return None
+    return login if login.startswith('@') else f'@{login}'
+
+
+def _parse_api_date(value, field, required=False):
+    raw = str(value or '').strip()
+    if not raw:
+        if required:
+            raise ValueError(f'OMG Shift не вернул {field}')
+        return None
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError as exc:
+        raise ValueError(f'OMG Shift вернул некорректный {field}: {raw}') from exc
+
+
+def _api_rate(value, field):
+    try:
+        rate = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'OMG Shift вернул некорректную ставку {field}') from exc
+    if rate < 0:
+        raise ValueError(f'OMG Shift вернул отрицательную ставку {field}')
+    return rate
+
+
+def fetch_shifton_employees(include_archived=True):
+    """Получает и полностью проверяет каталог сотрудников до изменения БД."""
+    response = requests.get(
+        f"{SHIFTON_API_URL}/api/bot/employees",
+        params={"includeArchived": "true"} if include_archived else None,
+        headers={"Authorization": f"Bearer {SHIFTON_API_TOKEN}"},
+        timeout=15,
+    )
+    payload = response.json()
+    if not isinstance(payload, dict) or not payload.get('ok'):
+        error = payload.get('error', 'invalid_response') if isinstance(payload, dict) else 'invalid_response'
+        raise RuntimeError(f'OMG Shift не вернул сотрудников: {error}')
+    employees = payload.get('employees')
+    if not isinstance(employees, list):
+        raise RuntimeError('OMG Shift вернул некорректный список сотрудников')
+
+    validated = []
+    employee_ids = set()
+    active_telegrams = set()
+    for source in employees:
+        if not isinstance(source, dict):
+            raise RuntimeError('OMG Shift вернул некорректную карточку сотрудника')
+        employee = dict(source)
+        employee_id = str(employee.get('id') or '').strip()
+        full_name = str(employee.get('name') or '').strip()
+        if not employee_id or not full_name:
+            raise RuntimeError('OMG Shift вернул сотрудника без ID или ФИО')
+        if employee_id in employee_ids:
+            raise RuntimeError(f'OMG Shift вернул повторяющийся employee ID: {employee_id}')
+        employee_ids.add(employee_id)
+
+        employee['id'] = employee_id
+        employee['name'] = full_name
+        employee['telegram'] = _normalize_telegram(employee.get('telegram'))
+        employee['archived'] = bool(employee.get('archived'))
+        _parse_api_date(employee.get('startDate'), 'дату начала работы', required=True)
+        _parse_api_date(employee.get('endDate'), 'дату окончания работы')
+        if not employee['archived'] and employee['telegram']:
+            telegram_key = employee['telegram'].lower()
+            if telegram_key in active_telegrams:
+                raise RuntimeError(f'OMG Shift вернул повторяющийся Telegram: {employee["telegram"]}')
+            active_telegrams.add(telegram_key)
+        validated.append(employee)
+    return validated
+
+
+def _rate_periods(employee, cutover_date):
+    """Строит непересекающиеся интервалы ставки начиная с перехода на OMG Shift."""
+    start_date = _parse_api_date(employee.get('startDate'), 'дату начала работы', required=True)
+    end_date = _parse_api_date(employee.get('endDate'), 'дату окончания работы')
+    period_start = max(start_date, cutover_date)
+    if end_date and period_start > end_date:
+        return []
+
+    rate = employee.get('rate') or {}
+    manual_rate = rate.get('manualOverride')
+    if manual_rate not in (None, ''):
+        return [(
+            period_start,
+            end_date,
+            _api_rate(manual_rate, 'сотрудника'),
+            'omg_shift:employee',
+        )]
+
+    position = employee.get('position') or {}
+    history = []
+    for item in position.get('rateHistory') or []:
+        if not isinstance(item, dict):
+            raise ValueError('OMG Shift вернул некорректную историю ставки должности')
+        history.append((
+            _parse_api_date(item.get('startDate'), 'дату ставки должности', required=True),
+            _api_rate(item.get('rate'), 'должности'),
+        ))
+    history.sort(key=lambda item: item[0])
+
+    effective_rate = None
+    for history_date, history_rate in history:
+        if history_date <= period_start:
+            effective_rate = history_rate
+    if effective_rate is None:
+        fallback = position.get('baseRate')
+        if fallback in (None, ''):
+            fallback = rate.get('current')
+        if fallback not in (None, ''):
+            effective_rate = _api_rate(fallback, 'должности')
+    if effective_rate is None:
+        return []
+
+    timeline = [(period_start, effective_rate)]
+    timeline.extend(
+        (history_date, history_rate)
+        for history_date, history_rate in history
+        if history_date > period_start and (not end_date or history_date <= end_date)
+    )
+    deduplicated = {}
+    for history_date, history_rate in timeline:
+        deduplicated[history_date] = history_rate
+    timeline = sorted(deduplicated.items())
+
+    periods = []
+    for index, (valid_from, hourly_rate) in enumerate(timeline):
+        next_start = timeline[index + 1][0] if index + 1 < len(timeline) else None
+        valid_to = next_start - timedelta(days=1) if next_start else end_date
+        if end_date and (valid_to is None or valid_to > end_date):
+            valid_to = end_date
+        periods.append((valid_from, valid_to, hourly_rate, 'omg_shift:position'))
+    return periods
+
+
+def _replace_shifton_employee_snapshot(conn, employees, synced_at):
+    conn.execute('DELETE FROM omg_shift_employees')
+    for employee in employees:
+        position = employee.get('position') or {}
+        rate = employee.get('rate') or {}
+        booking = employee.get('bookingPercent') or {}
+        current_rate = rate.get('current')
+        manual_rate = rate.get('manualOverride')
+        conn.execute(
+            '''INSERT INTO omg_shift_employees (
+                   employee_id, telegram, full_name, phone, start_date, end_date,
+                   archived, position_id, position_title, current_rate,
+                   rate_source, manual_rate, booking_percent_enabled,
+                   booking_percent, raw_payload, synced_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                employee['id'], employee.get('telegram'), employee['name'],
+                employee.get('phone'), employee.get('startDate'),
+                employee.get('endDate'), int(employee.get('archived', False)),
+                position.get('id'), position.get('title'),
+                float(current_rate) if current_rate not in (None, '') else None,
+                rate.get('source'),
+                float(manual_rate) if manual_rate not in (None, '') else None,
+                int(bool(booking.get('enabled'))), booking.get('percent'),
+                json.dumps(employee, ensure_ascii=False), synced_at,
+            ),
+        )
+
+
+def _sync_shifton_payroll_rates(conn, employees, today):
+    conn.execute(
+        "DELETE FROM payroll_rates WHERE source IN (?, ?)",
+        OMG_SHIFT_RATE_SOURCES,
+    )
+    cutovers = {
+        str(login or '').strip().lower(): datetime.strptime(first_date, '%Y-%m-%d').date()
+        for login, first_date in conn.execute(
+            '''SELECT shift_login, MIN(date(dt_shift))
+               FROM shifts
+               WHERE source='omg_shift' AND shift_login IS NOT NULL
+               GROUP BY lower(shift_login)'''
+        )
+        if login and first_date
+    }
+
+    inserted = 0
+    conflicts = []
+    seen_telegrams = set()
+    ordered = sorted(employees, key=lambda item: bool(item.get('archived')))
+    for employee in ordered:
+        login = _normalize_telegram(employee.get('telegram'))
+        if not login or login.lower() in seen_telegrams:
+            continue
+        seen_telegrams.add(login.lower())
+        cutover_date = cutovers.get(login.lower(), today)
+        for valid_from, valid_to, hourly_rate, source in _rate_periods(employee, cutover_date):
+            existing = conn.execute(
+                '''SELECT source FROM payroll_rates
+                   WHERE lower(login)=lower(?) AND club='*' AND date(valid_from)=date(?)''',
+                (login, valid_from.isoformat()),
+            ).fetchone()
+            if existing:
+                conflicts.append({
+                    'login': login,
+                    'valid_from': valid_from.isoformat(),
+                    'source': existing[0],
+                })
+                continue
+            conn.execute(
+                '''INSERT INTO payroll_rates (
+                       login, club, hourly_rate, valid_from, valid_to, source,
+                       omg_shift_employee_id
+                   ) VALUES (?, '*', ?, ?, ?, ?, ?)''',
+                (
+                    login, hourly_rate, valid_from.isoformat(),
+                    valid_to.isoformat() if valid_to else None,
+                    source, employee['id'],
+                ),
+            )
+            inserted += 1
+    return inserted, conflicts
+
+
+def _sync_shifton_employees():
+    """Выполняет одну атомарную синхронизацию сотрудников и ставок."""
+    employees = fetch_shifton_employees(include_archived=True)
+    initialize_shifton_employee_schema()
+    synced_at = moscow_timestamp()
+    today = datetime.now(pytz.timezone('Europe/Moscow')).date()
+    active = [employee for employee in employees if not employee.get('archived')]
+    linked = 0
+    changed = 0
+    unlinked = []
+    identity_conflicts = []
+    access_mismatches = []
+
+    conn = sqlite3.connect(SHIFTON_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            _replace_shifton_employee_snapshot(conn, employees, synced_at)
+            from account import apply_omg_employee_identity
+            for employee in active:
+                conn.execute('SAVEPOINT omg_employee_identity')
+                try:
+                    result = apply_omg_employee_identity(conn, employee)
+                except (ValueError, sqlite3.IntegrityError) as error:
+                    conn.execute('ROLLBACK TO omg_employee_identity')
+                    conn.execute('RELEASE omg_employee_identity')
+                    identity_conflicts.append({
+                        'employee_id': employee['id'],
+                        'telegram': employee.get('telegram'),
+                        'error': str(error),
+                    })
+                    continue
+                conn.execute('RELEASE omg_employee_identity')
+                if result['status'] == 'linked':
+                    linked += 1
+                    changed += int(result['changed'])
+                else:
+                    unlinked.append({
+                        'employee_id': employee['id'],
+                        'telegram': employee.get('telegram'),
+                        'name': employee['name'],
+                    })
+
+            access_rows = conn.execute(
+                '''SELECT employee.employee_id, employee.telegram,
+                          employee.archived, user.status
+                   FROM omg_shift_employees AS employee
+                   JOIN users AS user
+                     ON user.omg_shift_employee_id=employee.employee_id
+                   WHERE (employee.archived=0 AND user.status=-1)
+                      OR (employee.archived=1 AND COALESCE(user.status, -1)<>-1)'''
+            ).fetchall()
+            access_mismatches = [
+                {
+                    'employee_id': row['employee_id'],
+                    'telegram': row['telegram'],
+                    'error': (
+                        'архивирован в OMG Shift, но имеет доступ к боту'
+                        if row['archived']
+                        else 'активен в OMG Shift, но заблокирован в боте'
+                    ),
+                }
+                for row in access_rows
+            ]
+
+            rate_rows, rate_conflicts = _sync_shifton_payroll_rates(
+                conn, employees, today
+            )
+    finally:
+        conn.close()
+
+    google_errors = []
+    if changed:
+        from account import sync_google_dependencies
+        google_errors = sync_google_dependencies(full=True)
+
+    result = {
+        'total': len(employees),
+        'active': len(active),
+        'archived': len(employees) - len(active),
+        'linked': linked,
+        'changed': changed,
+        'unlinked': unlinked,
+        'identity_conflicts': identity_conflicts,
+        'access_mismatches': access_mismatches,
+        'rate_rows': rate_rows,
+        'rate_conflicts': rate_conflicts,
+        'google_errors': google_errors,
+    }
+    shifton_runtime_status['last_employee_sync'] = synced_at
+    shifton_runtime_status['last_employee_sync_error'] = None
+    shifton_runtime_status['last_employee_sync_result'] = (
+        f"{linked}/{len(active)} связаны, {rate_rows} периодов ставок, "
+        f"{len(unlinked) + len(identity_conflicts) + len(access_mismatches)} "
+        f"требуют внимания"
+    )
+    return result
+
+
+def sync_shifton_employees():
+    """Не допускает параллельных синхронизаций и сохраняет результат проверки."""
+    if not shifton_employee_sync_lock.acquire(blocking=False):
+        raise RuntimeError('Синхронизация сотрудников OMG Shift уже выполняется')
+    try:
+        return _sync_shifton_employees()
+    except Exception as error:
+        shifton_runtime_status['last_employee_sync'] = moscow_timestamp()
+        shifton_runtime_status['last_employee_sync_result'] = None
+        shifton_runtime_status['last_employee_sync_error'] = str(error)
+        raise
+    finally:
+        shifton_employee_sync_lock.release()
 
 def fetch_schedule_from_api(date_iso):
     """Делает GET запрос к новому API на конкретную дату (YYYY-MM-DD)"""
@@ -120,12 +510,19 @@ def sync_shifton_notification_chats():
     shifton_runtime_status["last_chat_sync_result"] = f"{synced} успешно, {errors} ошибок"
 
 def start_shifton_chat_sync():
-    """Запускает синхронизацию чатов в фоне, не блокируя общий планировщик."""
+    """Запускает синхронизацию сотрудников и чатов в фоновом потоке."""
     if not shifton_chat_sync_lock.acquire(blocking=False):
         return
 
     def worker():
         try:
+            try:
+                sync_shifton_employees()
+            except Exception as e:
+                shifton_runtime_status["last_employee_sync"] = moscow_timestamp()
+                shifton_runtime_status["last_employee_sync_error"] = str(e)
+                shifton_runtime_status["last_employee_sync_result"] = None
+                print(f"Ошибка синхронизации сотрудников OMG Shift: {e}")
             sync_shifton_notification_chats()
         finally:
             shifton_chat_sync_lock.release()

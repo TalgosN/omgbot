@@ -38,6 +38,7 @@ LOGIN_REFERENCES = {
     'penalty': 'name',
     'consumables_history': 'user_name',
     'shifts': 'shift_login',
+    'payroll_rates': 'login',
 }
 
 
@@ -99,6 +100,7 @@ def apply_omg_identity(chat_id, login, employee):
     if not login:
         raise ValueError('В Telegram не задан username')
     first_name, second_name = parse_omg_employee_name(employee)
+    employee_id = str(employee.get('id') or '').strip() if isinstance(employee, dict) else ''
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -117,6 +119,14 @@ def apply_omg_identity(chat_id, login, employee):
             ).fetchone()
             if duplicate:
                 raise ValueError('Этот Telegram username уже принадлежит другому пользователю')
+            if employee_id and 'omg_shift_employee_id' in table_columns(conn, 'users'):
+                duplicate = conn.execute(
+                    '''SELECT ID FROM users
+                       WHERE omg_shift_employee_id=? AND ID<>?''',
+                    (employee_id, user['ID']),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError('Эта карточка OMG Shift уже связана с другим пользователем')
 
             old_login = user['login']
             if old_login:
@@ -128,12 +138,21 @@ def apply_omg_identity(chat_id, login, employee):
                         (login, old_login),
                     )
 
-            conn.execute(
-                """UPDATE users
-                   SET login=?, first_name=?, second_name=?, chatid=?
-                   WHERE ID=?""",
-                (login, first_name, second_name, str(chat_id), user['ID']),
-            )
+            if 'omg_shift_employee_id' in table_columns(conn, 'users'):
+                conn.execute(
+                    """UPDATE users
+                       SET login=?, first_name=?, second_name=?, chatid=?,
+                           omg_shift_employee_id=COALESCE(NULLIF(?, ''), omg_shift_employee_id)
+                       WHERE ID=?""",
+                    (login, first_name, second_name, str(chat_id), employee_id, user['ID']),
+                )
+            else:
+                conn.execute(
+                    """UPDATE users
+                       SET login=?, first_name=?, second_name=?, chatid=?
+                       WHERE ID=?""",
+                    (login, first_name, second_name, str(chat_id), user['ID']),
+                )
 
         return {
             'old_login': old_login,
@@ -148,6 +167,69 @@ def apply_omg_identity(chat_id, login, employee):
         }
     finally:
         conn.close()
+
+
+def apply_omg_employee_identity(conn, employee):
+    """Связывает запись API с users, не изменяя роль и локальные поля профиля."""
+    employee_id = str(employee.get('id') or '').strip()
+    login = normalize_login(employee.get('telegram'))
+    if not employee_id:
+        raise ValueError('OMG Shift вернул сотрудника без ID')
+
+    user = conn.execute(
+        'SELECT * FROM users WHERE omg_shift_employee_id=? ORDER BY ID LIMIT 1',
+        (employee_id,),
+    ).fetchone()
+    if not user and login:
+        user = conn.execute(
+            'SELECT * FROM users WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+            (login,),
+        ).fetchone()
+    if not user:
+        return {'status': 'unlinked', 'employee_id': employee_id, 'login': login}
+
+    first_name, second_name = parse_omg_employee_name(employee)
+    target_login = login or user['login']
+    if not target_login:
+        return {'status': 'unlinked', 'employee_id': employee_id, 'login': None}
+
+    duplicate = conn.execute(
+        'SELECT ID FROM users WHERE lower(login)=lower(?) AND ID<>?',
+        (target_login, user['ID']),
+    ).fetchone()
+    if duplicate:
+        raise ValueError(f'Telegram {target_login} уже связан с другим пользователем')
+
+    old_login = user['login']
+    if old_login and old_login.lower() != target_login.lower():
+        for table, column in LOGIN_REFERENCES.items():
+            if column not in table_columns(conn, table):
+                continue
+            conn.execute(
+                f'UPDATE "{table}" SET "{column}"=? WHERE lower("{column}")=lower(?)',
+                (target_login, old_login),
+            )
+
+    conn.execute(
+        """UPDATE users
+           SET login=?, first_name=?, second_name=?, omg_shift_employee_id=?
+           WHERE ID=?""",
+        (target_login, first_name, second_name, employee_id, user['ID']),
+    )
+    changed = (
+        old_login != target_login
+        or user['first_name'] != first_name
+        or user['second_name'] != second_name
+        or user['omg_shift_employee_id'] != employee_id
+    )
+    return {
+        'status': 'linked',
+        'employee_id': employee_id,
+        'login': target_login,
+        'old_login': old_login,
+        'local_status': user['status'],
+        'changed': changed,
+    }
 
 
 def sync_google_dependencies(full=False):

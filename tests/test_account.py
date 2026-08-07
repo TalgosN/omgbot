@@ -115,6 +115,59 @@ class AccountTest(unittest.TestCase):
         self.assertEqual(login, '@old_login')
         self.assertEqual(reference, '@old_login')
 
+    def test_employee_id_keeps_identity_link_when_telegram_changes(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute('ALTER TABLE users ADD COLUMN omg_shift_employee_id TEXT')
+        first = self.account.apply_omg_employee_identity(conn, {
+            'id': 'employee-1',
+            'name': 'Бондаренко Саша',
+            'telegram': '@old_login',
+        })
+        second = self.account.apply_omg_employee_identity(conn, {
+            'id': 'employee-1',
+            'name': 'Бондаренко Александра',
+            'telegram': '@new_login',
+        })
+        conn.commit()
+
+        user = conn.execute(
+            '''SELECT login, first_name, second_name, nick_name, status,
+                      omg_shift_employee_id
+               FROM users WHERE ID=1'''
+        ).fetchone()
+        references = {
+            table: conn.execute(
+                f'SELECT "{column}" FROM "{table}"'
+            ).fetchone()[0]
+            for table, column in self.account.LOGIN_REFERENCES.items()
+        }
+        conn.close()
+
+        self.assertEqual(first['status'], 'linked')
+        self.assertEqual(second['status'], 'linked')
+        self.assertTrue(second['changed'])
+        self.assertEqual(
+            tuple(user),
+            ('@new_login', 'Александра', 'Бондаренко', 'Ник', 0, 'employee-1'),
+        )
+        self.assertTrue(all(value == '@new_login' for value in references.values()))
+
+    def test_unlinked_omg_employee_does_not_create_user(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute('ALTER TABLE users ADD COLUMN omg_shift_employee_id TEXT')
+        result = self.account.apply_omg_employee_identity(conn, {
+            'id': 'employee-2',
+            'name': 'Новый Сотрудник',
+            'telegram': '@not_in_database',
+        })
+        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        conn.close()
+
+        self.assertEqual(result['status'], 'unlinked')
+        self.assertEqual(count, 1)
+
     def test_legacy_shift_uses_omg_name_after_identity_sync(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute(

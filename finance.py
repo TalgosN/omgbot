@@ -1017,7 +1017,8 @@ def _load_payroll_rates(conn, start_dt, end_dt):
            FROM payroll_rates
            WHERE date(valid_from) < date(?)
              AND (valid_to IS NULL OR date(valid_to) >= date(?))
-           ORDER BY date(valid_from) DESC""",
+           ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END,
+                    date(valid_from) DESC""",
         (end_dt.date().isoformat(), start_dt.date().isoformat()),
     ):
         rates[(_canonical_login(login), club)].append(

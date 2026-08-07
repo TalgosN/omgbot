@@ -120,6 +120,33 @@ class PayrollReportTests(unittest.TestCase):
         self.assertEqual(skipped[0]['Логин'], '@three')
         self.assertEqual(skipped[0]['Проблемы'], [('Ленинский', '2026-07-20')])
 
+    def test_manual_rate_has_priority_over_synced_omg_shift_rate(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''INSERT INTO payroll_rates
+               (login, club, hourly_rate, valid_from, source)
+               VALUES (?, ?, ?, ?, ?)''',
+            ('@one', '*', 250, '2026-07-20', 'omg_shift:position'),
+        )
+        conn.execute(
+            '''UPDATE payroll_rates
+               SET hourly_rate=300, source='manual'
+               WHERE login='@one' AND club='*' AND valid_from='2024-01-01' ''',
+        )
+        conn.commit()
+
+        rates = finance._load_payroll_rates(
+            conn,
+            datetime(2026, 7, 20),
+            datetime(2026, 7, 22),
+        )
+        selected = finance._find_payroll_rate(
+            rates, '@one', 'Ленинский', datetime(2026, 7, 20).date()
+        )
+        conn.close()
+
+        self.assertEqual(selected, 300)
+
     def test_expands_template_before_manual_rows(self):
         workbook = load_workbook('Reports/Шаблон_ЗП.xlsx')
         worksheet = workbook['ЗП']

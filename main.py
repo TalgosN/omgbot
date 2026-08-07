@@ -400,6 +400,8 @@ Indexes of users
 
 ############################# start
 create_tables()
+from rasp import initialize_shifton_employee_schema
+initialize_shifton_employee_schema()
 initialize_permissions_schema()
 initialize_club_status_dashboard_schema()
 create_tables_KPI()

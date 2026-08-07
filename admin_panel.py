@@ -113,6 +113,9 @@ def admin_func_handler(message, bot):
     elif a == '🩺 Статус систем':
         handle_system_health(message, bot)
 
+    elif a == '🔄 Сотрудники OMG Shift':
+        handle_shifton_employee_sync(message, bot)
+
     elif a == '🧪 Диагностика KPI':
         handle_kpi_shadow_diagnostics(message, bot)
 
@@ -216,6 +219,7 @@ def admin_extra_menu_handler(message, bot):
         return
     if message.text in {
         '⚙️ Обновить настройки',
+        '🔄 Сотрудники OMG Shift',
         '🩺 Статус систем',
         '🧪 Диагностика KPI',
         '📊 Тест недельного отчета',
@@ -630,9 +634,17 @@ def collect_system_health(bot):
         runtime = get_shifton_runtime_status()
         last_check = runtime.get("last_notification_check") or "ещё не выполнялась"
         last_sync = runtime.get("last_chat_sync") or "ещё не выполнялась"
+        employee_sync = runtime.get("last_employee_sync") or "ещё не выполнялась"
         lines.append(f"ℹ️ Очередь уведомлений: последняя проверка {last_check}")
         sync_result = runtime.get("last_chat_sync_result") or "результат отсутствует"
         lines.append(f"ℹ️ Синхронизация чатов: {last_sync}, {sync_result}")
+        employee_result = runtime.get("last_employee_sync_result") or "результат отсутствует"
+        lines.append(f"ℹ️ Сотрудники OMG Shift: {employee_sync}, {employee_result}")
+        if runtime.get("last_employee_sync_error"):
+            lines.append(
+                f"⚠️ Ошибка синхронизации сотрудников: "
+                f"{runtime['last_employee_sync_error'][:120]}"
+            )
         if runtime.get("last_notification_error"):
             lines.append(f"⚠️ Последняя ошибка очереди: {runtime['last_notification_error'][:120]}")
     except Exception as e:
@@ -640,6 +652,63 @@ def collect_system_health(bot):
 
     lines.extend(collect_steamtracker_health())
     return "\n".join(lines)
+
+
+def handle_shifton_employee_sync(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    progress = bot.send_message(
+        message.chat.id,
+        '⏳ Синхронизирую сотрудников и ставки с OMG Shift...',
+    )
+    try:
+        from rasp import sync_shifton_employees
+        result = sync_shifton_employees()
+        lines = [
+            '✅ <b>Сотрудники OMG Shift синхронизированы</b>',
+            '',
+            f'👥 Всего: <b>{result["total"]}</b>',
+            f'🟢 Активных: <b>{result["active"]}</b>',
+            f'📦 Архивных: <b>{result["archived"]}</b>',
+            f'🔗 Связано с ботом: <b>{result["linked"]}</b>',
+            f'✏️ Профилей изменено: <b>{result["changed"]}</b>',
+            f'💵 Периодов ставок: <b>{result["rate_rows"]}</b>',
+        ]
+        attention = (
+            result['unlinked']
+            + result['identity_conflicts']
+            + result['access_mismatches']
+        )
+        if attention:
+            lines.extend(['', '⚠️ <b>Требуют внимания:</b>'])
+            for item in attention[:15]:
+                identity = item.get('telegram') or item.get('name') or item['employee_id']
+                reason = item.get('error') or 'нет связи с users'
+                lines.append(f'• {html.escape(str(identity))}: {html.escape(str(reason))}')
+        if result['rate_conflicts']:
+            lines.append(
+                f'⚠️ Существующие ставки сохранены в '
+                f'<b>{len(result["rate_conflicts"])}</b> совпадающих периодах.'
+            )
+        if result['google_errors']:
+            lines.append(
+                f'⚠️ Ошибок обновления Google Sheets: '
+                f'<b>{len(result["google_errors"])}</b>.'
+            )
+        bot.edit_message_text(
+            '\n'.join(lines),
+            chat_id=message.chat.id,
+            message_id=progress.message_id,
+            parse_mode='HTML',
+        )
+    except Exception as error:
+        bot.edit_message_text(
+            f'❌ Не удалось синхронизировать сотрудников: {html.escape(str(error))}',
+            chat_id=message.chat.id,
+            message_id=progress.message_id,
+            parse_mode='HTML',
+        )
+    admin_extra_menu(message, bot)
 
 
 def collect_steamtracker_health():
