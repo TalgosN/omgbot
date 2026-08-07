@@ -4,8 +4,8 @@ const state = { me: null, meta: null, status: 'work', tasks: [], selected: null,
 tg?.ready();
 tg?.expand();
 if (tg) {
-  tg.setHeaderColor('#f4f0ff');
-  tg.setBackgroundColor('#f7f4ff');
+  tg.setHeaderColor('#100524');
+  tg.setBackgroundColor('#09031d');
 }
 
 function escapeHtml(value) {

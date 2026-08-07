@@ -3,8 +3,8 @@ const $ = (selector) => document.querySelector(selector);
 tg?.ready();
 tg?.expand();
 if (tg) {
-  tg.setHeaderColor('#f4f0ff');
-  tg.setBackgroundColor('#f7f4ff');
+  tg.setHeaderColor('#e9e3f3');
+  tg.setBackgroundColor('#e9e3f3');
 }
 
 function escapeHtml(value) {
