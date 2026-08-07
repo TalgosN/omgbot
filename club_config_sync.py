@@ -1,3 +1,4 @@
+import copy
 import math
 import re
 from collections import defaultdict
@@ -14,7 +15,6 @@ REQUIRED_SHEETS = (
     INSTRUCTIONS_SHEET,
     CLUBS_SHEET,
     SCHEDULE_SHEET,
-    QUESTIONS_SHEET,
     VALIDATION_SHEET,
     SYSTEM_SHEET,
 )
@@ -396,16 +396,34 @@ def _apply_questions(clubs_by_id, values):
             club['info']['checklists'] = checklists
 
 
-def build_config(system_values, club_values, schedule_values, question_values):
+def build_config(system_values, club_values, schedule_values, question_values=None):
     clubs_by_id = _parse_system(system_values)
     _apply_club_settings(clubs_by_id, club_values)
     _apply_schedules(clubs_by_id, schedule_values)
-    _apply_questions(clubs_by_id, question_values)
+    if question_values is not None:
+        _apply_questions(clubs_by_id, question_values)
     ordered = sorted(
         (club for club in clubs_by_id.values() if club['active']),
         key=lambda club: club['sort_order'],
     )
     return {club['name']: club['info'] for club in ordered}
+
+
+def preserve_shift_questions(current_config, new_config):
+    current_by_id = {
+        _text(info.get('_config_id')).casefold(): info
+        for info in current_config.values()
+        if _text(info.get('_config_id'))
+    }
+    for info in new_config.values():
+        previous = current_by_id.get(_text(info.get('_config_id')).casefold())
+        if not previous:
+            continue
+        if previous.get('questions'):
+            info['questions'] = copy.deepcopy(previous['questions'])
+        if previous.get('checklists'):
+            info['checklists'] = copy.deepcopy(previous['checklists'])
+    return new_config
 
 
 def validation_values(message='Конфигурация проверена'):
@@ -414,8 +432,8 @@ def validation_values(message='Конфигурация проверена'):
         ['Статус', message],
         ['Последняя проверка', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
         ['Действия', 'Открытие, Закрытие'],
+        ['Вопросы смены', 'Редактируются в Mini App; лист «❓ Вопросы смены» не импортируется'],
         ['Форматы ответа', 'Текст, Фото, Число'],
-        ['Наборы', 'Все наборы или A, B, C'],
         ['Правило публикации', 'При любой ошибке clubs.json не изменяется'],
     ]
 
@@ -490,8 +508,8 @@ def read_config(spreadsheet, current_config):
             _sheet_values(worksheets[SYSTEM_SHEET]),
             _sheet_values(worksheets[CLUBS_SHEET]),
             _sheet_values(worksheets[SCHEDULE_SHEET]),
-            _sheet_values(worksheets[QUESTIONS_SHEET]),
         )
+        preserve_shift_questions(current_config, config)
         validate_stable_identity(current_config, config)
     except ConfigValidationError as error:
         try:

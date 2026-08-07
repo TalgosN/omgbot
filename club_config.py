@@ -15,6 +15,7 @@ CLUBS_BACKUP_PATH = BASE_DIR / 'data' / 'clubs.json.bak'
 
 _lock = threading.RLock()
 _clubs = None
+_clubs_mtime_ns = None
 _status = {
     'loaded_at': None,
     'version': None,
@@ -75,10 +76,11 @@ def _load_file(path=None):
 
 
 def reload_clubs(source='disk'):
-    global _clubs
+    global _clubs, _clubs_mtime_ns
     clubs = _load_file()
     with _lock:
         _clubs = clubs
+        _clubs_mtime_ns = CLUBS_PATH.stat().st_mtime_ns
         _status.update({
             'loaded_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'version': _version(clubs),
@@ -90,8 +92,15 @@ def reload_clubs(source='disk'):
 def get_clubs():
     global _clubs
     with _lock:
-        if _clubs is None:
-            return reload_clubs()
+        try:
+            file_mtime_ns = CLUBS_PATH.stat().st_mtime_ns
+        except FileNotFoundError:
+            file_mtime_ns = None
+        if _clubs is None or (
+            _clubs_mtime_ns is not None
+            and file_mtime_ns != _clubs_mtime_ns
+        ):
+            return reload_clubs(source='disk_change' if _clubs is not None else 'disk')
         return copy.deepcopy(_clubs)
 
 
@@ -133,11 +142,12 @@ def select_question_set(club_config, action):
 
 
 def save_clubs(clubs, source='google'):
-    global _clubs
+    global _clubs, _clubs_mtime_ns
     snapshot = _validate_clubs(copy.deepcopy(clubs))
     with _lock:
         _write_atomic(snapshot, CLUBS_PATH, backup=True)
         _clubs = snapshot
+        _clubs_mtime_ns = CLUBS_PATH.stat().st_mtime_ns
         _status.update({
             'loaded_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'version': _version(snapshot),

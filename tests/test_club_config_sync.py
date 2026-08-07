@@ -188,16 +188,23 @@ class ClubConfigSyncTest(unittest.TestCase):
         values = self.sheet_values()
         values[1].append(['', '', False])
         values[3].append(['', '', '', '', '', '', '', False])
-        compiled, worksheets = read_config(FakeSpreadsheet(values), {})
+        current = build_config(*self.sheet_values())
+        compiled, worksheets = read_config(FakeSpreadsheet(values), current)
 
-        self.assertEqual(set(worksheets), set(REQUIRED_SHEETS))
+        self.assertEqual(set(worksheets), set(REQUIRED_SHEETS) | {QUESTIONS_SHEET})
         self.assertEqual(count_config(compiled), (2, 4, 6))
 
-    def test_missing_required_sheet_is_rejected(self):
+    def test_questions_sheet_is_optional_and_does_not_replace_current_questions(self):
+        current = build_config(*self.sheet_values())
         spreadsheet = FakeSpreadsheet(self.sheet_values(), missing=(QUESTIONS_SHEET,))
 
-        with self.assertRaisesRegex(ConfigValidationError, 'Вопросы смены'):
-            read_config(spreadsheet, {})
+        compiled, worksheets = read_config(spreadsheet, current)
+
+        self.assertNotIn(QUESTIONS_SHEET, worksheets)
+        self.assertEqual(
+            compiled['Тестовый клуб']['questions'],
+            current['Тестовый клуб']['questions'],
+        )
 
     def test_duplicate_question_inside_variant_is_rejected(self):
         system, clubs, schedules, questions = self.sheet_values()

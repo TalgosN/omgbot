@@ -52,6 +52,12 @@ from repair_catalog import (
     migration_review_payload,
     repair_payload,
 )
+from shift_config_store import (
+    get_editor_config,
+    list_versions,
+    rollback_version,
+    save_editor_config,
+)
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -932,6 +938,11 @@ def problems_index():
     return send_from_directory(STATIC_DIR, 'problems.html')
 
 
+@app.get('/shift-config')
+def shift_config_index():
+    return send_from_directory(STATIC_DIR, 'shift_config.html')
+
+
 @app.get('/static/<path:filename>')
 def static_file(filename):
     return send_from_directory(STATIC_DIR, filename)
@@ -1003,6 +1014,47 @@ def api_home():
                 _problem_counts_by_club(),
             )
     return jsonify(payload)
+
+
+@app.get('/api/shift-config')
+@require_manager
+def api_shift_config():
+    return jsonify(get_editor_config(DB_PATH))
+
+
+@app.put('/api/shift-config')
+@require_manager
+def api_save_shift_config():
+    payload = request.get_json(silent=True) or {}
+    try:
+        saved = save_editor_config(DB_PATH, payload, _actor_login())
+    except RuntimeError as error:
+        return jsonify({'error': str(error)}), 409
+    return jsonify(saved)
+
+
+@app.get('/api/shift-config/history')
+@require_manager
+def api_shift_config_history():
+    return jsonify({'versions': list_versions(DB_PATH)})
+
+
+@app.post('/api/shift-config/history/<int:version_id>/rollback')
+@require_manager
+def api_shift_config_rollback(version_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        saved = rollback_version(
+            DB_PATH,
+            version_id,
+            payload.get('version'),
+            _actor_login(),
+        )
+    except RuntimeError as error:
+        return jsonify({'error': str(error)}), 409
+    except LookupError as error:
+        return jsonify({'error': str(error)}), 404
+    return jsonify(saved)
 
 
 def _task_payload(row, include_description=True):

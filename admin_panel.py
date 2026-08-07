@@ -9,6 +9,7 @@ from datetime import datetime
 from statistics import median
 import requests
 import pytz
+import constants as app_constants
 from constants import CHATS, SHIFTON_API_URL, SHIFTON_API_TOKEN, validate_config
 from club_config import get_club_config_status, get_clubs, save_clubs
 from club_config_sync import (
@@ -117,6 +118,9 @@ def admin_func_handler(message, bot):
 
     elif a == '📊 KPI сотрудников':
         handle_monthly_kpi_report(message, bot)
+
+    elif a == '📝 Сценарии смен':
+        open_shift_config(message, bot)
         
     elif a == '⬅️ Вернуться':
         from menu import hello
@@ -159,6 +163,31 @@ def admin_func_handler(message, bot):
     else:
         from menu import admin_menu
         admin_menu(message, bot)
+
+
+def open_shift_config(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    webapp_url = getattr(app_constants, 'KPI_WEBAPP_URL', '')
+    runtime_url_path = os.path.join('data', 'kpi_webapp_url.txt')
+    if not webapp_url and os.path.exists(runtime_url_path):
+        with open(runtime_url_path, 'r', encoding='utf-8') as runtime_url_file:
+            webapp_url = runtime_url_file.read().strip()
+    if not webapp_url:
+        bot.send_message(message.chat.id, 'Mini App ещё не подключён к HTTPS-адресу.')
+        from menu import admin_menu
+        admin_menu(message, bot)
+        return
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(
+        '📝 Открыть редактор сценариев',
+        web_app=types.WebAppInfo(f'{webapp_url.rstrip("/")}/shift-config'),
+    ))
+    bot.send_message(
+        message.chat.id,
+        'Вопросы и чек-листы открытия и закрытия смен:',
+        reply_markup=markup,
+    )
 
 
 def admin_extra_menu(message, bot):

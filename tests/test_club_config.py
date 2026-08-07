@@ -23,10 +23,12 @@ class ClubConfigStoreTest(unittest.TestCase):
         self.path = Path(self.temp_dir.name) / 'clubs.json'
         self.backup = Path(self.temp_dir.name) / 'clubs.json.bak'
         self.old_cache = club_config._clubs
+        self.old_mtime_ns = club_config._clubs_mtime_ns
         self.old_status = dict(club_config._status)
 
     def tearDown(self):
         club_config._clubs = self.old_cache
+        club_config._clubs_mtime_ns = self.old_mtime_ns
         club_config._status.clear()
         club_config._status.update(self.old_status)
         self.temp_dir.cleanup()
@@ -66,6 +68,20 @@ class ClubConfigStoreTest(unittest.TestCase):
             club_config._clubs = None
             with self.assertRaisesRegex(ValueError, '_config_id'):
                 club_config.reload_clubs()
+
+    def test_external_file_change_is_reloaded_automatically(self):
+        old = {'Старый': runtime_club('club_old', '@old')}
+        new = {'Новый': runtime_club('club_new', '@new')}
+        self.write(old)
+
+        with self.patched_paths():
+            club_config._clubs = None
+            club_config._clubs_mtime_ns = None
+            self.assertEqual(club_config.get_clubs(), old)
+            self.write(new)
+            self.path.touch()
+
+            self.assertEqual(club_config.get_clubs(), new)
 
     def test_schedule_locations_use_separate_shift_name(self):
         club_config._clubs = {

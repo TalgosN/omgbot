@@ -88,6 +88,7 @@ function renderClubs(data) {
 async function load() {
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
+    $('#shiftConfigModule').hidden = !me.can_manage;
     $('#userBadge').textContent = me.role_name;
     $('#welcomeTitle').textContent = `Привет, ${me.name}`;
     $('#welcomeDate').textContent = new Intl.DateTimeFormat('ru-RU', {

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f0ff">
+  <title>Сценарии смен — OMG VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/shift_config.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <a href="/" class="back">← Назад</a>
+      <div><p class="eyebrow">Настройки бота</p><h1>Сценарии смен</h1></div>
+      <button id="saveButton" class="primary">Сохранить</button>
+    </header>
+
+    <div id="notice" class="notice" hidden></div>
+    <section id="editor" hidden>
+      <div class="toolbar">
+        <label>Клуб<select id="clubSelect"></select></label>
+        <div class="actions" role="tablist">
+          <button class="action-tab active" data-action="open">Открытие</button>
+          <button class="action-tab" data-action="close">Закрытие</button>
+        </div>
+      </div>
+
+      <div class="variant-bar">
+        <div id="variantTabs" class="variant-tabs"></div>
+        <button id="addVariant" class="soft">+ Набор</button>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head"><div><p class="eyebrow">Перед вопросами</p><h2>Чек-лист</h2></div><button id="addChecklist" class="soft">+ Пункт</button></div>
+        <div id="checklistList" class="item-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><div><p class="eyebrow">Ответ сотрудника</p><h2>Вопросы</h2></div><button id="addQuestion" class="soft">+ Вопрос</button></div>
+        <div id="questionList" class="item-list"></div>
+      </section>
+
+      <div class="bottom-actions">
+        <button id="previewButton" class="soft">Предпросмотр</button>
+        <button id="removeVariant" class="danger">Удалить набор</button>
+      </div>
+
+      <details class="history-panel">
+        <summary>История изменений</summary>
+        <p class="hint">Откат создаёт новую версию и сразу применяет её в боте.</p>
+        <div id="historyList" class="history-list"></div>
+      </details>
+    </section>
+  </main>
+
+  <dialog id="previewDialog">
+    <div class="dialog-head"><h2>Как увидит сотрудник</h2><button id="closePreview" class="icon-button">×</button></div>
+    <div id="previewContent"></div>
+  </dialog>
+  <script src="/static/shift_config.js"></script>
+</body>
+</html>

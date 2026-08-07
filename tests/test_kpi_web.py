@@ -132,6 +132,30 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(payload['clubs'], clubs)
         upcoming.assert_not_called()
 
+    def test_manager_and_owner_can_open_shift_config(self):
+        config = {'version': 'abc', 'clubs': []}
+        for role in (2, 3):
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(role)),
+                patch.object(kpi_web, 'get_editor_config', return_value=config),
+            ):
+                response = self.client.get('/api/shift-config', headers=self.headers)
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json(), config)
+
+    def test_employee_cannot_open_shift_config(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_editor_config') as editor,
+        ):
+            response = self.client.get('/api/shift-config', headers=self.headers)
+
+        self.assertEqual(response.status_code, 403)
+        editor.assert_not_called()
+
     def test_mini_app_creates_anonymous_problem_in_shared_tasks_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'tasks.db'
