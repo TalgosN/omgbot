@@ -31,16 +31,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-  kpi_tunnel:
-    image: cloudflare/cloudflared:latest
-    command:
-      - "tunnel"
-      - "--no-autoupdate"
-      - "--protocol"
-      - "http2"
-      - "--url"
-      - "http://kpi_web:8080"
+  caddy:
+    image: caddy:2-alpine
     restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       kpi_web:
         condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

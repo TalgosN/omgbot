@@ -409,34 +409,42 @@ docker compose logs -f bot
 Владелец и production-оператор должны иметь актуальную копию `.env`, `db`, `data` и `key` в защищённом хранилище. Git не заменяет backup.
 ## KPI Telegram Mini App
 
-The first-stage KPI Mini App runs as two additional Docker Compose services:
+KPI Mini App работает в двух Docker Compose-сервисах:
 
-- `kpi_web` serves the authenticated KPI interface on the internal port `8080`;
-- `kpi_tunnel` publishes it through a temporary `trycloudflare.com` HTTPS URL.
+- `kpi_web` обслуживает авторизованный интерфейс на внутреннем порту `8080`;
+- `caddy` публикует его по постоянному адресу `https://bot.omg-vr.ru` и
+  автоматически управляет HTTPS-сертификатом.
 
-Start or update the bot, app, and test tunnel:
+DNS-запись `A` для `bot.omg-vr.ru` должна указывать на публичный IP VDS. Порты
+`80/tcp`, `443/tcp` и `443/udp` должны быть доступны снаружи.
+В серверном `.env` должен быть указан постоянный адрес:
 
-```bash
-bash scripts/deploy_kpi_quick_tunnel.sh
+```env
+KPI_WEBAPP_URL=https://bot.omg-vr.ru
 ```
 
-The script builds the services, waits for the generated HTTPS URL, and assigns
-it to the default Telegram menu button. To inspect the URL manually:
+Запуск или обновление бота, приложения и HTTPS-прокси:
 
 ```bash
-docker compose logs kpi_tunnel --tail=50
+bash scripts/deploy_kpi_https.sh
 ```
 
-To register a URL manually:
+Скрипт собирает сервисы, ждёт доступности `/health` по HTTPS и назначает
+постоянный URL кнопке Telegram. Проверить состояние можно командами:
 
 ```bash
-docker compose exec bot python scripts/set_kpi_menu_button.py https://example.trycloudflare.com
+curl -fsS https://bot.omg-vr.ru/health
+docker compose logs caddy --tail=100
 ```
 
-The helper also saves the current URL in `data/kpi_webapp_url.txt`, so the
-`/kpi` bot command starts using it without another bot restart. Quick Tunnel
-URLs can change after a tunnel restart; rerun the last two commands when that
-happens.
+Назначить URL кнопке вручную:
+
+```bash
+docker compose exec bot python scripts/set_kpi_menu_button.py https://bot.omg-vr.ru
+```
+
+Скрипт сохраняет адрес в `data/kpi_webapp_url.txt`, поэтому команда `/kpi`
+начинает использовать его без дополнительного перезапуска бота.
 
 The default `Мой KPI` screen shows the current employee's place, KPI, worked
 and weighted shifts, per-shift pace, distance from the team average and the

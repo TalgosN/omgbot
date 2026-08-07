@@ -10,7 +10,7 @@ def main():
     load_dotenv()
     if len(sys.argv) != 2 or not sys.argv[1].startswith('https://'):
         raise SystemExit(
-            'Usage: python scripts/set_kpi_menu_button.py https://example.trycloudflare.com'
+            'Usage: python scripts/set_kpi_menu_button.py https://bot.example.com'
         )
     token = os.getenv('TELEGRAM_API_KEY')
     if not token:

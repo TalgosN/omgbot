@@ -1,0 +1,4 @@
+bot.omg-vr.ru {
+    encode zstd gzip
+    reverse_proxy kpi_web:8080
+}
