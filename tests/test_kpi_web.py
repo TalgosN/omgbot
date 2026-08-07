@@ -147,6 +147,16 @@ class KpiWebTest(unittest.TestCase):
             conn.commit()
             conn.close()
 
+            kpi_web.initialize_repair_schema(str(db_path))
+            conn = sqlite3.connect(db_path)
+            item_id = conn.execute(
+                "SELECT id FROM repair_item_types WHERE name='VR-шлем'"
+            ).fetchone()[0]
+            location_id = conn.execute(
+                "SELECT id FROM repair_locations WHERE club='Марьино' AND name='2 зона'"
+            ).fetchone()[0]
+            conn.close()
+
             with (
                 patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
                 patch.object(kpi_web, 'get_user', return_value=user(0)),
@@ -162,7 +172,12 @@ class KpiWebTest(unittest.TestCase):
                         'club': 'Марьино',
                         'title': 'Не работает шлем',
                         'description': 'Не включается второй шлем',
+                        'repair_item_id': str(item_id),
+                        'repair_location_ids': json.dumps([location_id]),
                     },
+                )
+                detail_response = self.client.get(
+                    '/api/problems/1', headers=self.headers,
                 )
 
             conn = sqlite3.connect(db_path)
@@ -170,17 +185,33 @@ class KpiWebTest(unittest.TestCase):
                 'SELECT type, club, title, desc, status FROM tasks'
             ).fetchone()
             columns = [item[1] for item in conn.execute('PRAGMA table_info(tasks)')]
+            repair_link = conn.execute(
+                '''SELECT cases.task_id, items.name, locations.name
+                   FROM repair_cases cases
+                   JOIN repair_item_types items ON items.id=cases.item_type_id
+                   JOIN repair_case_locations links ON links.task_id=cases.task_id
+                   JOIN repair_locations locations ON locations.id=links.location_id'''
+            ).fetchone()
+            repair_event = conn.execute(
+                'SELECT event_type FROM repair_events WHERE task_id=1'
+            ).fetchone()
             conn.close()
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(
             row,
             (
-                'Ремонт', 'Марьино', 'Не работает шлем',
+                'Ремонт', 'Марьино', 'VR-шлем — 2 зона',
                 'Не включается второй шлем', 'В работе',
             ),
         )
         self.assertNotIn('author', columns)
+        self.assertEqual(repair_link, (1, 'VR-шлем', '2 зона'))
+        self.assertEqual(repair_event, ('created',))
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(
+            detail_response.get_json()['repair']['history'][0]['task_id'], 1,
+        )
         notify.assert_called_once()
 
     def test_problem_follows_existing_solution_and_return_lifecycle(self):

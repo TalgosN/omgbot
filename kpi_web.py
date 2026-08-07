@@ -43,6 +43,15 @@ from permissions import (
     ROLE_TECHNICIAN,
     get_user,
 )
+from repair_catalog import (
+    ZONE_COUNTS,
+    add_repair_event,
+    catalog_payload,
+    create_repair_case,
+    initialize_repair_schema,
+    migration_review_payload,
+    repair_payload,
+)
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -1057,21 +1066,199 @@ def api_problems_meta():
             'Улучшение бота',
         ],
         'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
+        'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
+        'repair_clubs': list(ZONE_COUNTS),
     })
+
+
+@app.get('/api/repairs/catalog')
+@require_user
+def api_repair_catalog():
+    club = str(request.args.get('club') or '').strip()
+    if club and club not in get_clubs():
+        raise ValueError('Выберите клуб')
+    include_inactive = (
+        request.args.get('include_inactive') == '1'
+        and int(g.kpi_user['status']) >= ROLE_MANAGER
+    )
+    return jsonify(catalog_payload(DB_PATH, club, include_inactive))
+
+
+@app.post('/api/repairs/catalog/items')
+@require_manager
+def api_add_repair_item():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    if not name or len(name) > 80:
+        raise ValueError('Название оборудования должно быть не длиннее 80 символов')
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            cursor = conn.execute(
+                '''INSERT INTO repair_item_types(name, sort_order)
+                   VALUES (?, (SELECT COALESCE(MAX(sort_order), 0) + 1
+                               FROM repair_item_types))''',
+                (name,),
+            )
+    except sqlite3.IntegrityError as error:
+        raise ValueError('Такое оборудование уже есть в списке') from error
+    finally:
+        conn.close()
+    return jsonify({'id': cursor.lastrowid, 'name': name}), 201
+
+
+@app.post('/api/repairs/catalog/details')
+@require_manager
+def api_add_repair_detail():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()
+    try:
+        item_id = int(payload.get('item_id'))
+    except (TypeError, ValueError) as error:
+        raise ValueError('Выберите оборудование') from error
+    if not name or len(name) > 80:
+        raise ValueError('Уточнение должно быть не длиннее 80 символов')
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            if not conn.execute(
+                'SELECT 1 FROM repair_item_types WHERE id=?', (item_id,)
+            ).fetchone():
+                raise ValueError('Оборудование не найдено')
+            cursor = conn.execute(
+                '''INSERT INTO repair_item_details(item_type_id, name, sort_order)
+                   VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1
+                                   FROM repair_item_details
+                                   WHERE item_type_id=?))''',
+                (item_id, name, item_id),
+            )
+    except sqlite3.IntegrityError as error:
+        raise ValueError('Такое уточнение уже есть в списке') from error
+    finally:
+        conn.close()
+    return jsonify({'id': cursor.lastrowid, 'name': name}), 201
+
+
+@app.post('/api/repairs/catalog/locations')
+@require_manager
+def api_add_repair_location():
+    payload = request.get_json(silent=True) or {}
+    club = str(payload.get('club') or '').strip()
+    name = str(payload.get('name') or '').strip()
+    if club not in get_clubs():
+        raise ValueError('Выберите клуб')
+    if not name or len(name) > 80:
+        raise ValueError('Название места должно быть не длиннее 80 символов')
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            cursor = conn.execute(
+                '''INSERT INTO repair_locations(club, name, kind, sort_order)
+                   VALUES (?, ?, 'other',
+                           (SELECT COALESCE(MAX(sort_order), 0) + 1
+                            FROM repair_locations WHERE club=?))''',
+                (club, name, club),
+            )
+    except sqlite3.IntegrityError as error:
+        raise ValueError('Такое место уже есть в клубе') from error
+    finally:
+        conn.close()
+    return jsonify({'id': cursor.lastrowid, 'name': name}), 201
+
+
+@app.patch('/api/repairs/catalog/<kind>/<int:entry_id>')
+@require_manager
+def api_toggle_repair_catalog_entry(kind, entry_id):
+    table_map = {
+        'items': 'repair_item_types',
+        'details': 'repair_item_details',
+        'locations': 'repair_locations',
+    }
+    if kind not in table_map:
+        raise ValueError('Неизвестный раздел справочника')
+    payload = request.get_json(silent=True) or {}
+    active = 1 if bool(payload.get('active')) else 0
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            cursor = conn.execute(
+                f'UPDATE {table_map[kind]} SET active=? WHERE id=?',
+                (active, entry_id),
+            )
+            if cursor.rowcount != 1:
+                return jsonify({'error': 'Запись справочника не найдена.'}), 404
+    finally:
+        conn.close()
+    return jsonify({'id': entry_id, 'active': bool(active)})
+
+
+@app.get('/api/repairs/migration-review')
+@require_manager
+def api_repair_migration_review():
+    return jsonify(migration_review_payload(DB_PATH))
+
+
+@app.post('/api/repairs/<int:task_id>/mapping')
+@require_manager
+def api_map_legacy_repair(task_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        item_id = int(payload.get('item_id'))
+        detail_id = int(payload['detail_id']) if payload.get('detail_id') else None
+        location_ids = payload.get('location_ids') or []
+        if not isinstance(location_ids, list):
+            raise ValueError
+    except (TypeError, ValueError) as error:
+        raise ValueError('Выберите оборудование и хотя бы одно место') from error
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            task = conn.execute(
+                '''SELECT ID, club FROM tasks
+                   WHERE ID=? AND lower(type)=lower('Ремонт')''',
+                (task_id,),
+            ).fetchone()
+            if not task:
+                return jsonify({'error': 'Ремонтная заявка не найдена.'}), 404
+            if conn.execute(
+                'SELECT 1 FROM repair_cases WHERE task_id=?', (task_id,)
+            ).fetchone():
+                return jsonify({'error': 'Заявка уже сопоставлена.'}), 409
+            create_repair_case(
+                conn, task_id, task['club'], item_id, detail_id, location_ids,
+            )
+            conn.execute(
+                "UPDATE repair_cases SET mapping_source='legacy-manual' WHERE task_id=?",
+                (task_id,),
+            )
+            conn.execute('DELETE FROM repair_events WHERE task_id=?', (task_id,))
+    finally:
+        conn.close()
+    return jsonify({'task_id': task_id, 'mapped': True})
 
 
 @app.get('/api/problems/<int:task_id>')
 @require_user
 def api_problem(task_id):
+    initialize_repair_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute('SELECT * FROM tasks WHERE ID=?', (task_id,)).fetchone()
+        repair = repair_payload(conn, task_id) if row else None
     finally:
         conn.close()
     if not row:
         return jsonify({'error': 'Проблема не найдена.'}), 404
-    return jsonify(_task_payload(row))
+    result = _task_payload(row)
+    result['repair'] = repair
+    return jsonify(result)
 
 
 @app.get('/api/problems/<int:task_id>/photo')
@@ -1108,10 +1295,26 @@ def api_create_problem():
         raise ValueError('Выберите тип обращения')
     if club not in get_clubs():
         raise ValueError('Выберите клуб')
+    if task_type == 'Ремонт':
+        title = 'Ремонт'
     if not title or len(title) > 50 or title.isnumeric():
         raise ValueError('Название должно содержать текст и быть не длиннее 50 символов')
     if not description or len(description) > 1000:
         raise ValueError('Описание должно быть не длиннее 1000 символов')
+    item_id = detail_id = None
+    location_ids = []
+    if task_type == 'Ремонт':
+        try:
+            item_id = int(request.form.get('repair_item_id'))
+            detail_id = (
+                int(request.form.get('repair_detail_id'))
+                if request.form.get('repair_detail_id') else None
+            )
+            location_ids = json.loads(request.form.get('repair_location_ids') or '[]')
+            if not isinstance(location_ids, list):
+                raise ValueError
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError('Выберите оборудование и хотя бы одно место') from error
     upload = request.files.get('photo')
     photo = None
     if upload and upload.filename:
@@ -1121,7 +1324,10 @@ def api_create_problem():
         if len(photo) > 6 * 1024 * 1024:
             raise ValueError('Фото должно быть не больше 6 МБ')
 
+    if task_type == 'Ремонт':
+        initialize_repair_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
         with conn:
             cursor = conn.execute(
@@ -1131,6 +1337,11 @@ def api_create_problem():
                 (_moscow_today().isoformat(), task_type, club, title, photo, description),
             )
             task_id = cursor.lastrowid
+            if task_type == 'Ремонт':
+                title = create_repair_case(
+                    conn, task_id, club, item_id, detail_id, location_ids,
+                )
+                conn.execute('UPDATE tasks SET title=? WHERE ID=?', (title, task_id))
     finally:
         conn.close()
     task = {
@@ -1144,6 +1355,7 @@ def api_create_problem():
 
 
 def _change_problem_status(task_id, expected_status, new_status, entry=None):
+    initialize_repair_schema(DB_PATH)
     placeholders, statuses = _status_sql((expected_status,))
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1170,6 +1382,15 @@ def _change_problem_status(task_id, expected_status, new_status, entry=None):
             )
             if cursor.rowcount != 1:
                 return None
+            event_types = {
+                'На проверке': 'solution',
+                'В работе': 'returned',
+                'Выполнено': 'confirmed',
+            }
+            add_repair_event(
+                conn, task_id, event_types.get(new_status, 'status_changed'),
+                _plain_task_feedback(entry) if entry else None,
+            )
             return dict(task)
     finally:
         conn.close()

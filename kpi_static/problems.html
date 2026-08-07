@@ -18,7 +18,7 @@
     <header class="problem-header">
       <a class="back-link" href="/">‹ Главная</a>
       <div class="brand small">OMG VR</div>
-      <button id="newProblem" class="primary-button" type="button">+ Добавить</button>
+      <div class="header-actions"><button id="repairCatalog" class="secondary-button hidden" type="button">Справочник</button><button id="newProblem" class="primary-button" type="button">+ Добавить</button></div>
     </header>
 
     <section class="problem-intro">
@@ -45,10 +45,51 @@
       <div class="dialog-head"><div><p class="eyebrow">Новое обращение</p><h2>Добавить проблему</h2></div><button type="button" class="close-dialog">×</button></div>
       <label><span>Тип</span><select id="createType" name="type" required></select></label>
       <label><span>Клуб</span><select id="createClub" name="club" required></select></label>
-      <label><span>Название</span><input name="title" maxlength="50" required placeholder="Коротко опишите суть"></label>
+      <section id="repairFields" class="repair-fields hidden">
+        <label><span>Оборудование</span><select id="repairItem" name="repair_item_id"></select></label>
+        <label id="repairDetailField" class="hidden"><span>Уточнение, необязательно</span><select id="repairDetail" name="repair_detail_id"></select></label>
+        <fieldset><legend>Где находится · можно выбрать несколько</legend><div id="repairLocations" class="location-grid"></div></fieldset>
+        <div class="generated-title"><span>Название заявки</span><strong id="repairTitlePreview">Выберите оборудование и место</strong></div>
+      </section>
+      <label id="regularTitleField"><span>Название</span><input id="createTitle" name="title" maxlength="50" required placeholder="Коротко опишите суть"></label>
       <label><span>Описание</span><textarea name="description" maxlength="1000" required rows="6" placeholder="Что произошло или что предлагаете"></textarea></label>
       <label class="photo-field"><span>Фото, необязательно</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
       <button class="primary-button wide" type="submit">Добавить анонимно</button>
+    </form>
+  </dialog>
+
+  <dialog id="catalogDialog" class="problem-dialog catalog-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">Менеджеры и владельцы</p><h2>Справочник ремонтов</h2></div><button type="button" class="close-dialog">×</button></div>
+    <section class="catalog-section">
+      <h3>Оборудование</h3>
+      <form id="addItemForm" class="inline-form"><input name="name" maxlength="80" required placeholder="Новое оборудование"><button type="submit">Добавить</button></form>
+      <div id="catalogItems" class="catalog-list"></div>
+    </section>
+    <section class="catalog-section">
+      <h3>Уточнение</h3>
+      <form id="addDetailForm" class="stack-form"><select id="detailItem" name="item_id" required></select><div class="inline-form"><input name="name" maxlength="80" required placeholder="Например, кабель"><button type="submit">Добавить</button></div></form>
+    </section>
+    <section class="catalog-section">
+      <h3>Места в клубе</h3>
+      <select id="catalogClub"></select>
+      <form id="addLocationForm" class="inline-form"><input name="name" maxlength="80" required placeholder="Новое место"><button type="submit">Добавить</button></form>
+      <div id="catalogLocations" class="catalog-list"></div>
+    </section>
+    <section class="catalog-section migration-section">
+      <h3>Старые ремонты</h3>
+      <p id="migrationSummary">Проверяем сопоставление…</p>
+      <div id="migrationList" class="catalog-list migration-list"></div>
+    </section>
+  </dialog>
+
+  <dialog id="mappingDialog" class="problem-dialog small-dialog">
+    <form id="mappingForm">
+      <div class="dialog-head"><div><p class="eyebrow">Ручное сопоставление</p><h2 id="mappingTitle"></h2></div><button type="button" class="close-dialog">×</button></div>
+      <p id="mappingDescription" class="mapping-description"></p>
+      <label><span>Оборудование</span><select id="mappingItem" required></select></label>
+      <label id="mappingDetailField" class="hidden"><span>Уточнение, необязательно</span><select id="mappingDetail"></select></label>
+      <fieldset><legend>Место</legend><div id="mappingLocations" class="location-grid"></div></fieldset>
+      <button class="primary-button wide" type="submit">Сохранить сопоставление</button>
     </form>
   </dialog>
 

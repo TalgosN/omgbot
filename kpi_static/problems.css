@@ -4,6 +4,9 @@
 .back-link { color: var(--purple); font-size: 10px; font-weight: 750; text-decoration: none; }
 .primary-button { justify-self: end; min-height: 38px; padding: 0 13px; border: 0; border-radius: 13px; color: white; background: linear-gradient(145deg, var(--purple), var(--purple-dark)); font-size: 9px; font-weight: 800; cursor: pointer; }
 .primary-button.wide { width: 100%; min-height: 46px; margin-top: 8px; font-size: 11px; }
+.header-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.secondary-button { min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 13px; color: var(--purple); background: rgba(255,255,255,.72); font-size: 8px; font-weight: 800; cursor: pointer; }
+.hidden { display: none !important; }
 .problem-intro { margin: 30px 0 18px; }
 .problem-intro h1 { margin: 5px 0 8px; font-size: clamp(28px, 8vw, 42px); letter-spacing: -.045em; }
 .problem-intro > p:last-child { max-width: 620px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
@@ -32,6 +35,51 @@
 .problem-dialog input, .problem-dialog select { min-height: 44px; padding: 0 11px; font-size: 10px; }
 .problem-dialog textarea { padding: 11px; resize: vertical; font-size: 10px; line-height: 1.5; }
 .photo-field input { padding: 10px; }
+.repair-fields { margin: 3px 0 13px; padding: 13px; border: 1px solid rgba(111,75,190,.17); border-radius: 17px; background: rgba(235,225,255,.48); }
+.repair-fields fieldset { min-width: 0; margin: 0 0 11px; padding: 0; border: 0; }
+.repair-fields legend, .generated-title span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 8px; font-weight: 700; }
+.location-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.location-option { margin: 0 !important; }
+.location-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.location-option span { display: grid !important; min-height: 38px; margin: 0 !important; padding: 7px; place-items: center; border: 1px solid var(--line); border-radius: 11px; color: var(--ink) !important; text-align: center; background: white; font-size: 8px !important; cursor: pointer; }
+.location-option input:checked + span { border-color: var(--purple); color: var(--purple) !important; background: var(--lavender); box-shadow: inset 0 0 0 1px var(--purple); }
+.generated-title { padding: 10px; border-radius: 12px; background: white; }
+.generated-title strong { display: block; font-size: 9px; line-height: 1.45; }
+.repair-identity { display: grid; gap: 4px; padding: 14px; border-radius: 16px; color: white; background: linear-gradient(145deg, var(--purple), var(--purple-dark)); }
+.repair-identity span { font-size: 7px; font-weight: 700; opacity: .72; }
+.repair-identity strong { font-size: 13px; }
+.repair-identity small { font-size: 8px; opacity: .86; }
+.repair-history { margin-top: 14px; }
+.history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: var(--muted); font-size: 8px; font-weight: 700; }
+.history-head b { display: grid; min-width: 22px; height: 22px; place-items: center; border-radius: 999px; color: var(--purple); background: var(--lavender); }
+.history-entry { width: 100%; margin-bottom: 6px; padding: 11px; border: 1px solid var(--line); border-radius: 13px; color: var(--ink); text-align: left; background: white; cursor: pointer; }
+.history-entry > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.history-entry strong { font-size: 9px; }
+.history-entry span, .history-entry small { color: var(--muted); font-size: 7px; line-height: 1.55; }
+.history-entry p { margin: 5px 0; font-size: 9px; }
+.catalog-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.catalog-section h3 { margin: 0 0 9px; font-size: 12px; }
+.catalog-section > select { width: 100%; min-height: 42px; margin-bottom: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: white; font-size: 9px; }
+.inline-form { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-bottom: 8px; }
+.inline-form input { min-width: 0; }
+.inline-form button { padding: 0 11px; border: 0; border-radius: 11px; color: white; background: var(--purple); font-size: 8px; font-weight: 750; }
+.stack-form > select { width: 100%; min-height: 42px; margin-bottom: 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 12px; background: white; font-size: 9px; }
+.catalog-list { display: grid; gap: 5px; max-height: 250px; overflow: auto; }
+.catalog-entry { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); text-align: left; background: white; cursor: pointer; }
+.catalog-entry span { font-size: 8px; }
+.catalog-entry b { color: var(--success); font-size: 7px; }
+.catalog-entry.inactive { opacity: .58; }
+.catalog-entry.inactive b { color: var(--muted); }
+.catalog-group { display: grid; gap: 4px; }
+.catalog-detail { width: calc(100% - 14px); margin-left: 14px; padding-block: 7px; background: rgba(255,255,255,.68); }
+.migration-section p { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.migration-list { margin-top: 8px; }
+.migration-entry span { line-height: 1.45; }
+.migration-entry span b { color: var(--muted); font-size: 7px; }
+.migration-entry strong { flex: none; color: var(--purple); font-size: 7px; }
+.mapping-description { margin: -5px 0 14px; padding: 10px; border-radius: 12px; color: var(--muted); background: white; font-size: 8px; line-height: 1.5; }
+#mappingForm fieldset { min-width: 0; margin: 0 0 11px; padding: 0; border: 0; }
+#mappingForm legend { margin-bottom: 7px; color: var(--muted); font-size: 8px; font-weight: 700; }
 .detail-description, .detail-feedback { margin-top: 12px; padding: 13px; border-radius: 15px; background: white; }
 .detail-description span, .detail-feedback span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 8px; font-weight: 700; }
 .detail-description p, .detail-feedback p { margin: 0; font-size: 10px; line-height: 1.55; white-space: pre-wrap; }
