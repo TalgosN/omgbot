@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f0ff">
+  <title>Проблемы · OMG VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
+  <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
+  <link rel="stylesheet" href="/static/home.css">
+  <link rel="stylesheet" href="/static/problems.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="problem-shell">
+    <header class="problem-header">
+      <a class="back-link" href="/">‹ Главная</a>
+      <div class="brand small">OMG VR</div>
+      <button id="newProblem" class="primary-button" type="button">+ Добавить</button>
+    </header>
+
+    <section class="problem-intro">
+      <p class="eyebrow">Полностью анонимно</p>
+      <h1>Доска проблем</h1>
+      <p>Сообщите о проблеме, предложите улучшение или проверьте решение. Автор обращения не сохраняется.</p>
+    </section>
+
+    <nav id="problemTabs" class="problem-tabs">
+      <button class="active" type="button" data-status="work">В работе <b id="workCount">0</b></button>
+      <button type="button" data-status="review">На проверке <b id="reviewCount">0</b></button>
+      <button type="button" data-status="done">Выполнено</button>
+    </nav>
+
+    <section class="problem-filters">
+      <select id="clubFilter"><option value="">Все клубы</option></select>
+      <select id="typeFilter"><option value="">Все типы</option></select>
+    </section>
+    <section id="problemList" class="problem-list"><div class="empty-card">Загрузка…</div></section>
+  </main>
+
+  <dialog id="createDialog" class="problem-dialog">
+    <form id="createForm">
+      <div class="dialog-head"><div><p class="eyebrow">Новое обращение</p><h2>Добавить проблему</h2></div><button type="button" class="close-dialog">×</button></div>
+      <label><span>Тип</span><select id="createType" name="type" required></select></label>
+      <label><span>Клуб</span><select id="createClub" name="club" required></select></label>
+      <label><span>Название</span><input name="title" maxlength="50" required placeholder="Коротко опишите суть"></label>
+      <label><span>Описание</span><textarea name="description" maxlength="1000" required rows="6" placeholder="Что произошло или что предлагаете"></textarea></label>
+      <label class="photo-field"><span>Фото, необязательно</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+      <button class="primary-button wide" type="submit">Добавить анонимно</button>
+    </form>
+  </dialog>
+
+  <dialog id="detailDialog" class="problem-dialog detail-dialog">
+    <div class="dialog-head"><div><p id="detailMeta" class="eyebrow"></p><h2 id="detailTitle"></h2></div><button type="button" class="close-dialog">×</button></div>
+    <div id="detailContent"></div>
+  </dialog>
+
+  <dialog id="messageDialog" class="problem-dialog small-dialog">
+    <form id="messageForm">
+      <div class="dialog-head"><h2 id="messageTitle">Решение</h2><button type="button" class="close-dialog">×</button></div>
+      <textarea id="actionMessage" maxlength="1000" required rows="6"></textarea>
+      <button id="messageSubmit" class="primary-button wide" type="submit">Отправить</button>
+    </form>
+  </dialog>
+
+  <div id="toast" class="problem-toast"></div>
+  <script src="/static/problems.js"></script>
+</body>
+</html>

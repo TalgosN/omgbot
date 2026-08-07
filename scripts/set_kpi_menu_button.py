@@ -21,7 +21,7 @@ def main():
         json={
             'menu_button': {
                 'type': 'web_app',
-                'text': 'KPI',
+                'text': 'OMG VR',
                 'web_app': {'url': url},
             },
         },
@@ -34,7 +34,7 @@ def main():
     runtime_url_path = Path('data/kpi_webapp_url.txt')
     runtime_url_path.parent.mkdir(parents=True, exist_ok=True)
     runtime_url_path.write_text(url, encoding='utf-8')
-    print(f'KPI menu button updated: {url}')
+    print(f'OMG VR menu button updated: {url}')
 
 
 if __name__ == '__main__':

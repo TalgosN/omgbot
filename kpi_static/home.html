@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f0ff">
+  <title>OMG VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
+  <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
+  <link rel="stylesheet" href="/static/home.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="home-shell">
+    <header class="home-header">
+      <div class="brand">OMG VR</div>
+      <div id="userBadge" class="user-badge">Загрузка…</div>
+    </header>
+
+    <section class="welcome">
+      <p class="eyebrow">Внутреннее приложение</p>
+      <h1 id="welcomeTitle">Добро пожаловать</h1>
+      <p id="welcomeDate" class="welcome-date"></p>
+    </section>
+
+    <section id="personalSection" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">Сегодня</p><h2>Личная сводка</h2></div>
+      </div>
+      <div id="personalSummary" class="personal-grid"></div>
+      <div class="section-heading compact"><h2>Ближайшие смены</h2></div>
+      <div id="shiftList" class="shift-list"></div>
+    </section>
+
+    <section id="managementSection" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">Управление</p><h2>Состояние команды</h2></div>
+      </div>
+      <div id="managementSummary" class="management-grid"></div>
+    </section>
+
+    <section id="clubsSection" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">В реальном времени</p><h2>Статус клубов</h2></div>
+      </div>
+      <div id="clubList" class="club-list"></div>
+    </section>
+
+    <section class="modules-section">
+      <div class="section-heading"><h2>Модули</h2></div>
+      <div class="module-grid">
+        <a class="module-card kpi-module" href="/kpi">
+          <span class="module-icon">↗</span>
+          <div><p class="eyebrow">Показатели</p><h2>KPI</h2><small id="kpiModuleText">Открыть доску KPI</small></div>
+        </a>
+        <a class="module-card problem-module" href="/problems">
+          <span class="module-icon">!</span>
+          <div><p class="eyebrow">Операционная работа</p><h2>Проблемы</h2><small id="problemModuleText">Открыть доску проблем</small></div>
+        </a>
+      </div>
+    </section>
+
+    <div id="homeError" class="error-card" hidden></div>
+  </main>
+  <script src="/static/home.js"></script>
+</body>
+</html>

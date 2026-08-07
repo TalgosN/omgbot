@@ -517,10 +517,20 @@ def change_task(message, task_id, answer, bot):
         new_entry = f"<b>[{today_short}] Админ:</b> {answer}"
         new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
 
-        cur.execute("UPDATE tasks SET status = 'На проверке', feedback = ?, dtfb = ? WHERE id = ?", (new_feedback, review_since, task_id))
+        cur.execute(
+            "UPDATE tasks SET status = 'На проверке', feedback = ?, dtfb = ? "
+            "WHERE id = ? AND status = 'В работе'",
+            (new_feedback, review_since, task_id),
+        )
+        changed = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
+
+        if not changed:
+            bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.")
+            show_active_tasks(message, bot)
+            return
 
         bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
         
@@ -574,10 +584,20 @@ def return_task_to_work(message, task_id, bot):
     new_entry = f"<b>[{today_short}] Сотрудник:</b> {reason}"
     new_feedback = f"{old_feedback}\n\n{new_entry}".strip()
 
-    cur.execute("UPDATE tasks SET status = 'В работе', feedback = ?, dtfb = NULL WHERE id = ?", (new_feedback, task_id))
+    cur.execute(
+        "UPDATE tasks SET status = 'В работе', feedback = ?, dtfb = NULL "
+        "WHERE id = ? AND status = 'На проверке'",
+        (new_feedback, task_id),
+    )
+    changed = cur.rowcount
     conn.commit()
     cur.close()
     conn.close()
+
+    if not changed:
+        bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.")
+        show_review_tasks(message, bot)
+        return
 
     bot.send_message(message.chat.id, "❌ Задача возвращена в работу. Админы увидят ваш комментарий.", reply_markup=types.ReplyKeyboardRemove())
     

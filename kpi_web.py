@@ -1,18 +1,23 @@
 import calendar
 import hashlib
 import hmac
+import html
+import io
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
 from datetime import UTC, date, datetime, timedelta
 from functools import wraps
 from urllib.parse import parse_qsl
+from zoneinfo import ZoneInfo
 
-from flask import Flask, g, jsonify, request, send_from_directory
+import telebot
+from flask import Flask, g, jsonify, request, send_file, send_from_directory
 
-from constants import TELEGRAM_API_KEY
+from constants import CHATS, TELEGRAM_API_KEY, extra_tags, get_clubs
 from kpi_calculator import (
     add_penalty,
     calculate_daily_kpi_series,
@@ -35,6 +40,7 @@ from permissions import (
     ROLE_MANAGER,
     ROLE_NAMES,
     ROLE_OWNER,
+    ROLE_TECHNICIAN,
     get_user,
 )
 
@@ -47,7 +53,7 @@ _analytics_cache = {}
 _analytics_cache_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
-app.config['MAX_CONTENT_LENGTH'] = 32 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
 
 
 def _clear_analytics_cache():
@@ -353,6 +359,306 @@ def _actor_login():
     return str(g.kpi_user.get('login') or '').strip().lower()
 
 
+def _legacy_text_variants(value):
+    variants = {value}
+    for encoding in ('cp1251', 'utf-8'):
+        try:
+            variants.add(value.encode(encoding).decode('latin1'))
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return tuple(variants)
+
+
+def _normalize_legacy_text(value):
+    raw = str(value or '')
+    for source, target in (('latin1', 'cp1251'), ('latin1', 'utf-8')):
+        try:
+            decoded = raw.encode(source).decode(target)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if any('А' <= char <= 'я' or char == 'ё' for char in decoded):
+            return decoded
+    return raw
+
+
+def _status_sql(statuses):
+    values = []
+    for status in statuses:
+        for variant in _legacy_text_variants(status):
+            if variant not in values:
+                values.append(variant)
+    return ','.join('?' for _ in values), values
+
+
+def _plain_task_feedback(value):
+    without_tags = re.sub(r'</?(?:b|i)>', '', str(value or ''), flags=re.I)
+    return html.unescape(without_tags).strip()
+
+
+def _moscow_today():
+    return datetime.now(ZoneInfo('Europe/Moscow')).date()
+
+
+def _upcoming_shifts(login, limit=3):
+    today = _moscow_today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            '''
+            SELECT date(substr(sh.dt_shift, 1, 10)), sh.club,
+                   ROUND(SUM(COALESCE(sh.dur, 0)), 1)
+            FROM shifts sh
+            JOIN users employee ON lower(employee.login)=?
+             AND (
+                (sh.shift_login IS NOT NULL
+                 AND lower(sh.shift_login)=lower(employee.login))
+                OR
+                (sh.shift_login IS NULL
+                 AND sh.shift_second_name=employee.second_name
+                 AND sh.shift_first_name=employee.first_name)
+             )
+            WHERE date(substr(sh.dt_shift, 1, 10)) >= date(?)
+            GROUP BY date(substr(sh.dt_shift, 1, 10)), sh.club
+            ORDER BY date(substr(sh.dt_shift, 1, 10)), sh.club
+            LIMIT ?
+            ''',
+            (login, today, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {'date': row[0], 'club': row[1], 'duration': float(row[2] or 0)}
+        for row in rows
+    ]
+
+
+def _task_counts():
+    placeholders, statuses = _status_sql(('В работе', 'На проверке'))
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            f'''SELECT status, COUNT(*) FROM tasks
+                WHERE status IN ({placeholders}) GROUP BY status''',
+            statuses,
+        ).fetchall()
+    finally:
+        conn.close()
+    result = {'work': 0, 'review': 0}
+    for status, count in rows:
+        normalized = _normalize_legacy_text(status)
+        if normalized == 'В работе':
+            result['work'] += int(count)
+        elif normalized == 'На проверке':
+            result['review'] += int(count)
+    return result
+
+
+def _team_snapshot(month, selected_day):
+    logins = _active_employee_logins()
+    rows = calculate_monthly_kpi(
+        month,
+        employee_logins=logins,
+        period_end=selected_day,
+    )
+    metadata = _employee_metadata(logins, month)
+    for row in rows:
+        row.update(metadata.get(row['login'], {'clubs': []}))
+    participants = [row for row in rows if float(row.get('shifts', 0) or 0) > 0]
+    average = (
+        sum(float(row.get('total_pct', 0) or 0) for row in participants)
+        / len(participants)
+        if participants else 0
+    )
+    return rows, {
+        'participants': len(participants),
+        'average_pct': average,
+        'red_zone': sum(row.get('zone') == '🔴' for row in participants),
+        'active_penalties': sum(
+            int(row.get('penalties', 0) or 0) for row in rows
+        ),
+    }
+
+
+def _club_dashboard(team_rows, problem_counts):
+    today = _moscow_today().isoformat()
+    red_by_club = {}
+    for row in team_rows:
+        if row.get('zone') != '🔴' or float(row.get('shifts', 0) or 0) <= 0:
+            continue
+        for club in row.get('clubs', []):
+            red_by_club[club] = red_by_club.get(club, 0) + 1
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        has_updates = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='club_status_updates'"
+        ).fetchone()
+        update_join = (
+            'LEFT JOIN club_status_updates updates ON updates.club=clubs.club'
+            if has_updates else ''
+        )
+        update_column = 'updates.changed_at' if has_updates else 'NULL'
+        clubs = conn.execute(
+            f'''SELECT clubs.club, clubs.status, {update_column}
+                FROM clubs {update_join} ORDER BY clubs.club COLLATE NOCASE'''
+        ).fetchall()
+        shifts = conn.execute(
+            '''
+            SELECT sh.club,
+                   COALESCE(NULLIF(employee.nick_name, ''),
+                            NULLIF(employee.first_name, ''), employee.login)
+            FROM shifts sh
+            LEFT JOIN users employee ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(employee.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=employee.second_name
+                AND sh.shift_first_name=employee.first_name
+            )
+            WHERE date(substr(sh.dt_shift, 1, 10))=date(?)
+            GROUP BY sh.club, employee.login, employee.first_name,
+                     employee.nick_name
+            ORDER BY sh.club, employee.ID
+            ''',
+            (today,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    shift_names = {}
+    for club, name in shifts:
+        if name:
+            shift_names.setdefault(club, []).append(name)
+    physical_clubs = {
+        name
+        for name, settings in get_clubs().items()
+        if settings.get('is_physical') is True
+    }
+    return [
+        {
+            'club': row['club'],
+            'status': _normalize_legacy_text(row['status']),
+            'changed_at': row[2],
+            'on_shift': shift_names.get(row['club'], []),
+            'problems': problem_counts.get(row['club'], {'work': 0, 'review': 0}),
+            'red_zone': red_by_club.get(row['club'], 0),
+        }
+        for row in clubs
+        if row['club'] in physical_clubs
+    ]
+
+
+def _problem_counts_by_club():
+    placeholders, statuses = _status_sql(('В работе', 'На проверке'))
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            f'''SELECT club, status, COUNT(*) FROM tasks
+                WHERE status IN ({placeholders})
+                GROUP BY club, status''',
+            statuses,
+        ).fetchall()
+    finally:
+        conn.close()
+    result = {}
+    for club, status, count in rows:
+        item = result.setdefault(club, {'work': 0, 'review': 0})
+        normalized = _normalize_legacy_text(status)
+        if normalized == 'В работе':
+            item['work'] += int(count)
+        elif normalized == 'На проверке':
+            item['review'] += int(count)
+    return result
+
+
+def _notification_bot():
+    return telebot.TeleBot(TELEGRAM_API_KEY) if TELEGRAM_API_KEY else None
+
+
+def _problem_mentions(task_type, club):
+    club_tag = str(get_clubs().get(club, {}).get('tag') or '').strip()
+    if task_type == 'Ремонт':
+        repair_tag = extra_tags.get(task_type, '')
+        return ' '.join(
+            value for value in (repair_tag if club_tag != repair_tag else '', club_tag)
+            if value
+        )
+    if task_type == 'Улучшение бота':
+        return extra_tags.get(task_type, '')
+    return club_tag
+
+
+def _send_problem_notification(event, task, message='', photo=None):
+    bot = _notification_bot()
+    if not bot:
+        return
+    title = html.escape(str(task['title']))
+    task_type = _normalize_legacy_text(task['type'])
+    type_low = html.escape(task_type.lower())
+    mentions = _problem_mentions(task_type, task['club'])
+    try:
+        if event == 'created':
+            description = html.escape(str(task.get('description') or ''))
+            full = (
+                f"⚙️ Добавлена новая проблема-{type_low}:\n<b>{title}</b>\n\n"
+                f"📝 <b>Описание:</b>\n{description[:800]}"
+            )
+            short = f"⚙️ Добавлена новая проблема-{type_low}: <b>{title}</b>"
+            report_text = f"#задачи\n\n{full} @OMGVR_Admin_Bot"
+            if photo and CHATS.get('reports'):
+                photo_file = io.BytesIO(photo)
+                photo_file.name = 'problem.jpg'
+                bot.send_photo(
+                    CHATS['reports'], photo_file, caption=report_text,
+                    parse_mode='HTML',
+                )
+            elif CHATS.get('reports'):
+                bot.send_message(CHATS['reports'], report_text, parse_mode='HTML')
+            if CHATS.get('main_group'):
+                bot.send_message(
+                    CHATS['main_group'], f"{mentions}\n\n{short}",
+                    parse_mode='HTML',
+                )
+            if task_type == 'Ремонт' and CHATS.get('repair_extra'):
+                bot.send_message(
+                    CHATS['repair_extra'], f"@RobinKruzo1\n\n{short}",
+                    parse_mode='HTML',
+                )
+        elif event in {'solution', 'returned'}:
+            escaped_message = html.escape(message)
+            if event == 'solution':
+                heading = f"👀 <b>Решение по проблеме-{type_low}:</b>"
+                label = 'Ответ'
+                tail = '\n\n👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>'
+            else:
+                heading = f"⚠️ <b>Проблема-{type_low} возвращена в работу:</b>"
+                label = 'Причина возврата'
+                tail = ''
+            full = f"{heading}\n{title}\n\n💬 <b>{label}:</b>\n{escaped_message}"
+            short = f"{heading} {title}\n💬 <i>{escaped_message}</i>{tail}"
+            if CHATS.get('reports'):
+                bot.send_message(
+                    CHATS['reports'], f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot",
+                    parse_mode='HTML',
+                )
+            if CHATS.get('main_group'):
+                prefix = f'{mentions}\n\n' if event == 'returned' else ''
+                bot.send_message(
+                    CHATS['main_group'], f'{prefix}{short}', parse_mode='HTML',
+                )
+            if task_type == 'Ремонт' and CHATS.get('repair_extra'):
+                bot.send_message(
+                    CHATS['repair_extra'],
+                    f"@RobinKruzo1\n\n{heading} {title}\n💬 <i>{escaped_message}</i>",
+                    parse_mode='HTML',
+                )
+    except Exception as error:
+        print(f'Ошибка уведомления Mini App Taskboard: {error}')
+
+
 def _employee_explanation(row):
     shifts = float(row.get('shifts', 0) or 0)
     metric_specs = (
@@ -597,9 +903,24 @@ def handle_value_error(error):
     return jsonify({'error': str(error)}), 400
 
 
+@app.errorhandler(413)
+def handle_upload_too_large(_error):
+    return jsonify({'error': 'Файл слишком большой. Максимум 6 МБ.'}), 413
+
+
 @app.get('/')
 def index():
+    return send_from_directory(STATIC_DIR, 'home.html')
+
+
+@app.get('/kpi')
+def kpi_index():
     return send_from_directory(STATIC_DIR, 'index.html')
+
+
+@app.get('/problems')
+def problems_index():
+    return send_from_directory(STATIC_DIR, 'problems.html')
 
 
 @app.get('/static/<path:filename>')
@@ -629,6 +950,284 @@ def api_me():
         'can_manage': role >= ROLE_MANAGER,
         'can_edit_settings': role == ROLE_OWNER,
     })
+
+
+@app.get('/api/home')
+@require_user
+def api_home():
+    today = _moscow_today()
+    month = today.replace(day=1).isoformat()
+    selected_day = today.isoformat()
+    role = int(g.kpi_user['status'])
+    login = _actor_login()
+    payload = {
+        'date': selected_day,
+        'role': role,
+        'upcoming_shifts': [],
+        'personal_kpi': None,
+        'management': None,
+        'clubs': [],
+    }
+
+    if role != ROLE_OWNER:
+        payload['upcoming_shifts'] = _upcoming_shifts(login)
+        personal_rows = calculate_monthly_kpi(
+            month,
+            employee_logins=[login],
+            period_end=selected_day,
+        )
+        if personal_rows:
+            row = personal_rows[0]
+            payload['personal_kpi'] = {
+                'shifts': float(row.get('shifts', 0) or 0),
+                'total_pct': float(row.get('total_pct', 0) or 0),
+                'zone': row.get('zone'),
+            }
+
+    if role >= ROLE_MANAGER:
+        team_rows, management = _team_snapshot(month, selected_day)
+        management['problems'] = _task_counts()
+        payload['management'] = management
+        if role == ROLE_OWNER:
+            payload['clubs'] = _club_dashboard(
+                team_rows,
+                _problem_counts_by_club(),
+            )
+    return jsonify(payload)
+
+
+def _task_payload(row, include_description=True):
+    result = {
+        'id': int(row['ID']),
+        'date': row['dtrep'],
+        'type': _normalize_legacy_text(row['type']),
+        'club': row['club'],
+        'title': _normalize_legacy_text(row['title']),
+        'status': _normalize_legacy_text(row['status']),
+        'closed_at': row['dtfb'],
+        'has_photo': row['photo'] is not None,
+    }
+    if include_description:
+        result.update({
+            'description': _normalize_legacy_text(row['desc']),
+            'feedback': _plain_task_feedback(
+                _normalize_legacy_text(row['feedback'])
+            ),
+        })
+    return result
+
+
+@app.get('/api/problems')
+@require_user
+def api_problems():
+    requested_status = str(request.args.get('status') or 'work').strip().lower()
+    status_map = {
+        'work': ('В работе',),
+        'review': ('На проверке',),
+        'done': ('Выполнено',),
+    }
+    if requested_status not in status_map:
+        raise ValueError('Неизвестный фильтр статуса')
+    placeholders, statuses = _status_sql(status_map[requested_status])
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            f'''SELECT * FROM tasks WHERE status IN ({placeholders})
+                ORDER BY date(dtrep) DESC, ID DESC LIMIT 200''',
+            statuses,
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({
+        'status': requested_status,
+        'tasks': [_task_payload(row, include_description=False) for row in rows],
+        'counts': _task_counts(),
+    })
+
+
+@app.get('/api/problems-meta')
+@require_user
+def api_problems_meta():
+    return jsonify({
+        'clubs': list(get_clubs()),
+        'types': [
+            'Вопрос/жалоба/предложение',
+            'Ремонт',
+            'Улучшение бота',
+        ],
+        'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
+    })
+
+
+@app.get('/api/problems/<int:task_id>')
+@require_user
+def api_problem(task_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute('SELECT * FROM tasks WHERE ID=?', (task_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return jsonify({'error': 'Проблема не найдена.'}), 404
+    return jsonify(_task_payload(row))
+
+
+@app.get('/api/problems/<int:task_id>/photo')
+@require_user
+def api_problem_photo(task_id):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute('SELECT photo FROM tasks WHERE ID=?', (task_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row or row[0] is None:
+        return jsonify({'error': 'Фотография не найдена.'}), 404
+    photo = row[0]
+    if photo.startswith(b'\x89PNG\r\n\x1a\n'):
+        mimetype = 'image/png'
+    elif photo.startswith(b'RIFF') and photo[8:12] == b'WEBP':
+        mimetype = 'image/webp'
+    else:
+        mimetype = 'image/jpeg'
+    return send_file(io.BytesIO(photo), mimetype=mimetype, max_age=0)
+
+
+@app.post('/api/problems')
+@require_user
+def api_create_problem():
+    task_type = str(request.form.get('type') or '').strip()
+    club = str(request.form.get('club') or '').strip()
+    title = str(request.form.get('title') or '').strip()
+    description = str(request.form.get('description') or '').strip()
+    allowed_types = {
+        'Вопрос/жалоба/предложение', 'Ремонт', 'Улучшение бота',
+    }
+    if task_type not in allowed_types:
+        raise ValueError('Выберите тип обращения')
+    if club not in get_clubs():
+        raise ValueError('Выберите клуб')
+    if not title or len(title) > 50 or title.isnumeric():
+        raise ValueError('Название должно содержать текст и быть не длиннее 50 символов')
+    if not description or len(description) > 1000:
+        raise ValueError('Описание должно быть не длиннее 1000 символов')
+    upload = request.files.get('photo')
+    photo = None
+    if upload and upload.filename:
+        if upload.mimetype not in {'image/jpeg', 'image/png', 'image/webp'}:
+            raise ValueError('Фото должно быть в формате JPG, PNG или WebP')
+        photo = upload.read(6 * 1024 * 1024 + 1)
+        if len(photo) > 6 * 1024 * 1024:
+            raise ValueError('Фото должно быть не больше 6 МБ')
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            cursor = conn.execute(
+                '''INSERT INTO tasks (
+                       dtrep, type, club, title, photo, desc, status
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'В работе')''',
+                (_moscow_today().isoformat(), task_type, club, title, photo, description),
+            )
+            task_id = cursor.lastrowid
+    finally:
+        conn.close()
+    task = {
+        'title': title,
+        'type': task_type,
+        'club': club,
+        'description': description,
+    }
+    _send_problem_notification('created', task, photo=photo)
+    return jsonify({'id': task_id, 'status': 'В работе'}), 201
+
+
+def _change_problem_status(task_id, expected_status, new_status, entry=None):
+    placeholders, statuses = _status_sql((expected_status,))
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            task = conn.execute(
+                f'''SELECT * FROM tasks WHERE ID=?
+                    AND status IN ({placeholders})''',
+                (task_id, *statuses),
+            ).fetchone()
+            if not task:
+                return None
+            feedback = str(task['feedback'] or '').strip()
+            if entry:
+                feedback = f'{feedback}\n\n{entry}'.strip()
+            status_date = (
+                _moscow_today().isoformat()
+                if new_status in {'На проверке', 'Выполнено'} else None
+            )
+            cursor = conn.execute(
+                f'''UPDATE tasks SET status=?, feedback=?, dtfb=?
+                    WHERE ID=? AND status IN ({placeholders})''',
+                (new_status, feedback, status_date, task_id, *statuses),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return dict(task)
+    finally:
+        conn.close()
+
+
+@app.post('/api/problems/<int:task_id>/solution')
+@require_user
+def api_problem_solution(task_id):
+    if int(g.kpi_user['status']) < ROLE_TECHNICIAN:
+        return jsonify({'error': 'Обрабатывать проблемы может ремонтник или менеджер.'}), 403
+    payload = request.get_json(silent=True) or {}
+    solution = str(payload.get('message') or '').strip()
+    if not solution or len(solution) > 1000:
+        raise ValueError('Решение должно быть не длиннее 1000 символов')
+    today_short = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m')
+    task = _change_problem_status(
+        task_id,
+        'В работе',
+        'На проверке',
+        f'<b>[{today_short}] Админ:</b> {html.escape(solution)}',
+    )
+    if not task:
+        return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
+    _send_problem_notification('solution', task, message=solution)
+    return jsonify({'status': 'На проверке'})
+
+
+@app.post('/api/problems/<int:task_id>/confirm')
+@require_user
+def api_problem_confirm(task_id):
+    task = _change_problem_status(
+        task_id,
+        'На проверке',
+        'Выполнено',
+    )
+    if not task:
+        return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
+    return jsonify({'status': 'Выполнено'})
+
+
+@app.post('/api/problems/<int:task_id>/return')
+@require_user
+def api_problem_return(task_id):
+    payload = request.get_json(silent=True) or {}
+    reason = str(payload.get('message') or '').strip()
+    if not reason or len(reason) > 1000:
+        raise ValueError('Укажите причину возврата не длиннее 1000 символов')
+    today_short = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m')
+    task = _change_problem_status(
+        task_id,
+        'На проверке',
+        'В работе',
+        f'<b>[{today_short}] Сотрудник:</b> {html.escape(reason)}',
+    )
+    if not task:
+        return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
+    _send_problem_notification('returned', task, message=reason)
+    return jsonify({'status': 'В работе'})
 
 
 @app.get('/api/kpi')

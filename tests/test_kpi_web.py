@@ -91,6 +91,156 @@ class KpiWebTest(unittest.TestCase):
 
         self.assertEqual(logins, ['@employee', '@manager'])
 
+    def test_owner_home_contains_club_dashboard_without_personal_kpi(self):
+        team_rows = [{'login': '@employee', 'shifts': 2, 'zone': '🟢'}]
+        management = {
+            'participants': 1,
+            'average_pct': 0.8,
+            'red_zone': 0,
+            'active_penalties': 0,
+        }
+        clubs = [{
+            'club': 'Марьино',
+            'status': 'Открыт',
+            'on_shift': ['Сотрудник'],
+            'problems': {'work': 1, 'review': 0},
+            'red_zone': 0,
+        }]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(
+                kpi_web,
+                '_team_snapshot',
+                return_value=(team_rows, management),
+            ),
+            patch.object(
+                kpi_web,
+                '_task_counts',
+                return_value={'work': 1, 'review': 0},
+            ),
+            patch.object(kpi_web, '_problem_counts_by_club', return_value={}),
+            patch.object(kpi_web, '_club_dashboard', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts') as upcoming,
+        ):
+            response = self.client.get('/api/home', headers=self.headers)
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(payload['personal_kpi'])
+        self.assertEqual(payload['upcoming_shifts'], [])
+        self.assertEqual(payload['clubs'], clubs)
+        upcoming.assert_not_called()
+
+    def test_mini_app_creates_anonymous_problem_in_shared_tasks_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   )'''
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'get_clubs', return_value={'Марьино': {}}),
+                patch.object(kpi_web, '_send_problem_notification') as notify,
+            ):
+                response = self.client.post(
+                    '/api/problems',
+                    headers=self.headers,
+                    data={
+                        'type': 'Ремонт',
+                        'club': 'Марьино',
+                        'title': 'Не работает шлем',
+                        'description': 'Не включается второй шлем',
+                    },
+                )
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                'SELECT type, club, title, desc, status FROM tasks'
+            ).fetchone()
+            columns = [item[1] for item in conn.execute('PRAGMA table_info(tasks)')]
+            conn.close()
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            row,
+            (
+                'Ремонт', 'Марьино', 'Не работает шлем',
+                'Не включается второй шлем', 'В работе',
+            ),
+        )
+        self.assertNotIn('author', columns)
+        notify.assert_called_once()
+
+    def test_problem_follows_existing_solution_and_return_lifecycle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   );
+                   INSERT INTO tasks (
+                       dtrep, type, club, title, desc, status
+                   ) VALUES (
+                       '2026-08-07', 'Ремонт', 'Марьино',
+                       'Шлем', 'Не включается', 'В работе'
+                   );'''
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(1)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, '_send_problem_notification'),
+            ):
+                solution = self.client.post(
+                    '/api/problems/1/solution',
+                    headers=self.headers,
+                    json={'message': 'Переподключил питание'},
+                )
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, '_send_problem_notification'),
+            ):
+                returned = self.client.post(
+                    '/api/problems/1/return',
+                    headers=self.headers,
+                    json={'message': 'Снова выключился'},
+                )
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                'SELECT status, dtfb, feedback FROM tasks WHERE ID=1'
+            ).fetchone()
+            conn.close()
+
+        self.assertEqual(solution.status_code, 200)
+        self.assertEqual(returned.status_code, 200)
+        self.assertEqual(row[0], 'В работе')
+        self.assertIsNone(row[1])
+        self.assertIn('Переподключил питание', row[2])
+        self.assertIn('Снова выключился', row[2])
+
     def test_all_active_users_can_read_every_employee_kpi(self):
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),

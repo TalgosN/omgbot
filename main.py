@@ -693,7 +693,7 @@ def roll(message):
     send_react(message,emoji)
 
 
-@bot.message_handler(commands=['kpi'])
+@bot.message_handler(commands=['kpi', 'app'])
 def open_kpi_app(message):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
@@ -705,17 +705,17 @@ def open_kpi_app(message):
     if not webapp_url:
         bot.send_message(
             message.chat.id,
-            'KPI Mini App ещё не подключён к HTTPS-ссылке.',
+            'OMG VR Mini App ещё не подключён к HTTPS-ссылке.',
         )
         return
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton(
-        '📊 Открыть KPI',
+        '🟣 Открыть OMG VR',
         web_app=telebot.types.WebAppInfo(webapp_url),
     ))
     bot.send_message(
         message.chat.id,
-        'KPI всех сотрудников:',
+        'Внутреннее приложение OMG VR:',
         reply_markup=markup,
     )
 
