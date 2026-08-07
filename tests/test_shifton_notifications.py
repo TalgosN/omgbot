@@ -7,7 +7,7 @@ import threading
 import time
 import types
 import unittest
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -86,6 +86,68 @@ class ShiftonNotificationsTest(unittest.TestCase):
             headers={'Authorization': 'Bearer test-token'},
             timeout=15,
         )
+
+    def test_schedule_range_is_split_at_api_limit(self):
+        first = Mock()
+        first.json.return_value = {
+            'ok': True,
+            'days': [{'date': '2026-01-01', 'locations': []}],
+        }
+        second = Mock()
+        second.json.return_value = {
+            'ok': True,
+            'days': [{'date': '2026-04-04', 'locations': []}],
+        }
+        with patch.object(
+            self.rasp.requests, 'get', side_effect=[first, second]
+        ) as get:
+            result = self.rasp.fetch_schedule_range_from_api(
+                '2026-01-01', '2026-04-04'
+            )
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(len(get.call_args_list), 2)
+        self.assertEqual(
+            get.call_args_list[0].kwargs['params'],
+            {'dateFrom': '2026-01-01', 'dateTo': '2026-04-03'},
+        )
+        self.assertEqual(
+            get.call_args_list[1].kwargs['params'],
+            {'dateFrom': '2026-04-04', 'dateTo': '2026-04-04'},
+        )
+
+    def test_notification_html_escapes_api_text(self):
+        formatted = self.rasp.format_shifton_notification(
+            'Смена <10:00> & подтверждение'
+        )
+
+        self.assertIn('<b>Уведомление OMG Shift</b>', formatted)
+        self.assertIn('Смена &lt;10:00&gt; &amp; подтверждение', formatted)
+        self.assertNotIn('Смена <10:00>', formatted)
+
+    def test_week_schedule_uses_one_range_request(self):
+        payload = {
+            'ok': True,
+            'days': [{
+                'date': '2026-08-03',
+                'locations': [{
+                    'title': 'Марьино',
+                    'shifts': [{
+                        'employee': 'Иванов Иван',
+                        'start': '09:00',
+                        'end': '18:00',
+                    }],
+                }],
+            }],
+        }
+        with patch.object(
+            self.rasp, 'fetch_schedule_range_from_api', return_value=payload
+        ) as fetch:
+            shifts = self.rasp.get_week_data(datetime(2026, 8, 3))
+
+        fetch.assert_called_once_with('2026-08-03', '2026-08-09')
+        self.assertEqual(len(shifts), 1)
+        self.assertEqual(shifts[0]['employee'], 'Иванов Иван')
 
     def test_employee_sync_links_users_and_preserves_legacy_rates(self):
         employees = [
@@ -269,7 +331,12 @@ class ShiftonNotificationsTest(unittest.TestCase):
                 patch.object(self.rasp, "complete_shifton_notification") as complete:
             self.rasp.send_pending_shifton_notifications(bot)
 
-        bot.send_message.assert_called_once_with(12345, "Смена изменена")
+        bot.send_message.assert_called_once_with(
+            12345,
+            self.rasp.format_shifton_notification("Смена изменена"),
+            parse_mode='HTML',
+            disable_web_page_preview=True,
+        )
         complete.assert_called_once_with(17, True)
 
     def test_telegram_error_is_reported_to_shifton(self):

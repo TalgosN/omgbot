@@ -944,27 +944,31 @@ def _fetch_missing_payroll_shifts(conn, start_dt, end_dt):
     }
     current_date = start_dt.date()
     end_date = end_dt.date()
-
+    missing_dates = []
     while current_date < end_date:
         date_iso = current_date.isoformat()
         current_date += timedelta(days=1)
-        if date_iso in existing_dates:
-            continue
+        if date_iso not in existing_dates:
+            missing_dates.append(date_iso)
+    if not missing_dates:
+        return
 
-        response = requests.get(
-            f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}",
-            headers={"Authorization": f"Bearer {SHIFTON_API_TOKEN}"},
-            timeout=10,
+    from rasp import fetch_schedule_range_from_api
+    payload = fetch_schedule_range_from_api(missing_dates[0], missing_dates[-1])
+    if not payload.get('ok'):
+        raise RuntimeError(
+            f'OMG Shift не вернул расписание за диапазон: '
+            f'{payload.get("error", "invalid_response")}'
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict) or not payload.get('ok'):
-            error = payload.get('error', 'invalid_response') if isinstance(payload, dict) else 'invalid_response'
-            raise RuntimeError(f'OMG Shift не вернул расписание за {date_iso}: {error}')
 
-        rows = []
-        seen = set()
-        for location in payload.get('locations', []):
+    missing_dates = set(missing_dates)
+    rows = []
+    seen = set()
+    for day in payload.get('days', []):
+        date_iso = day.get('date')
+        if date_iso not in missing_dates:
+            continue
+        for location in day.get('locations', []):
             source_club = location.get('title', 'Неизвестно')
             club = location_names.get(source_club, source_club)
             for shift in location.get('shifts', []):
@@ -986,7 +990,8 @@ def _fetch_missing_payroll_shifts(conn, start_dt, end_dt):
                     login = f'@{login}'
 
                 row_key = (
-                    second_name, first_name, club, shift['start'], shift['end'],
+                    date_iso, second_name, first_name, club,
+                    shift['start'], shift['end'],
                     _canonical_login(login),
                 )
                 if row_key in seen:
@@ -994,14 +999,14 @@ def _fetch_missing_payroll_shifts(conn, start_dt, end_dt):
                 seen.add(row_key)
                 rows.append((second_name, first_name, date_iso, club, duration, login))
 
-        if rows:
-            conn.executemany(
-                """INSERT INTO shifts
-                   (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source)
-                   VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')""",
-                rows,
-            )
-            conn.commit()
+    if rows:
+        conn.executemany(
+            """INSERT INTO shifts
+               (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source)
+               VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')""",
+            rows,
+        )
+        conn.commit()
 
 
 def _load_payroll_rates(conn, start_dt, end_dt):

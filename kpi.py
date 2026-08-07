@@ -122,24 +122,21 @@ def fetch_omg_shift_rows(start_date):
     """Сначала целиком получает окно расписания, не изменяя локальную БД."""
     schedule_list = []
     seen_shifts = set()
-    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
-
-    for p in range(15):
-        current_dt = start_date + pd.DateOffset(days=p)
-        date_iso = current_dt.strftime('%Y-%m-%d')
-        
-        response = requests.get(
-            f"{SHIFTON_API_URL}/api/bot/schedule?date={date_iso}",
-            headers=headers,
-            timeout=5,
+    end_date = start_date + pd.DateOffset(days=14)
+    from rasp import fetch_schedule_range_from_api
+    response = fetch_schedule_range_from_api(
+        start_date.strftime('%Y-%m-%d'),
+        end_date.strftime('%Y-%m-%d'),
+    )
+    if not response.get("ok"):
+        raise RuntimeError(
+            f"OMG Shift не вернул расписание за диапазон: "
+            f"{response.get('error', 'invalid_response')}"
         )
-        response.raise_for_status()
-        resp = response.json()
-        if not isinstance(resp, dict) or not resp.get("ok"):
-            error = resp.get("error", "invalid_response") if isinstance(resp, dict) else "invalid_response"
-            raise RuntimeError(f"OMG Shift не вернул расписание за {date_iso}: {error}")
 
-        for loc in resp.get("locations", []):
+    for day in response.get("days", []):
+        date_iso = day.get("date")
+        for loc in day.get("locations", []):
             club = loc.get("title", "Неизвестно")
             for shift in loc.get("shifts", []):
                 emp_name = shift.get("employee", "Неизвестно")

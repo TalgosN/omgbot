@@ -501,17 +501,29 @@ class KpiTest(unittest.TestCase):
 
     def test_omg_shift_duplicate_payload_rows_are_ignored(self):
         shift = {"employee": "Иванов Иван", "start": "09:00", "end": "15:00"}
-        response = unittest.mock.Mock()
-        response.json.return_value = {
+        rasp = types.ModuleType('rasp')
+        rasp.fetch_schedule_range_from_api = unittest.mock.Mock(return_value={
             "ok": True,
-            "locations": [{"title": "Марьино", "shifts": [shift, shift.copy()]}],
-        }
+            "days": [
+                {
+                    "date": f"2026-07-{day:02d}",
+                    "locations": [{
+                        "title": "Марьино",
+                        "shifts": [shift, shift.copy()],
+                    }],
+                }
+                for day in range(14, 29)
+            ],
+        })
         with patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
-                patch.object(self.kpi.requests, "get", return_value=response):
+                patch.dict(sys.modules, {'rasp': rasp}):
             rows = self.kpi.fetch_omg_shift_rows(datetime(2026, 7, 14))
 
         self.assertEqual(len(rows), 15)
         self.assertTrue(all(row[4] == 6.0 for row in rows))
+        rasp.fetch_schedule_range_from_api.assert_called_once_with(
+            '2026-07-14', '2026-07-28'
+        )
 
     def test_legacy_sheet_controls_import_penalties_and_current_stream(self):
         class Worksheet:

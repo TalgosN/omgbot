@@ -1,6 +1,7 @@
 from telebot import *
 from constants import *
 from sheets import *
+import html
 import requests
 import json
 import os
@@ -22,6 +23,7 @@ shifton_notifications_lock = threading.Lock()
 shifton_employee_sync_lock = threading.Lock()
 SHIFTON_DB_PATH = 'db/omgbot.sql'
 OMG_SHIFT_RATE_SOURCES = ('omg_shift:employee', 'omg_shift:position')
+SHIFTON_SCHEDULE_MAX_DAYS = 93
 shifton_runtime_status = {
     "last_notification_check": None,
     "last_notification_sent": None,
@@ -435,6 +437,78 @@ def fetch_schedule_from_api(date_iso):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+def fetch_schedule_range_from_api(date_from, date_to):
+    """Получает включительный диапазон, разбивая периоды длиннее 93 дней."""
+    try:
+        start_date = datetime.strptime(str(date_from), '%Y-%m-%d').date()
+        end_date = datetime.strptime(str(date_to), '%Y-%m-%d').date()
+    except ValueError:
+        return {"ok": False, "error": "bad_date"}
+    if end_date < start_date:
+        return {"ok": False, "error": "date_range_reversed"}
+
+    headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
+    days = []
+    seen_dates = set()
+    chunk_start = start_date
+    try:
+        while chunk_start <= end_date:
+            chunk_end = min(
+                chunk_start + timedelta(days=SHIFTON_SCHEDULE_MAX_DAYS - 1),
+                end_date,
+            )
+            response = requests.get(
+                f"{SHIFTON_API_URL}/api/bot/schedule",
+                params={
+                    "dateFrom": chunk_start.isoformat(),
+                    "dateTo": chunk_end.isoformat(),
+                },
+                headers=headers,
+                timeout=15,
+            )
+            payload = response.json()
+            if not isinstance(payload, dict) or not payload.get('ok'):
+                error = payload.get('error', 'invalid_response') if isinstance(payload, dict) else 'invalid_response'
+                return {"ok": False, "error": error}
+            chunk_days = payload.get('days')
+            if not isinstance(chunk_days, list):
+                return {"ok": False, "error": "invalid_response"}
+            for day in chunk_days:
+                if not isinstance(day, dict):
+                    return {"ok": False, "error": "invalid_response"}
+                day_date = str(day.get('date') or '')
+                if day_date in seen_dates:
+                    continue
+                try:
+                    parsed_date = datetime.strptime(day_date, '%Y-%m-%d').date()
+                except ValueError:
+                    return {"ok": False, "error": "invalid_response"}
+                if start_date <= parsed_date <= end_date:
+                    seen_dates.add(day_date)
+                    days.append(day)
+            chunk_start = chunk_end + timedelta(days=1)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    days.sort(key=lambda day: day['date'])
+    return {
+        "ok": True,
+        "dateFrom": start_date.isoformat(),
+        "dateTo": end_date.isoformat(),
+        "days": days,
+    }
+
+
+def format_shifton_notification(text):
+    """Безопасно оформляет полученный от OMG Shift обычный текст."""
+    notification_text = str(text or '').strip() or 'Расписание изменилось.'
+    return (
+        '🔔 <b>Уведомление OMG Shift</b>\n\n'
+        f'<blockquote>{html.escape(notification_text)}</blockquote>\n\n'
+        '📅 <i>Проверь актуальное расписание перед сменой.</i>'
+    )
+
 def register_shifton_chat(telegram_tag, chat_id):
     """Привязывает личный Telegram-чат сотрудника к его карточке в OMG Shift."""
     url = f"{SHIFTON_API_URL}/api/bot/register-chat"
@@ -575,7 +649,12 @@ def send_pending_shifton_notifications(bot, limit=10):
 
         notification_id = notification.get("id")
         try:
-            bot.send_message(notification.get("chatId"), notification.get("text"))
+            bot.send_message(
+                notification.get("chatId"),
+                format_shifton_notification(notification.get("text")),
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+            )
             complete_shifton_notification(notification_id, True)
             shifton_runtime_status["last_notification_sent"] = moscow_timestamp()
             print(f"Уведомление OMG Shift отправлено: {notification_id}")
@@ -694,17 +773,19 @@ def get_today_schedule(date_iso):
 # --- ЛОГИКА НЕДЕЛИ ---
 
 def get_week_data(start_dt):
-    """Универсальная функция: делает 7 запросов и собирает все смены недели в удобный список"""
+    """Получает всю неделю одним диапазонным запросом."""
     week_shifts = []
-    
-    for p in range(7):
-        current_dt = start_dt + timedelta(days=p)
-        date_iso = current_dt.strftime('%Y-%m-%d')
-        
-        data = fetch_schedule_from_api(date_iso)
-        if not data.get("ok"): continue
-        
-        for loc in data.get("locations", []):
+    end_dt = start_dt + timedelta(days=6)
+    data = fetch_schedule_range_from_api(
+        start_dt.strftime('%Y-%m-%d'),
+        end_dt.strftime('%Y-%m-%d'),
+    )
+    if not data.get("ok"):
+        return week_shifts
+
+    for day in data.get("days", []):
+        current_dt = datetime.strptime(day["date"], '%Y-%m-%d')
+        for loc in day.get("locations", []):
             loc_title = loc.get("title", "Неизвестно")
             for shift in loc.get("shifts", []):
                 week_shifts.append({

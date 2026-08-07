@@ -1,10 +1,11 @@
 import sqlite3
 import tempfile
+import types
 import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from openpyxl import load_workbook
 
@@ -170,18 +171,22 @@ class PayrollReportTests(unittest.TestCase):
                 club TEXT, dur REAL, source TEXT, shift_login TEXT
             )
         ''')
-        response = FakeResponse({
+        rasp = types.ModuleType('rasp')
+        rasp.fetch_schedule_range_from_api = Mock(return_value={
             'ok': True,
-            'locations': [{
-                'title': 'Ленинский',
-                'shifts': [
-                    {'employee': 'Первый Сотрудник', 'telegram': '@one', 'start': '09:00', 'end': '12:00'},
-                    {'employee': 'Первый Сотрудник', 'telegram': '@one', 'start': '13:00', 'end': '16:00'},
-                ],
+            'days': [{
+                'date': '2026-07-20',
+                'locations': [{
+                    'title': 'Ленинский',
+                    'shifts': [
+                        {'employee': 'Первый Сотрудник', 'telegram': '@one', 'start': '09:00', 'end': '12:00'},
+                        {'employee': 'Первый Сотрудник', 'telegram': '@one', 'start': '13:00', 'end': '16:00'},
+                    ],
+                }],
             }],
         })
 
-        with patch.object(finance.requests, 'get', return_value=response):
+        with patch.dict('sys.modules', {'rasp': rasp}):
             finance._fetch_missing_payroll_shifts(
                 conn, datetime(2026, 7, 20), datetime(2026, 7, 21)
             )
@@ -189,6 +194,9 @@ class PayrollReportTests(unittest.TestCase):
         rows = conn.execute('SELECT dur, source FROM shifts ORDER BY rowid').fetchall()
         conn.close()
         self.assertEqual(rows, [(3, 'omg_shift'), (3, 'omg_shift')])
+        rasp.fetch_schedule_range_from_api.assert_called_once_with(
+            '2026-07-20', '2026-07-20'
+        )
 
     def test_pay_report_sends_separate_missing_rate_warning(self):
         class Bot:
