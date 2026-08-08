@@ -17,6 +17,13 @@ from zoneinfo import ZoneInfo
 import telebot
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 
+from bukza import (
+    BUKZA_CLUB_CODES,
+    active_orders_for_day,
+    booking_freshness,
+    initialize_bukza_schema,
+    upcoming_unpaid_orders,
+)
 from constants import CHATS, TELEGRAM_API_KEY, extra_tags, get_clubs
 from kpi_calculator import (
     add_penalty,
@@ -69,6 +76,7 @@ _analytics_cache_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+initialize_bukza_schema(DB_PATH)
 
 
 def _clear_analytics_cache():
@@ -445,6 +453,73 @@ def _upcoming_shifts(login, limit=3):
         {'date': row[0], 'club': row[1], 'duration': float(row[2] or 0)}
         for row in rows
     ]
+
+
+def _today_shift_clubs(login):
+    today = _moscow_today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            '''
+            SELECT DISTINCT sh.club
+            FROM shifts sh
+            JOIN users employee ON lower(employee.login)=?
+             AND (
+                (sh.shift_login IS NOT NULL
+                 AND lower(sh.shift_login)=lower(employee.login))
+                OR
+                (sh.shift_login IS NULL
+                 AND sh.shift_second_name=employee.second_name
+                 AND sh.shift_first_name=employee.first_name)
+             )
+            WHERE date(substr(sh.dt_shift, 1, 10))=date(?)
+              AND sh.club IS NOT NULL
+              AND trim(sh.club) <> ''
+            ORDER BY sh.club
+            ''',
+            (login, today),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [row[0] for row in rows]
+
+
+def _public_booking(order, include_order=False):
+    result = {
+        'start': order.get('reservation_at'),
+        'end': order.get('reservation_end_at'),
+        'format': order.get('booking_format') or order.get('resource') or '',
+        'participants': float(order.get('participants') or 0),
+    }
+    if include_order:
+        result.update({
+            'date': order.get('date').isoformat() if order.get('date') else None,
+            'club': order.get('club'),
+            'number': order.get('number'),
+            'url': order.get('url'),
+        })
+    return result
+
+
+def _club_booking_groups(clubs, today):
+    club_order = list(dict.fromkeys(clubs))
+    grouped = {
+        club: {
+            'club': club,
+            'count': 0,
+            'participants': 0,
+            'bookings': [],
+        }
+        for club in club_order
+    }
+    for order in active_orders_for_day(today, club_order, DB_PATH):
+        club = order.get('club')
+        if club not in grouped:
+            continue
+        grouped[club]['bookings'].append(_public_booking(order))
+        grouped[club]['count'] += 1
+        grouped[club]['participants'] += float(order.get('participants') or 0)
+    return [grouped[club] for club in club_order]
 
 
 def _task_counts():
@@ -1013,6 +1088,47 @@ def api_home():
                 team_rows,
                 _problem_counts_by_club(),
             )
+    return jsonify(payload)
+
+
+@app.get('/api/bookings/today')
+@require_user
+def api_today_bookings():
+    today = _moscow_today()
+    role = int(g.kpi_user['status'])
+    freshness = booking_freshness(db_path=DB_PATH)
+    payload = {
+        'date': today.isoformat(),
+        'last_synced_at': freshness['last_synced_at'],
+        'age_minutes': freshness['age_minutes'],
+        'stale': freshness['stale'],
+        'mode': 'clubs',
+        'groups': [],
+        'bookings': [],
+    }
+
+    if role >= ROLE_MANAGER:
+        payload['mode'] = 'management'
+        payload['groups'] = _club_booking_groups(
+            list(BUKZA_CLUB_CODES.values()),
+            today,
+        )
+        return jsonify(payload)
+
+    shift_clubs = _today_shift_clubs(_actor_login())
+    if 'Коллцентр' in shift_clubs:
+        payload['mode'] = 'callcenter'
+        payload['bookings'] = [
+            _public_booking(order, include_order=True)
+            for order in upcoming_unpaid_orders(db_path=DB_PATH)
+        ]
+        return jsonify(payload)
+
+    physical_clubs = set(BUKZA_CLUB_CODES.values())
+    payload['groups'] = _club_booking_groups(
+        [club for club in shift_clubs if club in physical_clubs],
+        today,
+    )
     return jsonify(payload)
 
 

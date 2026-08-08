@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest.mock import patch
@@ -131,6 +132,95 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(payload['upcoming_shifts'], [])
         self.assertEqual(payload['clubs'], clubs)
         upcoming.assert_not_called()
+
+    def test_club_employee_sees_only_today_shift_club_bookings(self):
+        groups = [{
+            'club': 'Марьино',
+            'count': 1,
+            'participants': 5,
+            'bookings': [{
+                'start': '2026-08-08T12:00:00',
+                'end': '2026-08-08T13:00:00',
+                'format': 'Классический VR',
+                'participants': 5,
+            }],
+        }]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_today_shift_clubs', return_value=['Марьино']),
+            patch.object(kpi_web, '_club_booking_groups', return_value=groups) as grouped,
+            patch.object(kpi_web, 'booking_freshness', return_value={
+                'last_synced_at': '2026-08-08T12:00:00+03:00',
+                'age_minutes': 1,
+                'stale': False,
+            }),
+        ):
+            response = self.client.get('/api/bookings/today', headers=self.headers)
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['mode'], 'clubs')
+        self.assertEqual(payload['groups'], groups)
+        self.assertNotIn('number', payload['groups'][0]['bookings'][0])
+        grouped.assert_called_once_with(['Марьино'], unittest.mock.ANY)
+
+    def test_callcenter_employee_sees_upcoming_unpaid_orders(self):
+        order = {
+            'reservation_at': '2026-08-09T12:00:00',
+            'reservation_end_at': '2026-08-09T13:00:00',
+            'date': date(2026, 8, 9),
+            'club': 'Каширка',
+            'booking_format': 'Мероприятие',
+            'participants': 12,
+            'number': '12345',
+            'url': 'https://my.bukza.com/order/12345',
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(
+                kpi_web,
+                '_today_shift_clubs',
+                return_value=['Коллцентр'],
+            ),
+            patch.object(kpi_web, 'upcoming_unpaid_orders', return_value=[order]),
+            patch.object(kpi_web, 'booking_freshness', return_value={
+                'last_synced_at': '2026-08-08T12:00:00+03:00',
+                'age_minutes': 1,
+                'stale': False,
+            }),
+        ):
+            response = self.client.get('/api/bookings/today', headers=self.headers)
+
+        payload = response.get_json()
+        self.assertEqual(payload['mode'], 'callcenter')
+        self.assertEqual(payload['bookings'][0]['number'], '12345')
+        self.assertEqual(payload['bookings'][0]['club'], 'Каширка')
+
+    def test_manager_sees_brief_booking_groups_for_all_clubs(self):
+        groups = [{'club': 'Ленинский', 'count': 2, 'participants': 7, 'bookings': []}]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_club_booking_groups', return_value=groups) as grouped,
+            patch.object(kpi_web, '_today_shift_clubs') as shifts,
+            patch.object(kpi_web, 'booking_freshness', return_value={
+                'last_synced_at': '2026-08-08T12:00:00+03:00',
+                'age_minutes': 1,
+                'stale': False,
+            }),
+        ):
+            response = self.client.get('/api/bookings/today', headers=self.headers)
+
+        payload = response.get_json()
+        self.assertEqual(payload['mode'], 'management')
+        self.assertEqual(payload['groups'], groups)
+        grouped.assert_called_once_with(
+            list(kpi_web.BUKZA_CLUB_CODES.values()),
+            unittest.mock.ANY,
+        )
+        shifts.assert_not_called()
 
     def test_manager_and_owner_can_open_shift_config(self):
         config = {'version': 'abc', 'clubs': []}

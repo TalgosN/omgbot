@@ -1,5 +1,6 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
+let bookingsLoading = false;
 tg?.ready();
 tg?.expand();
 if (tg) {
@@ -20,11 +21,100 @@ function dateLabel(value) {
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
     .format(new Date(year, month - 1, day));
 }
+function timeLabel(value) { return value ? value.slice(11, 16) : '??:??'; }
+function guestLabel(value) {
+  const count = Number(value || 0);
+  const tail = count % 100;
+  const last = count % 10;
+  const word = tail >= 11 && tail <= 14 ? 'гостей' : last === 1 ? 'гость' : last >= 2 && last <= 4 ? 'гостя' : 'гостей';
+  return `${number(count)} ${word}`;
+}
+function bookingCountLabel(value) {
+  const count = Number(value || 0);
+  const tail = count % 100;
+  const last = count % 10;
+  const word = tail >= 11 && tail <= 14 ? 'броней' : last === 1 ? 'бронь' : last >= 2 && last <= 4 ? 'брони' : 'броней';
+  return `${count} ${word}`;
+}
+function bookingIsPast(booking) {
+  const boundary = booking.end || booking.start;
+  return boundary ? new Date(boundary).getTime() < Date.now() : false;
+}
+function syncTime(value) {
+  if (!value) return 'Нет свежих данных';
+  return `Обновлено ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))}`;
+}
 async function api(path) {
   const response = await fetch(path, { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Ошибка сервера');
   return payload;
+}
+
+function bookingRows(bookings, callcenter = false) {
+  if (!bookings.length) return '<div class="booking-empty">Броней нет</div>';
+  return `<div class="booking-rows">${bookings.map((booking) => `
+    <article class="booking-row${bookingIsPast(booking) ? ' past' : ''}">
+      <div class="booking-time">${timeLabel(booking.start)} - ${timeLabel(booking.end)}</div>
+      <div class="booking-info">
+        <strong>${escapeHtml(booking.format || 'Без формата')}</strong>
+        ${callcenter ? `<span>${escapeHtml(booking.club || '')} · ${dateLabel(booking.date)}</span>` : ''}
+      </div>
+      ${callcenter
+    ? `<div><div class="booking-guests">👥 ${guestLabel(booking.participants)}</div><a class="booking-order" href="${escapeHtml(booking.url)}" target="_blank" rel="noopener">№${escapeHtml(booking.number)}</a></div>`
+    : `<div class="booking-guests">👥 ${guestLabel(booking.participants)}</div>`}
+    </article>
+  `).join('')}</div>`;
+}
+
+function renderBookings(data) {
+  const section = $('#bookingsSection');
+  if (data.mode === 'clubs' && !data.groups.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  $('#bookingsFreshness').textContent = syncTime(data.last_synced_at);
+  $('#bookingsWarning').hidden = !data.stale;
+  $('#bookingsWarning').textContent = data.stale
+    ? '⚠️ Данные давно не обновлялись. Показано последнее успешное состояние.'
+    : '';
+
+  if (data.mode === 'callcenter') {
+    $('#bookingsEyebrow').textContent = 'Ближайшие 21 день';
+    $('#bookingsTitle').textContent = 'Без предоплаты';
+    $('#bookingsList').className = 'booking-list';
+    $('#bookingsList').innerHTML = bookingRows(data.bookings, true);
+    return;
+  }
+
+  const management = data.mode === 'management';
+  $('#bookingsEyebrow').textContent = 'Сегодня';
+  $('#bookingsTitle').textContent = management ? 'Брони по клубам' : 'Брони клуба';
+  $('#bookingsList').className = `booking-list${management ? ' management' : ''}`;
+  $('#bookingsList').innerHTML = data.groups.map((group) => `
+    <details class="booking-group"${management ? '' : ' open'}>
+      <summary>
+        <div><strong>${escapeHtml(group.club)}</strong><span>👥 ${guestLabel(group.participants)}</span></div>
+        <div class="booking-count">${bookingCountLabel(group.count)}</div>
+      </summary>
+      ${bookingRows(group.bookings)}
+    </details>
+  `).join('');
+}
+
+async function loadBookings() {
+  if (bookingsLoading) return;
+  bookingsLoading = true;
+  try {
+    renderBookings(await api('/api/bookings/today'));
+  } catch (error) {
+    $('#bookingsSection').hidden = false;
+    $('#bookingsWarning').hidden = false;
+    $('#bookingsWarning').textContent = `Не удалось обновить брони: ${error.message}`;
+  } finally {
+    bookingsLoading = false;
+  }
 }
 
 function renderPersonal(data) {
@@ -97,6 +187,7 @@ async function load() {
     renderPersonal(data);
     renderManagement(data);
     renderClubs(data);
+    await loadBookings();
   } catch (error) {
     $('#homeError').hidden = false;
     $('#homeError').textContent = error.message;
@@ -104,3 +195,7 @@ async function load() {
 }
 
 load();
+setInterval(loadBookings, 60 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) loadBookings();
+});

@@ -157,7 +157,23 @@ def schedule_func(bot): # Не забудь передать bot!
         CHATS['me'],
     )
 
-    from bukza import send_daily_notification
+    from bukza import (
+        send_daily_notification,
+        start_bukza_sync,
+        start_live_sync_if_active,
+    )
+    start_bukza_sync(bot, mode='live')
+    schedule.every().day.at("08:00:00", 'Europe/Moscow').do(
+        start_bukza_sync,
+        bot,
+        'daily',
+    )
+    schedule.every(5).minutes.do(start_live_sync_if_active, bot)
+    schedule.every().day.at("08:20:00", 'Europe/Moscow').do(
+        start_bukza_sync,
+        bot,
+        'live',
+    )
     schedule.every().day.at("08:30:00", 'Europe/Moscow').do(
         send_daily_notification,
         bot,
