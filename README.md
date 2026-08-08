@@ -534,6 +534,12 @@ docker compose exec bot python scripts/set_kpi_menu_button.py https://bot.omg-vr
 Скрипт сохраняет адрес в `data/kpi_webapp_url.txt`, поэтому команда `/kpi`
 начинает использовать его без дополнительного перезапуска бота.
 
+На страницах модулей горизонтальные свайпы используются только для навигации:
+влево — следующий доступный модуль по кольцу `KPI → Taskboard → Shift`, вправо
+— назад или на главную из корня модуля. `Shift` автоматически исключается из
+кольца для ролей без управленческого доступа. Открытые формы и карточки сначала
+закрываются свайпом вправо; свайп влево в них не выполняет переход.
+
 The default `Мой KPI` screen shows the current employee's place, KPI, worked
 and weighted shifts, per-shift pace, distance from the team average and the
 exact contribution of every metric. Employees still have unrestricted access

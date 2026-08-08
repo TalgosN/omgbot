@@ -68,6 +68,24 @@ class KpiWebTest(unittest.TestCase):
         )
         self.assertIsNone(kpi_web._validate_init_data('hash=wrong', BOT_TOKEN))
 
+    def test_module_pages_load_shared_swipe_navigation(self):
+        for path in ('/kpi', '/problems', '/shift-config'):
+            response = self.client.get(path)
+            try:
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    b'/static/swipe_navigation.js', response.data,
+                )
+            finally:
+                response.close()
+
+        script = self.client.get('/static/swipe_navigation.js')
+        try:
+            self.assertEqual(script.status_code, 200)
+            self.assertIn(b"navigate('/')", script.data)
+        finally:
+            script.close()
+
     def test_owner_is_excluded_from_active_kpi_employees(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'roles.db'
