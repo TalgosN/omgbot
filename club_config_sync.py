@@ -12,10 +12,8 @@ QUESTIONS_SHEET = '❓ Вопросы смены'
 VALIDATION_SHEET = '🚦 Проверка'
 SYSTEM_SHEET = '_Система'
 REQUIRED_SHEETS = (
-    INSTRUCTIONS_SHEET,
     CLUBS_SHEET,
     SCHEDULE_SHEET,
-    VALIDATION_SHEET,
     SYSTEM_SHEET,
 )
 
@@ -29,8 +27,9 @@ ALL_VARIANTS = 'все наборы'
 SYSTEM_HEADERS = [
     'ClubID', 'Клуб', 'Название для сообщений', 'Название в OMG Shift',
     'Физический клуб', 'Проверять геолокацию', 'Широта', 'Долгота', 'Радиус',
-    'Автозакрытие', 'Количество наборов', 'Эмодзи', 'Активен', 'Порядок',
+    'Автозакрытие', 'Эмодзи', 'Активен', 'Порядок',
 ]
+SYSTEM_OPTIONAL_HEADERS = ['Количество наборов']
 CLUB_HEADERS = ['Клуб', 'Telegram-теги', 'Показывать в расписании']
 SCHEDULE_HEADERS = [
     'Клуб', 'Контроль закрытия', 'Ранняя проверка', 'Открытие в будни',
@@ -130,7 +129,7 @@ def _tag(value, sheet, row):
     return ', '.join(item.strip() for item in tag.split(','))
 
 
-def _records(values, headers, sheet):
+def _records(values, headers, sheet, optional_headers=()):
     if not values:
         raise ConfigValidationError(f'{sheet}: лист пуст')
     actual_headers = [_text(value) for value in values[0]]
@@ -140,7 +139,10 @@ def _records(values, headers, sheet):
     missing = [header for header in headers if header not in actual_headers]
     if missing:
         raise ConfigValidationError(f'{sheet}: отсутствуют столбцы: {", ".join(missing)}')
-    indexes = {header: actual_headers.index(header) for header in headers}
+    selected_headers = list(headers) + [
+        header for header in optional_headers if header in actual_headers
+    ]
+    indexes = {header: actual_headers.index(header) for header in selected_headers}
     result = []
     for row_number, values_row in enumerate(values[1:], start=2):
         if not any(
@@ -158,7 +160,12 @@ def _records(values, headers, sheet):
 
 
 def _parse_system(values):
-    records = _records(values, SYSTEM_HEADERS, SYSTEM_SHEET)
+    records = _records(
+        values,
+        SYSTEM_HEADERS,
+        SYSTEM_SHEET,
+        optional_headers=SYSTEM_OPTIONAL_HEADERS,
+    )
     clubs_by_id = {}
     names = set()
     sort_orders = set()
@@ -184,7 +191,12 @@ def _parse_system(values):
             sort_orders.add(sort_order)
         physical = _bool(record['Физический клуб'], SYSTEM_SHEET, row, 'Физический клуб')
         require_geo = _bool(record['Проверять геолокацию'], SYSTEM_SHEET, row, 'Проверять геолокацию')
-        variant_count = _integer(record['Количество наборов'], SYSTEM_SHEET, row, 'Количество наборов', 1 if physical else 0)
+        raw_variant_count = record.get('Количество наборов')
+        variant_count = (
+            _integer(raw_variant_count, SYSTEM_SHEET, row, 'Количество наборов', 1 if physical else 0)
+            if _text(raw_variant_count)
+            else (1 if physical else 0)
+        )
         if variant_count > 26:
             raise ConfigValidationError(f'{SYSTEM_SHEET}, строка {row}: нельзя задать больше 26 наборов')
         account_name = _text(record['Название для сообщений'])
@@ -512,10 +524,11 @@ def read_config(spreadsheet, current_config):
         preserve_shift_questions(current_config, config)
         validate_stable_identity(current_config, config)
     except ConfigValidationError as error:
-        try:
-            write_validation(worksheets[VALIDATION_SHEET], f'ОШИБКА: {error}')
-        except Exception:
-            pass
+        if VALIDATION_SHEET in worksheets:
+            try:
+                write_validation(worksheets[VALIDATION_SHEET], f'ОШИБКА: {error}')
+            except Exception:
+                pass
         raise
     return config, worksheets
 

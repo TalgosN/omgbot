@@ -114,6 +114,19 @@ class ShiftConfigStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'пустой вопрос'):
                 save_editor_config(self.db_path, payload, 'manager')
 
+    def test_more_than_ten_photo_questions_in_variant_is_rejected(self):
+        with patch('shift_config_store.get_clubs', side_effect=self._get), patch(
+            'shift_config_store.save_clubs', side_effect=self._save
+        ):
+            payload = get_editor_config(self.db_path)
+            payload['clubs'][0]['actions']['open'][0]['questions'] = [
+                {'text': f'Фото {index}', 'type': 'photo'}
+                for index in range(1, 12)
+            ]
+
+            with self.assertRaisesRegex(ValueError, 'не более 10 вопросов с фото'):
+                save_editor_config(self.db_path, payload, 'manager')
+
 
 if __name__ == '__main__':
     unittest.main()

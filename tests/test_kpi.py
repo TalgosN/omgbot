@@ -138,6 +138,114 @@ class KpiTest(unittest.TestCase):
             "Татьяна 15:00-16:00",
         )
 
+    def test_multiple_hashtags_are_processed_by_line_with_separate_indexes(self):
+        with patch.object(self.kpi, "kpi_dict", {}), \
+                patch.object(
+                    self.kpi,
+                    "do_remote_hashtag",
+                    side_effect=[
+                        (self.kpi.KPI_REMOTE_SUCCESS, "", ""),
+                        (self.kpi.KPI_IGNORED, "", ""),
+                    ],
+                ) as remote:
+            result = self.kpi.hash_handle(self.message(
+                "#активация 500 вечерняя продажа\n"
+                "#новый описание\n"
+                "продолжение описания"
+            ))
+
+        self.assertEqual(result, (self.kpi.KPI_REMOTE_SUCCESS, "", ""))
+        self.assertEqual(remote.call_args_list[0].args[0], "#активация")
+        self.assertEqual(remote.call_args_list[0].args[2], "500 вечерняя продажа")
+        self.assertNotIn("hashtag_index", remote.call_args_list[0].kwargs)
+        self.assertEqual(remote.call_args_list[1].args[0], "#новый")
+        self.assertEqual(
+            remote.call_args_list[1].args[2],
+            "описание\nпродолжение описания",
+        )
+        self.assertEqual(remote.call_args_list[1].kwargs["hashtag_index"], 1)
+
+    def test_multiple_remote_hashtags_are_saved_as_separate_events(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / "hashtags.sqlite")
+            connect = lambda _path: real_connect(db_path)
+            self.kpi._hashtag_rules_cache_until = 0
+            self.kpi._hashtag_rules_cache = {}
+            with patch.object(self.kpi, "kpi_dict", {}), \
+                    patch.object(self.kpi.sqlite3, "connect", side_effect=connect), \
+                    patch.object(
+                        self.kpi.requests,
+                        "get",
+                        return_value=Response({
+                            "ok": True,
+                            "hashtags": [
+                                {"hashtag": "#активация", "valueUnit": "rubles"},
+                                {"hashtag": "#автосим", "valueUnit": "rubles"},
+                            ],
+                        }),
+                    ), patch.object(
+                        self.kpi.requests,
+                        "post",
+                        side_effect=[Response({"ok": True}), Response({"ok": True})],
+                    ):
+                result = self.kpi.hash_handle(self.message(
+                    "#активация 500\n#автосим 250"
+                ))
+
+            connection = real_connect(db_path)
+            rows = connection.execute(
+                "SELECT hashtag, hashtag_index, status FROM hashtag_events ORDER BY hashtag_index"
+            ).fetchall()
+            connection.close()
+
+        self.assertEqual(result[0], self.kpi.KPI_REMOTE_SUCCESS)
+        self.assertEqual(rows, [
+            ("#активация", 0, "applied"),
+            ("#автосим", 1, "applied"),
+        ])
+
+    def test_invalid_local_hashtag_stops_batch_before_any_write(self):
+        certificate = unittest.mock.Mock(
+            return_value=(self.kpi.KPI_SUCCESS, "ok", "")
+        )
+        reviews = unittest.mock.Mock(
+            return_value=(self.kpi.KPI_SUCCESS, "ok", "")
+        )
+        with patch.object(
+            self.kpi,
+            "kpi_dict",
+            {"#серт": certificate, "#отзывы": reviews},
+        ), patch.object(self.kpi, "do_remote_hashtag") as remote:
+            result = self.kpi.hash_handle(self.message(
+                "#серт 1234 1800\n#отзывы неверно"
+            ))
+
+        self.assertEqual(result[0], self.kpi.KPI_INVALID)
+        certificate.assert_not_called()
+        reviews.assert_not_called()
+        remote.assert_not_called()
+
+    def test_penalty_must_be_sent_as_a_separate_message(self):
+        with patch.object(self.kpi, "do_remote_hashtag") as remote:
+            result = self.kpi.hash_handle(self.message(
+                "#активация 500\n#штраф @employee причина"
+            ))
+
+        self.assertEqual(result[0], self.kpi.KPI_INVALID)
+        self.assertIn("отдельным сообщением", result[1])
+        remote.assert_not_called()
+
     def test_bonus_accepts_site_numbering_and_fractional_amount(self):
         with patch.object(self.kpi, "Insert_bonus", create=True) as insert, \
                 patch.object(self.kpi, "update_table", create=True):

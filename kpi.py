@@ -37,6 +37,8 @@ KPI_ERROR = "error"
 KPI_SAVED_ERROR = "saved_error"
 
 NUMBER_RE = re.compile(r"^\s*([0-9]+(?:[,.][0-9]+)?)(?=\s|$)")
+HASHTAG_LINE_RE = re.compile(r"^\s*(#[^\W_][\w-]*)(?:[ \t]+(.*))?$", re.UNICODE)
+MAX_HASHTAGS_PER_MESSAGE = 10
 LEGACY_BIRTHDAY_AMOUNT = 500
 HASHTAG_RULES_CACHE_SECONDS = 60
 _hashtag_rules_cache = {}
@@ -383,7 +385,15 @@ def _get_hashtag_rule(hashtag):
     )
 
 
-def _save_pending_hashtag(message, hashtag, value, value_unit, comment, event_date):
+def _save_pending_hashtag(
+    message,
+    hashtag,
+    value,
+    value_unit,
+    comment,
+    event_date,
+    hashtag_index=0,
+):
     ensure_hashtag_events_table()
     chat_id, message_id = _message_identity(message)
     conn = sqlite3.connect('db/omgbot.sql')
@@ -393,8 +403,8 @@ def _save_pending_hashtag(message, hashtag, value, value_unit, comment, event_da
             if chat_id is not None and message_id is not None:
                 existing = conn.execute(
                     '''SELECT id, status FROM hashtag_events
-                       WHERE chat_id=? AND message_id=? AND hashtag_index=0''',
-                    (chat_id, message_id),
+                       WHERE chat_id=? AND message_id=? AND hashtag_index=?''',
+                    (chat_id, message_id, hashtag_index),
                 ).fetchone()
             if existing:
                 return existing[0], existing[1], False
@@ -403,7 +413,7 @@ def _save_pending_hashtag(message, hashtag, value, value_unit, comment, event_da
                 INSERT INTO hashtag_events (
                     telegram, hashtag, value, value_unit, comment, event_date,
                     status, source, chat_id, message_id, hashtag_index
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'omg_shift', ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'omg_shift', ?, ?, ?)
                 ''',
                 (
                     f"@{message.from_user.username}",
@@ -414,6 +424,7 @@ def _save_pending_hashtag(message, hashtag, value, value_unit, comment, event_da
                     event_date,
                     chat_id,
                     message_id,
+                    hashtag_index,
                 ),
             )
             return cursor.lastrowid, 'pending', True
@@ -444,7 +455,7 @@ def _finish_hashtag_event(event_id, status, response, error=None):
         conn.close()
 
 
-def do_remote_hashtag(hashtag, message, text_args):
+def do_remote_hashtag(hashtag, message, text_args, hashtag_index=0):
     """Передаёт начисление в OMG Shift и сохраняет подтверждённый результат."""
     username = getattr(message.from_user, 'username', None)
     if not username:
@@ -470,6 +481,7 @@ def do_remote_hashtag(hashtag, message, text_args):
         value_unit,
         comment,
         today,
+        hashtag_index,
     )
     if not created:
         if previous_status == 'applied':
@@ -529,7 +541,7 @@ def do_remote_hashtag(hashtag, message, text_args):
 
 def do_club_action(hashtag, message, text_args):
     """Обработчик для #продление и #инициатива (автоматически тянет клуб)."""
-    if "факт" in message.text.lower():
+    if "факт" in text_args.lower():
         return KPI_INVALID, 'Даже у меня есть имя, значит и у него есть!',  "```Правильно!\nНикаких 'фактов'!```"
     if len(text_args) > 1024:
         return KPI_INVALID, "Слишком длинно!", "```Правильно!\nПожалуйста, меньше 1024 символов```"
@@ -682,25 +694,158 @@ def _combine_hashtag_results(local_result, remote_result):
     return local_result
 
 
+def _parse_hashtag_entries(text):
+    entries = []
+    for raw_line in str(text or '').splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = HASHTAG_LINE_RE.match(line)
+        if match:
+            entries.append({
+                'hashtag': match.group(1).lower(),
+                'args': [str(match.group(2) or '').strip()],
+            })
+            continue
+        if not entries:
+            raise ValueError('Сообщение должно начинаться с хештега.')
+        entries[-1]['args'].append(line)
+
+    if not entries:
+        raise ValueError('Текст пустой!')
+    if len(entries) > MAX_HASHTAGS_PER_MESSAGE:
+        raise ValueError(
+            f'В одном сообщении можно указать не больше {MAX_HASHTAGS_PER_MESSAGE} хештегов.'
+        )
+    return [
+        (entry['hashtag'], '\n'.join(part for part in entry['args'] if part).strip())
+        for entry in entries
+    ]
+
+
+def _validate_local_batch_entry(hashtag, text_args):
+    if hashtag in bonus:
+        parts = text_args.split()
+        if (
+            len(parts) != 2
+            or not parts[0].isnumeric()
+            or not re.fullmatch(r'[0-9]+(?:[,.][0-9]+)?', parts[1])
+        ):
+            return KPI_INVALID, 'Неверно написан хештег! Формат:', f'```Правильно!\n{hashtag} *номер* *сумма*```'
+        if float(parts[1].replace(',', '.')) <= 0:
+            return KPI_INVALID, 'Сумма должна быть больше нуля!', f'```Правильно!\n{hashtag} *номер* *сумма*```'
+    elif hashtag == '#отзывы':
+        parts = text_args.split(maxsplit=1)
+        if not parts or not parts[0].isnumeric():
+            return KPI_INVALID, 'Неверно написан хештег! Формат:', '```Правильно!\n#отзывы *количество* *описание*```'
+    elif hashtag in action:
+        if 'факт' in text_args.lower():
+            return KPI_INVALID, 'Даже у меня есть имя, значит и у него есть!', "```Правильно!\nНикаких 'фактов'!```"
+        if len(text_args) > 1024:
+            return KPI_INVALID, 'Слишком длинно!', '```Правильно!\nПожалуйста, меньше 1024 символов```'
+    return None
+
+
+def _existing_hashtag_status(message, hashtag_index):
+    chat_id, message_id = _message_identity(message)
+    if chat_id is None or message_id is None:
+        return None
+    ensure_hashtag_events_table()
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        row = conn.execute(
+            '''SELECT status FROM hashtag_events
+               WHERE chat_id=? AND message_id=? AND hashtag_index=?''',
+            (chat_id, message_id, hashtag_index),
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _hash_handle_one(message, hashtag, text_args, hashtag_index=0):
+    if hashtag in kpi_dict:
+        if hashtag != '#штраф' and _existing_hashtag_status(message, hashtag_index):
+            local_result = (KPI_SUCCESS, '', '')
+        else:
+            local_result = kpi_dict[hashtag](message, text_args)
+        if local_result[0] == KPI_INVALID or hashtag == '#штраф':
+            return local_result
+        if hashtag_index:
+            remote_result = do_remote_hashtag(
+                hashtag,
+                message,
+                text_args,
+                hashtag_index=hashtag_index,
+            )
+        else:
+            remote_result = do_remote_hashtag(hashtag, message, text_args)
+        return _combine_hashtag_results(local_result, remote_result)
+    if hashtag_index:
+        return do_remote_hashtag(
+            hashtag,
+            message,
+            text_args,
+            hashtag_index=hashtag_index,
+        )
+    return do_remote_hashtag(hashtag, message, text_args)
+
+
+def _combine_batch_results(entries, results):
+    if len(results) == 1:
+        return results[0]
+
+    failures = []
+    local_saved = False
+    any_success = False
+    all_ignored = True
+
+    for (hashtag, _text_args), result in zip(entries, results):
+        status, text, desc = result
+        if status == KPI_INVALID:
+            return result
+        if status in (KPI_SUCCESS, KPI_SAVED_ERROR):
+            local_saved = True
+        if status in (KPI_SUCCESS, KPI_REMOTE_SUCCESS):
+            any_success = True
+        if status != KPI_IGNORED:
+            all_ignored = False
+        if status in (KPI_ERROR, KPI_SAVED_ERROR):
+            details = '\n'.join(part for part in (text, desc) if part)
+            failures.append(f'{hashtag}: {details}' if details else hashtag)
+
+    if failures:
+        status = KPI_SAVED_ERROR if local_saved else KPI_ERROR
+        return status, '\n\n'.join(failures), ''
+    if all_ignored:
+        return KPI_IGNORED, '', ''
+    if local_saved:
+        return KPI_SUCCESS, '', ''
+    if any_success:
+        return KPI_REMOTE_SUCCESS, '', ''
+    return KPI_IGNORED, '', ''
+
+
 def hash_handle(message):
     try:
-        # Разделяем на 2 части: хештег и всё остальное (аргументы)
-        parts = message.text.split(maxsplit=1)
-        if not parts:
-            return KPI_INVALID, "Текст пустой!", ""
-            
-        hashtag = parts[0].lower()
-        text_args = parts[1].strip() if len(parts) > 1 else ""
-        
-        if hashtag in kpi_dict:
-            local_result = kpi_dict[hashtag](message, text_args)
-            if local_result[0] == KPI_INVALID or hashtag == '#штраф':
-                return local_result
-            remote_result = do_remote_hashtag(hashtag, message, text_args)
-            return _combine_hashtag_results(local_result, remote_result)
-        return do_remote_hashtag(hashtag, message, text_args)
+        entries = _parse_hashtag_entries(message.text)
+        if len(entries) > 1 and any(hashtag == '#штраф' for hashtag, _args in entries):
+            return KPI_INVALID, '#штраф нужно отправлять отдельным сообщением.', ''
+
+        for hashtag, text_args in entries:
+            validation_error = _validate_local_batch_entry(hashtag, text_args)
+            if validation_error:
+                return validation_error
+
+        results = [
+            _hash_handle_one(message, hashtag, text_args, hashtag_index=index)
+            for index, (hashtag, text_args) in enumerate(entries)
+        ]
+        return _combine_batch_results(entries, results)
     except Exception as e:
         print(f"Ошибка в hash_handle: {e}")
+        if isinstance(e, ValueError):
+            return KPI_INVALID, str(e), ''
         return KPI_ERROR, "Не удалось обработать хештег. Попробуйте ещё раз или обратитесь к администратору.", ""
 
 

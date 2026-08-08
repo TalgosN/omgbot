@@ -15,6 +15,7 @@ ACTIONS = {'open': OPEN_ACTION, 'close': CLOSE_ACTION}
 QUESTION_TYPES = {'text', 'photo', 'num'}
 MAX_VARIANTS = 26
 MAX_ITEMS = 100
+MAX_PHOTO_QUESTIONS = 10
 MAX_TEXT_LENGTH = 1000
 
 _lock = threading.RLock()
@@ -171,10 +172,20 @@ def _compile_payload(payload, current_clubs):
                     raise ValueError(f'{club_name}, {action_name}, набор {variant_index}: чек-лист задан неверно')
                 if len(raw_questions) > MAX_ITEMS or len(raw_checklist) > MAX_ITEMS:
                     raise ValueError(f'{club_name}, {action_name}: в наборе может быть не более {MAX_ITEMS} строк')
-                question_variants.append([
+                compiled_questions = [
                     _question(item, club_name, action_name, variant_index, index)
                     for index, item in enumerate(raw_questions, 1)
-                ])
+                ]
+                photo_count = sum(
+                    question['type'] == 'photo'
+                    for question in compiled_questions
+                )
+                if photo_count > MAX_PHOTO_QUESTIONS:
+                    raise ValueError(
+                        f'{club_name}, {action_name}, набор {variant_index}: '
+                        f'можно добавить не более {MAX_PHOTO_QUESTIONS} вопросов с фото'
+                    )
+                question_variants.append(compiled_questions)
                 checklist_variants.append([
                     _checklist_item(item, club_name, action_name, variant_index, index)
                     for index, item in enumerate(raw_checklist, 1)

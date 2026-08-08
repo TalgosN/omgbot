@@ -79,7 +79,15 @@ function renderList(target, list, kind) {
       const select = document.createElement('select');
       select.innerHTML = '<option value="text">Текст</option><option value="photo">Фото</option><option value="num">Число</option>';
       select.value = item.type;
-      select.onchange = () => { item.type = select.value; markDirty(); };
+      select.onchange = () => {
+        if (select.value === 'photo' && list.filter((question) => question.type === 'photo').length >= 10) {
+          select.value = item.type;
+          notice('В одном наборе можно добавить не более 10 вопросов с фото', true);
+          return;
+        }
+        item.type = select.value;
+        markDirty();
+      };
       row.append(select);
     }
     row.append(rowActions(list, index)); target.append(row);

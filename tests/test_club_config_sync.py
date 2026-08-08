@@ -11,6 +11,7 @@ from club_config_sync import (
     SCHEDULE_HEADERS,
     SCHEDULE_SHEET,
     SYSTEM_HEADERS,
+    SYSTEM_OPTIONAL_HEADERS,
     SYSTEM_SHEET,
     VALIDATION_SHEET,
     ConfigValidationError,
@@ -26,10 +27,11 @@ def make_row(headers, **values):
 
 
 def sheet_values():
+    system_headers = SYSTEM_HEADERS + SYSTEM_OPTIONAL_HEADERS
     system = [
-        SYSTEM_HEADERS,
+        system_headers,
         make_row(
-            SYSTEM_HEADERS,
+            system_headers,
             ClubID='club_test',
             Клуб='Тестовый клуб',
             **{
@@ -48,7 +50,7 @@ def sheet_values():
             },
         ),
         make_row(
-            SYSTEM_HEADERS,
+            system_headers,
             ClubID='club_global',
             Клуб='Глобально',
             **{
@@ -191,7 +193,14 @@ class ClubConfigSyncTest(unittest.TestCase):
         current = build_config(*self.sheet_values())
         compiled, worksheets = read_config(FakeSpreadsheet(values), current)
 
-        self.assertEqual(set(worksheets), set(REQUIRED_SHEETS) | {QUESTIONS_SHEET})
+        self.assertEqual(set(worksheets), {
+            INSTRUCTIONS_SHEET,
+            CLUBS_SHEET,
+            SCHEDULE_SHEET,
+            QUESTIONS_SHEET,
+            VALIDATION_SHEET,
+            SYSTEM_SHEET,
+        })
         self.assertEqual(count_config(compiled), (2, 4, 6))
 
     def test_questions_sheet_is_optional_and_does_not_replace_current_questions(self):
@@ -205,6 +214,31 @@ class ClubConfigSyncTest(unittest.TestCase):
             compiled['Тестовый клуб']['questions'],
             current['Тестовый клуб']['questions'],
         )
+
+    def test_instruction_and_validation_sheets_are_optional(self):
+        current = build_config(*self.sheet_values())
+        spreadsheet = FakeSpreadsheet(
+            self.sheet_values(),
+            missing=(INSTRUCTIONS_SHEET, VALIDATION_SHEET),
+        )
+
+        compiled, worksheets = read_config(spreadsheet, current)
+
+        self.assertNotIn(INSTRUCTIONS_SHEET, worksheets)
+        self.assertNotIn(VALIDATION_SHEET, worksheets)
+        self.assertEqual(count_config(compiled), (2, 4, 6))
+
+    def test_variant_count_column_is_optional(self):
+        system, clubs, schedules, _questions = self.sheet_values()
+        count_index = system[0].index('Количество наборов')
+        system = [
+            row[:count_index] + row[count_index + 1:]
+            for row in system
+        ]
+
+        compiled = build_config(system, clubs, schedules)
+
+        self.assertEqual(list(compiled), ['Тестовый клуб', 'Глобально'])
 
     def test_duplicate_question_inside_variant_is_rejected(self):
         system, clubs, schedules, questions = self.sheet_values()

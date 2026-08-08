@@ -27,7 +27,8 @@ CHATS = {
     "reports": os.getenv("CHAT_REPORTS"),
     "main_group": os.getenv("CHAT_MAIN_GROUP"),
     "repair_extra": os.getenv("CHAT_REPAIR_EXTRA"),
-    "me": os.getenv("CHAT_ME")
+    "me": os.getenv("CHAT_ME"),
+    "callcenter": os.getenv("CHAT_CALLCENTER"),
 }
 
 def validate_config():

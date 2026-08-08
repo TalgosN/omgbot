@@ -930,13 +930,14 @@ def sync_config():
         status = get_club_config_status()
 
         validation_warning = None
-        try:
-            write_validation(
-                worksheets[VALIDATION_SHEET],
-                f'OK, опубликована версия {status["version"]}',
-            )
-        except Exception as error:
-            validation_warning = str(error)
+        if VALIDATION_SHEET in worksheets:
+            try:
+                write_validation(
+                    worksheets[VALIDATION_SHEET],
+                    f'OK, опубликована версия {status["version"]}',
+                )
+            except Exception as error:
+                validation_warning = str(error)
 
         lines = [
             '✅ Конфигурация применена',

@@ -157,6 +157,12 @@ def schedule_func(bot): # Не забудь передать bot!
         CHATS['me'],
     )
 
+    from bukza import send_daily_notification
+    schedule.every().day.at("08:30:00", 'Europe/Moscow').do(
+        send_daily_notification,
+        bot,
+    )
+
     from rasp import start_shifton_chat_sync, start_shifton_notifications_check
     start_shifton_chat_sync()
     schedule.every().day.at("04:30:00", 'Europe/Moscow').do(start_shifton_chat_sync)
