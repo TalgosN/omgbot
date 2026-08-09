@@ -109,6 +109,11 @@ class KpiWebTest(unittest.TestCase):
             self.assertNotIn('Ближайшая'.encode(), script.data)
             self.assertIn('Идёт бронь'.encode(), script.data)
             self.assertIn('Броней сейчас нет'.encode(), script.data)
+            self.assertIn(b'class="club-shift-summary"', script.data)
+            self.assertLess(
+                script.data.index(b'class="club-shift-summary"'),
+                script.data.index(b'class="club-meta"'),
+            )
         finally:
             script.close()
 

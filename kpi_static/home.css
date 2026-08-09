@@ -100,28 +100,29 @@ button, input, select, textarea { font: inherit; }
 .management-grid .summary-tile { padding: 13px 10px; box-shadow: none; }
 .management-grid .summary-tile strong { font-size: 20px; }
 .club-card { padding:0; overflow:hidden; box-shadow:none; }
-.club-card > summary { display:block; padding:15px; cursor:pointer; list-style:none; }
+.club-card > summary { display:block; padding:13px; cursor:pointer; list-style:none; }
 .club-card > summary::-webkit-details-marker { display:none; }
-.club-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.club-head h3 { margin: 2px 0 0; font-size: 20px; line-height:1.15; }
-.club-live-statuses { display:grid; justify-items:end; gap:5px; }
-.club-status { padding: 5px 8px; border-radius: 999px; font-size: 8px; font-weight: 800; }
+.club-head h3 { margin:0; font-size:20px; line-height:1.15; }
+.club-overview { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10px; margin-top:10px; }
+.club-shift-summary span, .club-shift-summary strong { display:block; }
+.club-shift-summary span { color:var(--muted); font-size:9px; font-weight:650; }
+.club-shift-summary strong { margin-top:3px; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.club-live-statuses { display:grid; justify-items:end; gap:4px; }
+.club-status { padding:4px 7px; border-radius:999px; font-size:10px; font-weight:800; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
 .club-status.closed { color: var(--danger); background: rgba(214,75,113,.1); }
-.club-booking-status { padding:5px 8px; border-radius:999px; font-size:7px; font-weight:800; white-space:nowrap; }
+.club-booking-status { padding:4px 7px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
 .club-booking-status.active { color:#946000; background:rgba(255,193,7,.17); }
 .club-booking-status.empty { color:#37836a; background:rgba(68,170,132,.08); }
 .club-booking-status.loading { color:var(--muted); background:rgba(117,111,141,.08); }
 .club-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin-top:12px; }
-.club-meta div { padding: 9px; border-radius: 12px; background: rgba(112,70,217,.055); }
+.club-meta div { padding:8px 9px; border-radius:12px; background:rgba(112,70,217,.055); }
 .club-meta span, .club-meta strong { display: block; }
-.club-meta span { color: var(--muted); font-size: 7px; }
-.club-meta strong { margin-top: 3px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.club-meta .club-people { grid-column:1 / -1; }
-.club-meta .club-people strong { white-space:normal; }
+.club-meta span { color:var(--muted); font-size:9px; font-weight:650; }
+.club-meta strong { margin-top:3px; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .club-card .booking-rows { padding:0 10px 10px; background:rgba(112,70,217,.025); }
 .club-card .booking-empty { border-top:1px solid var(--line); }
-.club-expand { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-top:9px; color:var(--purple); font-size:7px; font-weight:750; }
+.club-expand { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-top:9px; color:var(--purple); font-size:9px; font-weight:750; }
 .club-expand span { font-size:14px; transition:transform .18s ease; }
 .club-card[open] .club-expand span { transform:rotate(90deg); }
 .empty-card, .error-card { padding: 16px; border: 1px dashed var(--line); border-radius: 18px; color: var(--muted); font-size: 11px; text-align: center; }

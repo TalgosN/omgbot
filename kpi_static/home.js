@@ -211,13 +211,18 @@ function renderClubs(data, bookingsData = null) {
         <summary>
           <div class="club-head">
             <h3>${escapeHtml(club.club)}</h3>
+          </div>
+          <div class="club-overview">
+            <div class="club-shift-summary" title="${escapeHtml(people)}">
+              <span>На смене</span>
+              <strong>${escapeHtml(people)}</strong>
+            </div>
             <div class="club-live-statuses">
               <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
               ${bookingStatus}
             </div>
           </div>
           <div class="club-meta">
-            <div class="club-people" title="${escapeHtml(people)}"><span>На смене</span><strong>${escapeHtml(people)}</strong></div>
             <div><span>Брони</span><strong>${bookingsData ? bookingCountLabel(group.count) : '—'}</strong></div>
             <div><span>Проблемы</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></div>
           </div>
