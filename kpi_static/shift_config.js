@@ -171,6 +171,10 @@ $('#saveButton').onclick = async () => {
 };
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[char])); }
 window.addEventListener('beforeunload', (event) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('omg:navigation-back', (event) => {
+  event.preventDefault();
+  window.location.assign('/shift');
+});
 
 (async () => {
   try { state = await api('/api/shift-config'); render(); await loadHistory(); }

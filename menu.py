@@ -22,7 +22,10 @@ HELP_MENU_BUTTONS = (
     '🛟 Если что-то не работает',
     '⬅️ Вернуться',
 )
-OMG_SHIFT_URL = 'http://31.129.109.167/?page=settings'
+OMG_SHIFT_URL = os.getenv(
+    'OMG_SHIFT_URL',
+    'http://31.129.109.167/?page=settings',
+)
 GOOGLE_SHEET_LINKS = (
     ('📊 KPI OMG VR', 'https://docs.google.com/spreadsheets/d/1Jsz9im2ss9NIGfDcSLuIv37op_5QzaB03m6Z_JjDE9U/edit?gid=270994446#gid=270994446'),
     ('🧮 KPI helper', 'https://docs.google.com/spreadsheets/d/1McS0h3TxnxA-QqIWfR37LHBTN3D7TDSvzz3nitAaq98/edit?gid=0#gid=0'),

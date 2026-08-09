@@ -70,6 +70,10 @@ from shift_config_store import (
 DB_PATH = 'db/omgbot.sql'
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'kpi_static')
 AUTH_MAX_AGE_SECONDS = int(os.getenv('KPI_WEBAPP_AUTH_MAX_AGE', '86400'))
+OMG_SHIFT_URL = os.getenv(
+    'OMG_SHIFT_URL',
+    'http://31.129.109.167/?page=settings',
+).strip()
 ANALYTICS_CACHE_SECONDS = 60
 _analytics_cache = {}
 _analytics_cache_lock = threading.Lock()
@@ -1018,6 +1022,11 @@ def shift_config_index():
     return send_from_directory(STATIC_DIR, 'shift_config.html')
 
 
+@app.get('/shift')
+def shift_index():
+    return send_from_directory(STATIC_DIR, 'shift.html')
+
+
 @app.get('/static/<path:filename>')
 def static_file(filename):
     return send_from_directory(STATIC_DIR, filename)
@@ -1136,6 +1145,15 @@ def api_today_bookings():
 @require_manager
 def api_shift_config():
     return jsonify(get_editor_config(DB_PATH))
+
+
+@app.get('/api/shift')
+@require_user
+def api_shift():
+    return jsonify({
+        'external_url': OMG_SHIFT_URL,
+        'can_manage': int(g.kpi_user['status']) >= ROLE_MANAGER,
+    })
 
 
 @app.put('/api/shift-config')

@@ -25,6 +25,20 @@
       <p id="welcomeDate" class="welcome-date"></p>
     </section>
 
+    <nav class="modules-section" aria-label="Модули OMG VR">
+      <div class="module-grid">
+        <a class="module-card kpi-module" href="/kpi">
+          <strong>OMG KPI</strong><small>Показатели</small>
+        </a>
+        <a class="module-card problem-module" href="/problems">
+          <strong>TASKBOARD</strong><small>Задачи</small>
+        </a>
+        <a class="module-card shift-module" href="/shift">
+          <strong>OMG SHIFT</strong><small>Смены</small>
+        </a>
+      </div>
+    </nav>
+
     <section id="personalSection" hidden>
       <div class="section-heading">
         <div><p class="eyebrow">Сегодня</p><h2>Личная сводка</h2></div>
@@ -55,24 +69,6 @@
         <div><p class="eyebrow">В реальном времени</p><h2>Статус клубов</h2></div>
       </div>
       <div id="clubList" class="club-list"></div>
-    </section>
-
-    <section class="modules-section">
-      <div class="section-heading"><h2>Модули</h2></div>
-      <div class="module-grid">
-        <a class="module-card kpi-module" href="/kpi">
-          <span class="module-icon">↗</span>
-          <div><p class="eyebrow">Показатели</p><h2>OMG KPI</h2><small id="kpiModuleText">Открыть доску KPI</small></div>
-        </a>
-        <a class="module-card problem-module" href="/problems">
-          <span class="module-icon">?</span>
-          <div><p class="eyebrow">Операционная работа</p><h2>OMG TASKBOARD</h2><small id="problemModuleText">Открыть доску проблем</small></div>
-        </a>
-        <a id="shiftConfigModule" class="module-card shift-module" href="/shift-config" hidden>
-          <span class="module-icon">✓</span>
-          <div><p class="eyebrow">Настройки бота</p><h2>OMG SHIFT</h2><small>Вопросы и чек-листы открытия и закрытия</small></div>
-        </a>
-      </div>
     </section>
 
     <div id="homeError" class="error-card" hidden></div>

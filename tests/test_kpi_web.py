@@ -69,7 +69,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertIsNone(kpi_web._validate_init_data('hash=wrong', BOT_TOKEN))
 
     def test_module_pages_load_shared_swipe_navigation(self):
-        for path in ('/kpi', '/problems', '/shift-config'):
+        for path in ('/kpi', '/problems', '/shift', '/shift-config'):
             response = self.client.get(path)
             try:
                 self.assertEqual(response.status_code, 200)
@@ -85,6 +85,46 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b"navigate('/')", script.data)
         finally:
             script.close()
+
+    def test_home_places_compact_shift_module_before_dashboard(self):
+        response = self.client.get('/')
+        try:
+            html = response.get_data(as_text=True)
+            self.assertLess(
+                html.index('class="modules-section"'),
+                html.index('id="personalSection"'),
+            )
+            self.assertIn('class="module-card shift-module" href="/shift"', html)
+            self.assertNotIn('id="shiftConfigModule"', html)
+        finally:
+            response.close()
+
+    def test_shift_module_is_visible_to_employee_and_unlocks_manager_tools(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'OMG_SHIFT_URL', 'http://shift.test/'),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+        ):
+            employee_response = self.client.get(
+                '/api/shift', headers=self.headers,
+            )
+
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'OMG_SHIFT_URL', 'http://shift.test/'),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+        ):
+            manager_response = self.client.get(
+                '/api/shift', headers=self.headers,
+            )
+
+        self.assertEqual(employee_response.status_code, 200)
+        self.assertEqual(employee_response.get_json(), {
+            'external_url': 'http://shift.test/',
+            'can_manage': False,
+        })
+        self.assertEqual(manager_response.status_code, 200)
+        self.assertTrue(manager_response.get_json()['can_manage'])
 
     def test_owner_is_excluded_from_active_kpi_employees(self):
         with tempfile.TemporaryDirectory() as temp_dir:

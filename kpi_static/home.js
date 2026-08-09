@@ -125,9 +125,6 @@ function renderPersonal(data) {
     <div class="summary-tile"><span>KPI за месяц</span><strong>${kpi ? percent(kpi.total_pct) : '—'}</strong></div>
     <div class="summary-tile"><span>Смен за месяц</span><strong>${kpi ? number(kpi.shifts) : '0'}</strong></div>
   `;
-  $('#kpiModuleText').textContent = kpi
-    ? `${number(kpi.shifts)} смен · ${percent(kpi.total_pct)}`
-    : 'Открыть доску KPI';
   $('#shiftList').innerHTML = data.upcoming_shifts.length
     ? data.upcoming_shifts.map((shift) => `
       <article class="shift-card">
@@ -150,7 +147,6 @@ function renderManagement(data) {
     <div class="summary-tile"><span>Проверка</span><strong>${summary.problems.review}</strong><small>ждут решения</small></div>
     <div class="summary-tile"><span>Штрафы</span><strong>${summary.active_penalties}</strong></div>
   `;
-  $('#problemModuleText').textContent = `${summary.problems.work} в работе · ${summary.problems.review} на проверке`;
 }
 
 function renderClubs(data) {
@@ -178,7 +174,6 @@ function renderClubs(data) {
 async function load() {
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
-    $('#shiftConfigModule').hidden = !me.can_manage;
     $('#userBadge').textContent = me.role_name;
     $('#welcomeTitle').textContent = `Привет, ${me.name}`;
     $('#welcomeDate').textContent = new Intl.DateTimeFormat('ru-RU', {
