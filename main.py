@@ -20,13 +20,15 @@ from openclose import (
 import kpi
 from kpi import init
 import requests
+from bot_routing import CommandAwareTeleBot, CommandCooldown
 from sender import safe_send
 from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
 from kpi_calculator import initialize_kpi_calculation_schema
 from repair_catalog import initialize_repair_schema
 
 validate_config()
-bot = telebot.TeleBot(TELEGRAM_API_KEY, num_threads=4)
+bot = CommandAwareTeleBot(TELEGRAM_API_KEY, num_threads=4)
+start_command_cooldown = CommandCooldown(seconds=3)
 
 ############################# main constants
 
@@ -439,86 +441,85 @@ kpi.initialize_hashtag_events()
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    
-    if is_spam(message):
-        if message.chat.id > 0: # Отсев конф
-            
-            # --- ПРОВЕРКА НА УЧАСТИЕ В ГРУППЕ ---
-            
+    if message.chat.id <= 0:
+        bot.send_message(message.chat.id, 'Откройте личный чат с ботом и отправьте /start там.')
+        return
+    if not start_command_cooldown.allow(message.from_user.id, 'start'):
+        return
+    bot.clear_step_handler_by_chat_id(message.chat.id)
+    newly_bound = False
+
+    try:
+        user_status = bot.get_chat_member(CHATS['main_group'], message.from_user.id).status
+        if user_status in ['left', 'kicked']:
+            bot.send_message(message.chat.id, 'Сначала вступите в рабочую группу!')
+            return
+    except Exception as e:
+        print(f"Ошибка проверки участника конфы: {e}")
+        bot.send_message(message.chat.id, 'Внутренняя ошибка проверки прав доступа.')
+        return
+
+    if not message.from_user.username:
+        bot.send_message(message.chat.id, 'Для регистрации установите публичный username в Telegram.')
+        return
+
+    login = f"@{message.from_user.username}"
+    user = get_user(message)
+    if not user:
+        conn = sqlite3.connect('db/omgbot.sql')
+        conn.row_factory = sqlite3.Row
+        try:
+            same_login = conn.execute(
+                'SELECT * FROM users WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
+                (login,),
+            ).fetchone()
+            if same_login and same_login['chatid'] not in (None, ''):
+                bot.send_message(message.chat.id, 'Этот Telegram username уже привязан к другой учётной записи. Обратитесь к руководству.')
+                return
+            with conn:
+                if same_login:
+                    conn.execute(
+                        'UPDATE users SET chatid=? WHERE ID=?',
+                        (str(message.from_user.id), same_login['ID']),
+                    )
+                else:
+                    conn.execute(
+                        'INSERT INTO users (login, chatid) VALUES (?, ?)',
+                        (login, str(message.from_user.id)),
+                    )
+            newly_bound = True
+        finally:
+            conn.close()
+        user = get_user(message)
+
+    if user['status'] == -1:
+        bot.send_message(message.chat.id, 'Доступ запрещен!')
+        return
+
+    if user['status'] is None:
+        from auth import start_auth
+        start_auth(message, bot)
+        return
+
+    if newly_bound:
+        from rasp import register_shifton_chat
+        registration = register_shifton_chat(login, message.from_user.id)
+        if not registration.get("ok"):
+            print(f"Ошибка регистрации чата OMG Shift для {login}: {registration.get('error', 'unknown_error')}")
+        else:
             try:
-                # Запрашиваем статус пользователя в нужной группе
-                user_status = bot.get_chat_member(CHATS['main_group'], message.from_user.id).status
-                
-                # Если пользователя там нет или он забанен
-                if user_status in ['left', 'kicked']:
-                    bot.send_message(message.chat.id, 'Сначала вступите в рабочую группу!')
-                    return
-            except Exception as e:
-                # Сработает, если бот не админ в группе или указан неверный ID
-                print(f"Ошибка проверки участника конфы: {e}")
-                bot.send_message(message.chat.id, 'Внутренняя ошибка проверки прав доступа.')
-                return
-            # ------------------------------------
-
-            if not message.from_user.username:
-                bot.send_message(message.chat.id, 'Для регистрации установите публичный username в Telegram.')
-                return
-
-            login = f"@{message.from_user.username}"
-            user = get_user(message)
-            if not user:
-                conn = sqlite3.connect('db/omgbot.sql')
-                conn.row_factory = sqlite3.Row
-                try:
-                    same_login = conn.execute(
-                        'SELECT * FROM users WHERE lower(login)=lower(?) ORDER BY ID LIMIT 1',
-                        (login,),
-                    ).fetchone()
-                    if same_login and same_login['chatid'] not in (None, ''):
-                        bot.send_message(message.chat.id, 'Этот Telegram username уже привязан к другой учётной записи. Обратитесь к руководству.')
-                        return
-                    with conn:
-                        if same_login:
-                            conn.execute(
-                                'UPDATE users SET chatid=? WHERE ID=?',
-                                (str(message.from_user.id), same_login['ID']),
-                            )
-                        else:
-                            conn.execute(
-                                'INSERT INTO users (login, chatid) VALUES (?, ?)',
-                                (login, str(message.from_user.id)),
-                            )
-                finally:
-                    conn.close()
-                user = get_user(message)
-
-            if user['status'] == -1:
-                bot.send_message(message.chat.id, 'Доступ запрещен!')
-                return
-
-            if user['status'] is None:
-                from auth import start_auth
-                start_auth(message, bot)
-                return
-
-            from rasp import register_shifton_chat
-            registration = register_shifton_chat(login, message.from_user.id)
-            if not registration.get("ok"):
-                print(f"Ошибка регистрации чата OMG Shift для {login}: {registration.get('error', 'unknown_error')}")
-            else:
-                try:
-                    from account import apply_omg_identity, sync_google_dependencies
-                    identity = apply_omg_identity(message.from_user.id, login, registration.get("employee"))
-                    if identity["changed"]:
-                        sync_google_dependencies(full=True)
-                except ValueError as e:
-                    print(f"Ошибка синхронизации профиля OMG Shift: {e}")
-            hello(message.from_user.id, bot)
+                from account import apply_omg_identity, sync_google_dependencies
+                identity = apply_omg_identity(message.from_user.id, login, registration.get("employee"))
+                if identity["changed"]:
+                    sync_google_dependencies(full=True)
+            except ValueError as e:
+                print(f"Ошибка синхронизации профиля OMG Shift: {e}")
+    hello(message.from_user.id, bot)
 
 
 @bot.message_handler(commands=['weather'])
 def weather(message):
-    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE):
         try: 
             from weather import get_weather
             text = get_weather()
@@ -529,7 +530,7 @@ def weather(message):
 @bot.message_handler(commands=['today'])
 def cmd_today_schedule(message):
     """Ручной вызов расписания на сегодня"""
-    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE):
         try: 
             # Получаем текущую дату по Москве в нужном формате
             today_date = datetime.now(pytz.timezone('Europe/Moscow')).strftime("%Y-%m-%d")
@@ -546,7 +547,7 @@ def cmd_today_schedule(message):
 
 @bot.message_handler(commands=['repair'])
 def repair_list(message):
-    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE):
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
         # Получаем задачи с указанием клуба
@@ -576,10 +577,68 @@ def repair_list(message):
         text = "\n".join(text_lines) if text_lines else "Нет активных задач по ремонту"
 
         bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', parse_mode='HTML')
-       
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
+
+
+def _run_private_menu_command(message, callback):
+    if message.chat.id <= 0:
+        bot.send_message(message.chat.id, 'Эта команда доступна в личном чате с ботом.')
+        return
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    bot.clear_step_handler_by_chat_id(message.chat.id)
+    callback()
+
+
+@bot.message_handler(commands=['menu'])
+def command_menu(message):
+    _run_private_menu_command(message, lambda: hello(message.chat.id, bot))
+
+
+@bot.message_handler(commands=['shift'])
+def command_shift(message):
+    from openclose import func_today
+    _run_private_menu_command(message, lambda: func_today(message, bot))
+
+
+@bot.message_handler(commands=['schedule'])
+def command_schedule(message):
+    from rasp import rasp
+    _run_private_menu_command(message, lambda: rasp(message, bot))
+
+
+@bot.message_handler(commands=['problems'])
+def command_problems(message):
+    from taskboard import task_board
+    _run_private_menu_command(message, lambda: task_board(message, bot))
+
+
+@bot.message_handler(commands=['account'])
+def command_account(message):
+    from account import account_settings
+    _run_private_menu_command(message, lambda: account_settings(message, bot))
+
+
+@bot.message_handler(commands=['consumables'])
+def command_consumables(message):
+    from consumables import consumables_menu
+    _run_private_menu_command(message, lambda: consumables_menu(message, bot))
+
+
+@bot.message_handler(commands=['steam'])
+def command_steam(message):
+    from steamtracker.admin import promotion_admin_menu
+    _run_private_menu_command(message, lambda: promotion_admin_menu(message, bot))
+
+
+@bot.message_handler(commands=['help'])
+def command_help(message):
+    from menu import help as show_help
+    _run_private_menu_command(message, lambda: show_help(bot, message))
+
+
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
 def handle_main_menu(message):
-    if require_role(message, bot, ROLE_EMPLOYEE) and is_spam(message):
+    if require_role(message, bot, ROLE_EMPLOYEE):
         bot.clear_step_handler_by_chat_id(message.chat.id)
         from menu import func
         func(message, bot)

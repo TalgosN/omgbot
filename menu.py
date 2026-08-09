@@ -71,8 +71,7 @@ def hello(chatid, bot):
             buttons.append(OWNER_EMPLOYEE_MODE_BUTTON)
         markup.add(*buttons)
 
-        msg = bot.send_message(chatid, 'Что вы хотите сделать? 👀', reply_markup=markup)
-        bot.register_next_step_handler(msg, func, bot)
+        bot.send_message(chatid, 'Что вы хотите сделать? 👀', reply_markup=markup)
 
 def func(message, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):
@@ -240,7 +239,8 @@ def help_handler(message, bot):
             '🚩 <b>Доска проблем</b> — сообщить о проблеме или проверить задачи.\n'
             '👤 <b>Аккаунт</b> — профиль, синхронизация и статистика.\n'
             '📦 <b>Расходники</b> — проверить или изменить остатки.\n\n'
-            'Команды: /start, /weather, /today, /repair и /roll.'
+            'Команды: /start, /menu, /app, /kpi, /shift, /schedule, /problems, '
+            '/account, /consumables, /steam, /weather, /today, /repair, /help и /roll.'
         )
         reply_markup = None
     elif message.text == '🏷 KPI и хештеги':

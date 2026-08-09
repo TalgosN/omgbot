@@ -575,13 +575,6 @@ def _team_snapshot(month, selected_day):
 
 def _club_dashboard(team_rows, problem_counts):
     today = _moscow_today().isoformat()
-    red_by_club = {}
-    for row in team_rows:
-        if row.get('zone') != '🔴' or float(row.get('shifts', 0) or 0) <= 0:
-            continue
-        for club in row.get('clubs', []):
-            red_by_club[club] = red_by_club.get(club, 0) + 1
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -638,7 +631,6 @@ def _club_dashboard(team_rows, problem_counts):
             'changed_at': row[2],
             'on_shift': shift_names.get(row['club'], []),
             'problems': problem_counts.get(row['club'], {'work': 0, 'review': 0}),
-            'red_zone': red_by_club.get(row['club'], 0),
         }
         for row in clubs
         if row['club'] in physical_clubs
@@ -1092,11 +1084,10 @@ def api_home():
         team_rows, management = _team_snapshot(month, selected_day)
         management['problems'] = _task_counts()
         payload['management'] = management
-        if role == ROLE_OWNER:
-            payload['clubs'] = _club_dashboard(
-                team_rows,
-                _problem_counts_by_club(),
-            )
+        payload['clubs'] = _club_dashboard(
+            team_rows,
+            _problem_counts_by_club(),
+        )
     return jsonify(payload)
 
 

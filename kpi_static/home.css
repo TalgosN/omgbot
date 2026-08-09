@@ -85,32 +85,47 @@ button, input, select, textarea { font: inherit; }
 .booking-order { color: var(--purple); font-size: 9px; font-weight: 800; text-decoration: none; }
 .booking-empty { padding: 15px; color: var(--muted); font-size: 10px; text-align: center; }
 .modules-section { margin: 0 0 24px; }
-.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.module-card { display: flex; min-width: 0; min-height: 52px; padding: 9px 7px; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 15px; color: white; text-align: center; text-decoration: none; box-shadow: 0 9px 20px rgba(50,32,94,.15); transition: transform .18s ease, box-shadow .18s ease; }
+.module-grid { display:grid; gap:7px; }
+.module-card { display:grid; min-width:0; min-height:60px; padding:10px 14px; grid-template-columns:minmax(90px,.8fr) minmax(0,1.3fr) auto; align-items:center; gap:10px; overflow:hidden; border:1px solid rgba(255,255,255,.18); border-radius:16px; color:white; text-decoration:none; box-shadow:0 9px 20px rgba(50,32,94,.15); transition:transform .18s ease,box-shadow .18s ease; }
 .module-card:active { transform: scale(.985); }
-.module-card strong { max-width: 100%; overflow: hidden; font-family: Furore, "Russo One", sans-serif; font-size: clamp(9px, 3vw, 13px); letter-spacing: .015em; text-overflow: ellipsis; white-space: nowrap; }
-.module-card small { margin-top: 3px; color: rgba(255,255,255,.7); font-size: 7px; font-weight: 700; }
+.module-card::after { content:'›'; display:grid; width:25px; height:25px; place-items:center; border:1px solid rgba(255,255,255,.22); border-radius:9px; background:rgba(255,255,255,.09); font-size:17px; }
+.module-card strong { max-width:100%; overflow:hidden; font-family:Furore,"Russo One",sans-serif; font-size:clamp(12px,4vw,16px); letter-spacing:.015em; text-overflow:ellipsis; white-space:nowrap; }
+.module-card small { color:rgba(255,255,255,.72); font-size:8px; font-weight:650; line-height:1.35; }
 .kpi-module { background: linear-gradient(145deg, #7046d9, #3e238d); }
 .problem-module { background: linear-gradient(145deg, #a24de1, #6e2ea7); }
 .shift-module { background: linear-gradient(145deg, #21a99b, #106c68); }
 .management-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .management-grid .summary-tile { padding: 13px 10px; box-shadow: none; }
 .management-grid .summary-tile strong { font-size: 20px; }
-.club-card { padding: 15px; box-shadow: none; }
+.club-card { padding:0; overflow:hidden; box-shadow:none; }
+.club-card > summary { display:block; padding:15px; cursor:pointer; list-style:none; }
+.club-card > summary::-webkit-details-marker { display:none; }
 .club-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .club-head h3 { margin: 0; font-size: 15px; }
 .club-status { padding: 5px 8px; border-radius: 999px; font-size: 8px; font-weight: 800; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
 .club-status.closed { color: var(--danger); background: rgba(214,75,113,.1); }
-.club-meta { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 7px; margin-top: 12px; }
+.club-shift { margin-top:9px; overflow:hidden; color:var(--muted); font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.club-shift strong { color:var(--ink); }
+.club-meta { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:12px; }
 .club-meta div { padding: 9px; border-radius: 12px; background: rgba(112,70,217,.055); }
 .club-meta span, .club-meta strong { display: block; }
 .club-meta span { color: var(--muted); font-size: 7px; }
 .club-meta strong { margin-top: 3px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.club-card .booking-rows { padding:0 10px 10px; background:rgba(112,70,217,.025); }
+.club-card .booking-empty { border-top:1px solid var(--line); }
+.club-expand { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-top:9px; color:var(--purple); font-size:7px; font-weight:750; }
+.club-expand span { font-size:14px; transition:transform .18s ease; }
+.club-card[open] .club-expand span { transform:rotate(90deg); }
 .empty-card, .error-card { padding: 16px; border: 1px dashed var(--line); border-radius: 18px; color: var(--muted); font-size: 11px; text-align: center; }
 .error-card { margin-top: 16px; color: var(--danger); background: rgba(214,75,113,.07); }
 
 @media (min-width: 650px) {
   .club-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .booking-list.management { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width:390px) {
+  .module-card { grid-template-columns:minmax(84px,.9fr) minmax(0,1fr) auto; padding-inline:11px; gap:7px; }
+  .module-card small { font-size:7px; }
 }

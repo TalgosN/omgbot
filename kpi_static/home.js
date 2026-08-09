@@ -1,6 +1,7 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
 let bookingsLoading = false;
+let homeData = null;
 tg?.ready();
 tg?.expand();
 if (tg) {
@@ -69,6 +70,11 @@ function bookingRows(bookings, callcenter = false) {
 
 function renderBookings(data) {
   const section = $('#bookingsSection');
+  if (data.mode === 'management') {
+    section.hidden = true;
+    renderClubs(homeData, data);
+    return;
+  }
   if (data.mode === 'clubs' && !data.groups.length) {
     section.hidden = true;
     return;
@@ -88,12 +94,11 @@ function renderBookings(data) {
     return;
   }
 
-  const management = data.mode === 'management';
   $('#bookingsEyebrow').textContent = 'Сегодня';
-  $('#bookingsTitle').textContent = management ? 'Брони по клубам' : 'Брони клуба';
-  $('#bookingsList').className = `booking-list${management ? ' management' : ''}`;
+  $('#bookingsTitle').textContent = 'Брони клуба';
+  $('#bookingsList').className = 'booking-list';
   $('#bookingsList').innerHTML = data.groups.map((group) => `
-    <details class="booking-group"${management ? '' : ' open'}>
+    <details class="booking-group" open>
       <summary>
         <div><strong>${escapeHtml(group.club)}</strong><span>👥 ${guestLabel(group.participants)}</span></div>
         <div class="booking-count">${bookingCountLabel(group.count)}</div>
@@ -109,9 +114,15 @@ async function loadBookings() {
   try {
     renderBookings(await api('/api/bookings/today'));
   } catch (error) {
-    $('#bookingsSection').hidden = false;
-    $('#bookingsWarning').hidden = false;
-    $('#bookingsWarning').textContent = `Не удалось обновить брони: ${error.message}`;
+    if (homeData?.management) {
+      renderClubs(homeData);
+      $('#clubsWarning').hidden = false;
+      $('#clubsWarning').textContent = `Не удалось обновить брони: ${error.message}`;
+    } else {
+      $('#bookingsSection').hidden = false;
+      $('#bookingsWarning').hidden = false;
+      $('#bookingsWarning').textContent = `Не удалось обновить брони: ${error.message}`;
+    }
   } finally {
     bookingsLoading = false;
   }
@@ -149,24 +160,50 @@ function renderManagement(data) {
   `;
 }
 
-function renderClubs(data) {
-  if (!data.clubs.length) return;
+function renderClubs(data, bookingsData = null) {
+  if (!data?.clubs.length) return;
   $('#clubsSection').hidden = false;
-  $('#clubList').innerHTML = data.clubs.map((club) => {
+  $('#clubsFreshness').textContent = bookingsData
+    ? syncTime(bookingsData.last_synced_at)
+    : 'Брони загружаются…';
+  $('#clubsWarning').hidden = !bookingsData?.stale;
+  $('#clubsWarning').textContent = bookingsData?.stale
+    ? '⚠️ Данные броней давно не обновлялись. Показано последнее успешное состояние.'
+    : '';
+  const groups = new Map(
+    (bookingsData?.groups || []).map((group) => [group.club, group]),
+  );
+  const clubs = [...data.clubs].sort((left, right) => {
+    const statusOrder = Number(left.status === 'Открыт') - Number(right.status === 'Открыт');
+    if (statusOrder) return statusOrder;
+    const leftProblems = Number(left.problems.work) + Number(left.problems.review);
+    const rightProblems = Number(right.problems.work) + Number(right.problems.review);
+    return rightProblems - leftProblems || left.club.localeCompare(right.club, 'ru');
+  });
+  $('#clubList').innerHTML = clubs.map((club) => {
     const opened = club.status === 'Открыт';
     const people = club.on_shift.length ? club.on_shift.join(', ') : 'Никого';
+    const group = groups.get(club.club) || {
+      count: 0, participants: 0, bookings: [],
+    };
+    const nearest = group.bookings.find((booking) => !bookingIsPast(booking));
     return `
-      <article class="club-card">
-        <div class="club-head">
-          <h3>${escapeHtml(club.club)}</h3>
-          <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
-        </div>
-        <div class="club-meta">
-          <div title="${escapeHtml(people)}"><span>Сегодня на смене</span><strong>${escapeHtml(people)}</strong></div>
-          <div><span>Проблемы</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></div>
-          <div><span>Красная зона</span><strong>${club.red_zone}</strong></div>
-        </div>
-      </article>
+      <details class="club-card">
+        <summary>
+          <div class="club-head">
+            <h3>${escapeHtml(club.club)}</h3>
+            <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
+          </div>
+          <div class="club-shift" title="${escapeHtml(people)}">На смене: <strong>${escapeHtml(people)}</strong></div>
+          <div class="club-meta">
+            <div><span>Брони</span><strong>${bookingsData ? bookingCountLabel(group.count) : '—'}</strong></div>
+            <div><span>Ближайшая</span><strong>${nearest ? timeLabel(nearest.start) : '—'}</strong></div>
+            <div><span>Проблемы</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></div>
+          </div>
+          <div class="club-expand">${bookingsData ? (group.count ? 'Показать брони' : 'Броней на сегодня нет') : 'Брони загружаются…'} <span>›</span></div>
+        </summary>
+        ${bookingsData ? bookingRows(group.bookings) : ''}
+      </details>
     `;
   }).join('');
 }
@@ -174,6 +211,7 @@ function renderClubs(data) {
 async function load() {
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
+    homeData = data;
     $('#userBadge').textContent = me.role_name;
     $('#welcomeTitle').textContent = `Привет, ${me.name}`;
     $('#welcomeDate').textContent = new Intl.DateTimeFormat('ru-RU', {

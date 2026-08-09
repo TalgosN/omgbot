@@ -83,6 +83,15 @@ class HelpMenuTest(unittest.TestCase):
         )
         bot.register_next_step_handler.assert_called_once()
 
+    def test_main_menu_does_not_install_persistent_next_step_handler(self):
+        bot = Mock()
+        self.menu.funclist = {0: ('Обычная кнопка',)}
+        self.menu.get_user.return_value = {'status': 0, 'nick_name': 'Тест'}
+
+        self.menu.hello(123, bot)
+
+        bot.register_next_step_handler.assert_not_called()
+
     def test_resource_links_include_shift_and_all_sheets(self):
         with patch.dict(os.environ, {
             'STEAMTRACKER_SPREADSHEET_ID': 'current-steam-sheet',

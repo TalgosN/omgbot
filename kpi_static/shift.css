@@ -1,13 +1,14 @@
-.shift-shell { position:relative; z-index:1; width:min(100%,680px); margin:0 auto; padding:max(18px,env(safe-area-inset-top)) 16px 34px; }
-.shift-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.shift-back { color:var(--purple); font-size:10px; font-weight:750; text-decoration:none; }
-.shift-hero { margin:38px 0 22px; }
-.shift-hero h1 { margin:6px 0 9px; color:#126b67; font-family:Furore,"Russo One",sans-serif; font-size:clamp(34px,11vw,56px); letter-spacing:.02em; }
-.shift-hero > p:last-child { max-width:470px; margin:0; color:var(--muted); font-size:11px; line-height:1.6; }
+.shift-shell { position:relative; z-index:1; width:min(100%,760px); margin:0 auto; padding:calc(18px + env(safe-area-inset-top)) 16px 60px; }
+.shift-header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; }
+.shift-back { color:#8de3d8; font-size:9px; font-weight:750; text-decoration:none; }
+.user-badge { padding:8px 11px; border:1px solid var(--line); border-radius:999px; color:var(--muted); background:var(--card); font-size:9px; font-weight:750; }
+.shift-hero { margin:42px 0 22px; }
+.shift-hero h1 { margin:6px 0 9px; color:var(--ink); font-family:Furore,"Russo One",sans-serif; font-size:clamp(36px,10vw,54px); font-weight:400; letter-spacing:.025em; text-shadow:0 0 28px rgba(77,224,199,.42); }
+.shift-hero > p:last-child { max-width:470px; margin:0; color:var(--muted); font-size:10px; line-height:1.6; }
 .shift-actions { display:grid; gap:10px; }
-.shift-action { position:relative; display:flex; min-height:112px; padding:17px; align-items:center; gap:14px; overflow:hidden; border:1px solid rgba(255,255,255,.2); border-radius:22px; color:white; text-decoration:none; box-shadow:0 17px 36px rgba(22,89,87,.2); }
-.shift-action.primary { background:linear-gradient(145deg,#25aa9e,#116c69); }
-.shift-action.management { background:linear-gradient(145deg,#7046d9,#4d2aa9); }
+.shift-action { position:relative; display:flex; min-height:104px; padding:17px; align-items:center; gap:14px; overflow:hidden; border:1px solid rgba(255,255,255,.18); border-radius:20px; color:white; text-decoration:none; box-shadow:0 18px 48px rgba(0,0,0,.24); backdrop-filter:blur(16px); }
+.shift-action.primary { background:linear-gradient(145deg,#2563eb,#1e3a8a); }
+.shift-action.management { background:linear-gradient(145deg,#21b8a8,#08766f); }
 .shift-action-icon { display:grid; width:42px; height:42px; flex:0 0 auto; place-items:center; border:1px solid rgba(255,255,255,.25); border-radius:14px; background:rgba(255,255,255,.11); font-size:19px; font-weight:800; }
 .shift-action div { min-width:0; }
 .shift-action small,.shift-action strong,.shift-action p { display:block; }
@@ -15,6 +16,7 @@
 .shift-action strong { margin-top:5px; font-family:Furore,"Russo One",sans-serif; font-size:17px; }
 .shift-action p { margin:6px 0 0; color:rgba(255,255,255,.75); font-size:9px; line-height:1.45; }
 .shift-action:active { transform:scale(.988); }
+.error-card { padding:16px; border:1px dashed var(--line); border-radius:18px; color:var(--danger); background:rgba(255,120,150,.08); font-size:11px; text-align:center; }
 #shiftError { margin-top:12px; }
 
 @media (min-width:620px) {

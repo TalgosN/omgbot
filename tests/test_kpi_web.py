@@ -96,8 +96,15 @@ class KpiWebTest(unittest.TestCase):
             )
             self.assertIn('class="module-card shift-module" href="/shift"', html)
             self.assertNotIn('id="shiftConfigModule"', html)
+            self.assertIn('Сегодня в клубах', html)
         finally:
             response.close()
+
+        script = self.client.get('/static/home.js')
+        try:
+            self.assertNotIn(b'club.red_zone', script.data)
+        finally:
+            script.close()
 
     def test_shift_module_is_visible_to_employee_and_unlocks_manager_tools(self):
         with (
@@ -163,7 +170,6 @@ class KpiWebTest(unittest.TestCase):
             'status': 'Открыт',
             'on_shift': ['Сотрудник'],
             'problems': {'work': 1, 'review': 0},
-            'red_zone': 0,
         }]
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
@@ -190,6 +196,38 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(payload['upcoming_shifts'], [])
         self.assertEqual(payload['clubs'], clubs)
         upcoming.assert_not_called()
+
+    def test_manager_home_also_contains_operational_club_dashboard(self):
+        clubs = [{
+            'club': 'Ленинский',
+            'status': 'Открыт',
+            'on_shift': ['Менеджер'],
+            'problems': {'work': 0, 'review': 1},
+        }]
+        management = {
+            'participants': 1,
+            'average_pct': 0.9,
+            'red_zone': 0,
+            'active_penalties': 0,
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+            patch.object(kpi_web, 'calculate_monthly_kpi', return_value=[]),
+            patch.object(
+                kpi_web, '_team_snapshot', return_value=([], management),
+            ),
+            patch.object(
+                kpi_web, '_task_counts', return_value={'work': 0, 'review': 1},
+            ),
+            patch.object(kpi_web, '_problem_counts_by_club', return_value={}),
+            patch.object(kpi_web, '_club_dashboard', return_value=clubs),
+        ):
+            response = self.client.get('/api/home', headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['clubs'], clubs)
 
     def test_club_employee_sees_only_today_shift_club_bookings(self):
         groups = [{
