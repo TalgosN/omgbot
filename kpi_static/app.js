@@ -309,13 +309,8 @@ function renderMyKpi() {
     container.innerHTML = `
       <article class="owner-dashboard">
         <div class="owner-dashboard-head">
-          <div>
-            <p class="eyebrow">Сводка владельца · ${dayLabel(state.day)}</p>
-            <h2>Команда сегодня</h2>
-          </div>
-          <button class="secondary-button open-owner-settings" type="button">
-            Настройки KPI
-          </button>
+          <p class="eyebrow">Сводка владельца · ${dayLabel(state.day)}</p>
+          <h2>Команда сегодня</h2>
         </div>
         <div class="owner-summary-grid">
           <div><span>В рейтинге</span><strong>${participants.length}</strong></div>
@@ -328,6 +323,9 @@ function renderMyKpi() {
           ${movementCard('Лучший рост', growth, 'positive')}
           ${movementCard('Снижение', decline, 'negative')}
         </div>
+        <button class="secondary-button open-owner-settings owner-settings-button" type="button">
+          <span>Настройки KPI</span><span>→</span>
+        </button>
       </article>
     `;
     return;
@@ -1114,7 +1112,8 @@ async function initialize() {
   updateChartOptions();
   try {
     state.me = await api('/api/me');
-    $('#userBadge').textContent = `${state.me.name} · ${state.me.role_name}`;
+    $('#kpiUserName').textContent = `${state.me.name} · Команда OMG VR`;
+    $('#userBadge').textContent = state.me.role_name;
     $('#userBadge').classList.remove('skeleton');
     if (state.me.can_edit_settings) {
       $('#settingsTab').hidden = false;

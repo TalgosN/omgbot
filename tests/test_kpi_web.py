@@ -111,6 +111,33 @@ class KpiWebTest(unittest.TestCase):
         finally:
             script.close()
 
+    def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
+        response = self.client.get('/kpi')
+        try:
+            kpi_html = response.get_data(as_text=True)
+            self.assertNotIn('class="home-link"', kpi_html)
+            self.assertIn('id="kpiUserName"', kpi_html)
+        finally:
+            response.close()
+
+        response = self.client.get('/problems')
+        try:
+            taskboard_html = response.get_data(as_text=True)
+            self.assertLess(
+                taskboard_html.index('id="newProblem"'),
+                taskboard_html.index('id="repairCatalog"'),
+            )
+        finally:
+            response.close()
+
+        response = self.client.get('/static/app.js')
+        try:
+            app_script = response.get_data(as_text=True)
+            self.assertIn('owner-settings-button', app_script)
+            self.assertIn("state.me.role_name", app_script)
+        finally:
+            response.close()
+
     def test_home_places_compact_shift_module_before_dashboard(self):
         response = self.client.get('/')
         try:

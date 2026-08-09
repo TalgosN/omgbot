@@ -153,6 +153,7 @@ h2 { font-size: 24px; letter-spacing: -0.035em; }
   position: relative;
   flex: 1;
   min-width: 165px;
+  text-align: center;
   cursor: pointer;
 }
 
@@ -211,6 +212,7 @@ input, textarea {
 }
 
 .status-button { background: rgba(110, 242, 178, 0.12); color: var(--success); }
+.period-panel .status-button { width: 100%; flex: 0 0 100%; }
 .status-button.closed { background: rgba(255, 209, 102, 0.12); color: var(--warning); }
 .primary-button { width: 100%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; }
 .secondary-button { background: var(--surface-2); color: var(--text); }
@@ -455,14 +457,12 @@ input, textarea {
 }
 
 .owner-dashboard-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: block;
 }
 
 .owner-dashboard-head h2 { margin-top: 3px; font-size: 21px; }
-.owner-dashboard-head .secondary-button { width: auto; white-space: nowrap; }
+.owner-dashboard-head .eyebrow { white-space: nowrap; }
+.owner-settings-button { display:flex; width:100%; margin-top:14px; align-items:center; justify-content:space-between; }
 
 .owner-summary-grid {
   display: grid;
