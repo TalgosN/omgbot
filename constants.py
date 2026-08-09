@@ -2,6 +2,7 @@ import os
 import json
 from dotenv import load_dotenv
 from club_config import get_clubs, get_clublist, get_clublist_task, get_schedule_locations
+from task_notifications import BOT_TASK_TYPE, GENERAL_TASK_TYPE, REPAIR_TASK_TYPE
 
 load_dotenv()
 
@@ -59,7 +60,7 @@ col=3 # Пока не знаю что это
 
 ## Доска проблем
 funclist_task=("➕ Добавить", "⭕ Текущие", "👀 Рассматриваемые", "🛠 Ремонт", "🤖 Улучшения бота", "✔ Выполненные")
-messtype=("Вопрос/жалоба/предложение","Ремонт", "Улучшение бота")
+messtype=(GENERAL_TASK_TYPE, REPAIR_TASK_TYPE, BOT_TASK_TYPE)
 taskto=("Обработать","Выбрать другое") 
 statuses=("В работе", "Выполнено", "Отклонено")
 admin_funclist = ['📢 Рассылки', '📊 KPI сотрудников', '📝 Сценарии смен', '📦 Расходники (Админ)', '🧰 Дополнительно', '⬅️ Вернуться']

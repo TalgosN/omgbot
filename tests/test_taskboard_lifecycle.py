@@ -158,7 +158,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
             if call.args[0] == self.taskboard.CHATS['main_group']
         )
         self.assertNotIn('@', main_message)
-        self.assertTrue(main_message.startswith('👀 <b>Решение'))
+        self.assertTrue(main_message.startswith('👀 <b>Ответ'))
 
 
 if __name__ == '__main__':

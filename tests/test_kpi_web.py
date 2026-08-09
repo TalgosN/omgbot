@@ -405,6 +405,21 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         editor.assert_not_called()
 
+    def test_problem_form_uses_general_request_type(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_clubs', return_value={'Марьино': {}}),
+        ):
+            response = self.client.get('/api/problems-meta', headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['types'], [
+            'Общее обращение',
+            'Ремонт',
+            'Улучшение бота',
+        ])
+
     def test_mini_app_creates_anonymous_problem_in_shared_tasks_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'tasks.db'

@@ -4,9 +4,32 @@ import sqlite3
 from datetime import datetime, timedelta
 import pytz
 from permissions import ROLE_EMPLOYEE, ROLE_TECHNICIAN, require_role, role_of
+from task_notifications import (
+    BOT_TASK_TYPE,
+    GENERAL_TASK_TYPE,
+    REPAIR_TASK_TYPE,
+    created_task_notification,
+    progress_task_notification,
+)
 
 TASK_DB_PATH = 'db/omgbot.sql'
 TASK_REVIEW_DAYS = 14
+
+
+def _task_type_intro(task_type):
+    if task_type == GENERAL_TASK_TYPE:
+        return (
+            'Здесь можно анонимно задать вопрос, оставить жалобу или предложить '
+            'идею по работе клуба. Коротко напиши тему, а следующим сообщением '
+            'расскажи подробнее.'
+        )
+    return TEXTS['messtype_dict'][task_type]
+
+
+def _task_type_fill(task_type):
+    if task_type == GENERAL_TASK_TYPE:
+        return 'обращения'
+    return TEXTS['messtype_fill'][task_type]
 
 ##### taskdesk
 
@@ -110,8 +133,8 @@ def add_title(message,task_type,bot):
         club_task=message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id, TEXTS['messtype_dict'][task_type])
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id, _task_type_intro(task_type))
+        bot.send_message(message.chat.id,f'Напиши название (суть) {_task_type_fill(task_type)} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
 
     else:
@@ -131,7 +154,7 @@ def add_desc(message,task_type,club_task,bot):
     elif message.photo:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {_task_type_fill(task_type)} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Название не должно быть фотографией!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
         
@@ -139,14 +162,14 @@ def add_desc(message,task_type,club_task,bot):
 
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {_task_type_fill(task_type)} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Слишком длинное! Максимум 50 символов!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
 
     elif message.text.isnumeric():
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши название (суть) {TEXTS["messtype_fill"][task_type]} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши название (суть) {_task_type_fill(task_type)} (не более 50-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Название проблемы не должно состоять только из числа!")
         bot.register_next_step_handler(message, add_desc,task_type,club_task,bot)
         
@@ -156,7 +179,7 @@ def add_desc(message,task_type,club_task,bot):
         title = message.text
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {_task_type_fill(task_type)} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
 
 def add_photo(message, task_type,title,club_task,bot):
@@ -168,7 +191,7 @@ def add_photo(message, task_type,title,club_task,bot):
     elif message.photo:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {_task_type_fill(task_type)} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Описание не должно быть фотографией! На следующем этапе ты сможешь добавить фото, сейчас напиши только текст.")
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
     
@@ -176,7 +199,7 @@ def add_photo(message, task_type,title,club_task,bot):
 
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
         markup.add("Вернуться")
-        bot.send_message(message.chat.id,f'Напиши описание {TEXTS["messtype_fill"][task_type]} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
+        bot.send_message(message.chat.id,f'Напиши описание {_task_type_fill(task_type)} (не более 1000-ти симоволов) или если хочешь сменить тип обращения, нажми "Вернуться"', reply_markup=markup)
         bot.send_message(message.chat.id, "Слишком длинное! Максимум 1000 символов!")
         bot.register_next_step_handler(message, add_photo,task_type,title,club_task,bot)
     
@@ -235,45 +258,37 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         return # <-- ИСПРАВЛЕНИЕ: прерываем выполнение, ждем фото
 
     # 2. Подготовка данных
-    t_type_low = task_type.lower()
-    clean_title = title.strip()
-    short_desc = (descrip[:800] + '...') if len(descrip) > 800 else descrip 
-
     clubs = get_clubs()
     club_tag = clubs[club_task]['tag']
-    
-    # ПОЛНЫЙ ТЕКСТ (для канала отчетов)
-    notification_full = (
-        f"⚙️ Добавлена новая проблема-{t_type_low}:\n"
-        f"<b>{clean_title}</b>\n\n"
-        f"📝 <b>Описание:</b>\n{short_desc}"
+    notification_full, notification_short, confirmation = created_task_notification(
+        task_type,
+        club_task,
+        title,
+        descrip,
     )
-    
-    # КОРОТКИЙ ТЕКСТ (для рабочих чатов, как было раньше)
-    notification_short = f"⚙️ Добавлена новая проблема-{t_type_low}: <b>{clean_title}</b>"
     
     # 3. Логика определения тегов
     mentions = ""
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
         mentions = f"{extra} {club_tag}"
         # Отправка в доп. чат для ремонта (КОРОТКО)
         bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n{notification_short}", parse_mode='html')
     
-    elif task_type == 'Улучшение бота':
+    elif task_type == BOT_TASK_TYPE:
         mentions = extra_tags[task_type] 
     
     else:
         mentions = club_tag
 
     # 4. Универсальные уведомления
-    bot.send_message(message.chat.id, f'Отлично, твоя проблема-{t_type_low} добавлена!')
+    bot.send_message(message.chat.id, confirmation)
     
     # В КАНАЛ ОТЧЕТОВ — Полная версия (с фото, если оно есть)
     if photo_id_to_send:
-        bot.send_photo(CHATS['reports'], photo=photo_id_to_send, caption=f"#задачи\n\n{notification_full} @OMGVR_Admin_Bot", parse_mode='html')
+        bot.send_photo(CHATS['reports'], photo=photo_id_to_send, caption=f"#задачи\n\n{notification_full}\n\n@OMGVR_Admin_Bot", parse_mode='html')
     else:
-        bot.send_message(CHATS['reports'], f"#задачи\n\n{notification_full} @OMGVR_Admin_Bot", parse_mode='html')
+        bot.send_message(CHATS['reports'], f"#задачи\n\n{notification_full}\n\n@OMGVR_Admin_Bot", parse_mode='html')
 
     # В РАБОЧИЙ ЧАТ — Короткая версия (всегда текстом, без фото)
     bot.send_message(CHATS['main_group'], f"{mentions}\n\n{notification_short}", parse_mode='html')
@@ -535,20 +550,19 @@ def change_task(message, task_id, answer, bot):
         bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
         
         # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
-        t_type_low = task_type.lower()
-
-        msg_full = (f"👀 <b>Решение по проблеме-{t_type_low}:</b>\n{title}\n\n"
-                    f"💬 <b>Ответ:</b>\n{answer}")
-                    
-        msg_short = (f"👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n"
-                     f"💬 <i>{answer}</i>\n\n"
-                     f"👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>")
+        msg_full, msg_short = progress_task_notification(
+            'solution', task_type, club_task, title, answer,
+        )
 
         bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
         bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
         
-        if task_type == 'Ремонт':
-            bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n👀 <b>Решение по проблеме-{t_type_low}:</b> {title}\n💬 <i>{answer}</i>", parse_mode='HTML')
+        if task_type == REPAIR_TASK_TYPE:
+            bot.send_message(
+                CHATS['repair_extra'],
+                f"@RobinKruzo1\n\n{msg_short}",
+                parse_mode='HTML',
+            )
             
         show_active_tasks(message, bot)
 
@@ -604,28 +618,29 @@ def return_task_to_work(message, task_id, bot):
     # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
     clubs = get_clubs()
     club_tag = clubs[club_task]['tag']
-    t_type_low = task_type.lower()
-    
     mentions = ""
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
         mentions = f"{extra} {club_tag}"
-    elif task_type == 'Улучшение бота':
+    elif task_type == BOT_TASK_TYPE:
         mentions = extra_tags[task_type] 
     else:
         mentions = club_tag
 
-    msg_full = (f"⚠️ <b>Проблема-{t_type_low} возвращена в работу:</b>\n{title}\n\n"
-                f"💬 <b>Причина возврата:</b>\n{reason}")
-                
-    msg_short = (f"{mentions}\n\n⚠️ <b>Проблема-{t_type_low} возвращена в работу:</b> {title}\n"
-                 f"💬 <i>{reason}</i>")
+    msg_full, notification_short = progress_task_notification(
+        'returned', task_type, club_task, title, reason,
+    )
+    msg_short = f"{mentions}\n\n{notification_short}" if mentions else notification_short
 
     bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
     bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
     
-    if task_type == 'Ремонт':
-        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n⚠️ <b>Проблема возвращена в работу:</b> {title}\n💬 <i>{reason}</i>", parse_mode='HTML')
+    if task_type == REPAIR_TASK_TYPE:
+        bot.send_message(
+            CHATS['repair_extra'],
+            f"@RobinKruzo1\n\n{notification_short}",
+            parse_mode='HTML',
+        )
         
     show_review_tasks(message, bot)
 

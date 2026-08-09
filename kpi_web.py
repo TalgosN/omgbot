@@ -66,6 +66,13 @@ from shift_config_store import (
     rollback_version,
     save_editor_config,
 )
+from task_notifications import (
+    BOT_TASK_TYPE,
+    GENERAL_TASK_TYPE,
+    REPAIR_TASK_TYPE,
+    created_task_notification,
+    progress_task_notification,
+)
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -687,13 +694,13 @@ def _notification_bot():
 
 def _problem_mentions(task_type, club):
     club_tag = str(get_clubs().get(club, {}).get('tag') or '').strip()
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         repair_tag = extra_tags.get(task_type, '')
         return ' '.join(
             value for value in (repair_tag if club_tag != repair_tag else '', club_tag)
             if value
         )
-    if task_type == 'Улучшение бота':
+    if task_type == BOT_TASK_TYPE:
         return extra_tags.get(task_type, '')
     return club_tag
 
@@ -702,19 +709,17 @@ def _send_problem_notification(event, task, message='', photo=None):
     bot = _notification_bot()
     if not bot:
         return
-    title = html.escape(str(task['title']))
     task_type = _normalize_legacy_text(task['type'])
-    type_low = html.escape(task_type.lower())
     mentions = _problem_mentions(task_type, task['club'])
     try:
         if event == 'created':
-            description = html.escape(str(task.get('description') or ''))
-            full = (
-                f"⚙️ Добавлена новая проблема-{type_low}:\n<b>{title}</b>\n\n"
-                f"📝 <b>Описание:</b>\n{description[:800]}"
+            full, short, _confirmation = created_task_notification(
+                task_type,
+                task['club'],
+                task['title'],
+                task.get('description'),
             )
-            short = f"⚙️ Добавлена новая проблема-{type_low}: <b>{title}</b>"
-            report_text = f"#задачи\n\n{full} @OMGVR_Admin_Bot"
+            report_text = f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot"
             if photo and CHATS.get('reports'):
                 photo_file = io.BytesIO(photo)
                 photo_file.name = 'problem.jpg'
@@ -729,23 +734,19 @@ def _send_problem_notification(event, task, message='', photo=None):
                     CHATS['main_group'], f"{mentions}\n\n{short}",
                     parse_mode='HTML',
                 )
-            if task_type == 'Ремонт' and CHATS.get('repair_extra'):
+            if task_type == REPAIR_TASK_TYPE and CHATS.get('repair_extra'):
                 bot.send_message(
                     CHATS['repair_extra'], f"@RobinKruzo1\n\n{short}",
                     parse_mode='HTML',
                 )
         elif event in {'solution', 'returned'}:
-            escaped_message = html.escape(message)
-            if event == 'solution':
-                heading = f"👀 <b>Решение по проблеме-{type_low}:</b>"
-                label = 'Ответ'
-                tail = '\n\n👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>'
-            else:
-                heading = f"⚠️ <b>Проблема-{type_low} возвращена в работу:</b>"
-                label = 'Причина возврата'
-                tail = ''
-            full = f"{heading}\n{title}\n\n💬 <b>{label}:</b>\n{escaped_message}"
-            short = f"{heading} {title}\n💬 <i>{escaped_message}</i>{tail}"
+            full, short = progress_task_notification(
+                event,
+                task_type,
+                task['club'],
+                task['title'],
+                message,
+            )
             if CHATS.get('reports'):
                 bot.send_message(
                     CHATS['reports'], f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot",
@@ -756,10 +757,10 @@ def _send_problem_notification(event, task, message='', photo=None):
                 bot.send_message(
                     CHATS['main_group'], f'{prefix}{short}', parse_mode='HTML',
                 )
-            if task_type == 'Ремонт' and CHATS.get('repair_extra'):
+            if task_type == REPAIR_TASK_TYPE and CHATS.get('repair_extra'):
                 bot.send_message(
                     CHATS['repair_extra'],
-                    f"@RobinKruzo1\n\n{heading} {title}\n💬 <i>{escaped_message}</i>",
+                    f"@RobinKruzo1\n\n{short}",
                     parse_mode='HTML',
                 )
     except Exception as error:
@@ -1259,9 +1260,9 @@ def api_problems_meta():
     return jsonify({
         'clubs': list(get_clubs()),
         'types': [
-            'Вопрос/жалоба/предложение',
-            'Ремонт',
-            'Улучшение бота',
+            GENERAL_TASK_TYPE,
+            REPAIR_TASK_TYPE,
+            BOT_TASK_TYPE,
         ],
         'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
@@ -1486,14 +1487,12 @@ def api_create_problem():
     club = str(request.form.get('club') or '').strip()
     title = str(request.form.get('title') or '').strip()
     description = str(request.form.get('description') or '').strip()
-    allowed_types = {
-        'Вопрос/жалоба/предложение', 'Ремонт', 'Улучшение бота',
-    }
+    allowed_types = {GENERAL_TASK_TYPE, REPAIR_TASK_TYPE, BOT_TASK_TYPE}
     if task_type not in allowed_types:
         raise ValueError('Выберите тип обращения')
     if club not in get_clubs():
         raise ValueError('Выберите клуб')
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         title = 'Ремонт'
     if not title or len(title) > 50 or title.isnumeric():
         raise ValueError('Название должно содержать текст и быть не длиннее 50 символов')
@@ -1501,7 +1500,7 @@ def api_create_problem():
         raise ValueError('Описание должно быть не длиннее 1000 символов')
     item_id = detail_id = None
     location_ids = []
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         try:
             item_id = int(request.form.get('repair_item_id'))
             detail_id = (
@@ -1522,7 +1521,7 @@ def api_create_problem():
         if len(photo) > 6 * 1024 * 1024:
             raise ValueError('Фото должно быть не больше 6 МБ')
 
-    if task_type == 'Ремонт':
+    if task_type == REPAIR_TASK_TYPE:
         initialize_repair_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1535,7 +1534,7 @@ def api_create_problem():
                 (_moscow_today().isoformat(), task_type, club, title, photo, description),
             )
             task_id = cursor.lastrowid
-            if task_type == 'Ремонт':
+            if task_type == REPAIR_TASK_TYPE:
                 title = create_repair_case(
                     conn, task_id, club, item_id, detail_id, location_ids,
                 )
