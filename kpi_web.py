@@ -25,6 +25,7 @@ from bukza import (
     upcoming_unpaid_orders,
 )
 from constants import CHATS, TELEGRAM_API_KEY, extra_tags, get_clubs
+from group_membership import is_main_group_member
 from kpi_calculator import (
     add_penalty,
     calculate_daily_kpi_series,
@@ -77,6 +78,8 @@ OMG_SHIFT_URL = os.getenv(
 ANALYTICS_CACHE_SECONDS = 60
 _analytics_cache = {}
 _analytics_cache_lock = threading.Lock()
+_membership_bot = None
+_membership_bot_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
@@ -239,7 +242,25 @@ def _request_user():
     user = get_user(telegram_id=auth['telegram_id'])
     if not user or user['status'] not in ACTIVE_ROLES:
         return None
+    if not is_main_group_member(
+        _main_group_membership_bot(),
+        CHATS['main_group'],
+        auth['telegram_id'],
+    ):
+        return None
     return dict(user)
+
+
+def _main_group_membership_bot():
+    global _membership_bot
+    if _membership_bot is not None:
+        return _membership_bot
+    if not TELEGRAM_API_KEY:
+        return None
+    with _membership_bot_lock:
+        if _membership_bot is None:
+            _membership_bot = telebot.TeleBot(TELEGRAM_API_KEY)
+    return _membership_bot
 
 
 def require_user(handler):

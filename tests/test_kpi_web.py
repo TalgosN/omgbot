@@ -57,6 +57,15 @@ class KpiWebTest(unittest.TestCase):
         kpi_web.app.config['TESTING'] = True
         self.client = kpi_web.app.test_client()
         self.headers = {'X-Telegram-Init-Data': signed_init_data()}
+        self.membership_patch = patch.object(
+            kpi_web,
+            'is_main_group_member',
+            return_value=True,
+        )
+        self.membership_patch.start()
+
+    def tearDown(self):
+        self.membership_patch.stop()
 
     def test_init_data_signature_and_age_are_validated(self):
         self.assertEqual(
@@ -67,6 +76,22 @@ class KpiWebTest(unittest.TestCase):
             777,
         )
         self.assertIsNone(kpi_web._validate_init_data('hash=wrong', BOT_TOKEN))
+
+    def test_active_user_outside_main_group_cannot_use_api(self):
+        self.membership_patch.stop()
+        self.membership_patch = patch.object(
+            kpi_web,
+            'is_main_group_member',
+            return_value=False,
+        )
+        self.membership_patch.start()
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+        ):
+            response = self.client.get('/api/me', headers=self.headers)
+
+        self.assertEqual(response.status_code, 401)
 
     def test_module_pages_load_shared_swipe_navigation(self):
         for path in ('/kpi', '/problems', '/shift', '/shift-config'):

@@ -2,6 +2,9 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 
+from constants import CHATS
+from group_membership import is_main_group_member
+
 
 DB_PATH = 'db/omgbot.sql'
 
@@ -102,6 +105,14 @@ def get_user(update=None, telegram_id=None):
     return effective_user
 
 
+def can_auto_bind_by_username(user):
+    """Privileged records must be bound to Telegram ID manually."""
+    if not user:
+        return False
+    status = user['status']
+    return status is None or int(status) < ROLE_MANAGER
+
+
 def is_owner_employee_mode(update=None, telegram_id=None):
     user = _get_actual_user(update, telegram_id)
     if not user or int(user['status']) != ROLE_OWNER:
@@ -141,6 +152,12 @@ def require_role(update, bot, minimum=ROLE_EMPLOYEE, notify=True):
     status = user['status'] if user else None
     allowed = status in ACTIVE_ROLES and int(status) >= minimum
     if allowed:
+        allowed = is_main_group_member(
+            bot,
+            CHATS['main_group'],
+            user['chatid'],
+        )
+    if allowed:
         return user
 
     if notify:
@@ -148,6 +165,8 @@ def require_role(update, bot, minimum=ROLE_EMPLOYEE, notify=True):
             text = 'Сначала зарегистрируйтесь: отправьте боту /start в личных сообщениях.'
         elif status == ROLE_BLOCKED:
             text = 'Доступ запрещён. Учётная запись заблокирована.'
+        elif status in ACTIVE_ROLES and int(status) >= minimum:
+            text = 'Бот доступен только участникам основной рабочей группы.'
         else:
             text = f'Недостаточно прав. Требуется роль «{ROLE_NAMES[minimum]}» или выше.'
         _deny(update, bot, text)

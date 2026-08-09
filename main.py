@@ -22,7 +22,13 @@ from kpi import init
 import requests
 from bot_routing import CommandAwareTeleBot, CommandCooldown
 from sender import safe_send
-from permissions import ROLE_EMPLOYEE, get_user, initialize_permissions_schema, require_role
+from permissions import (
+    ROLE_EMPLOYEE,
+    can_auto_bind_by_username,
+    get_user,
+    initialize_permissions_schema,
+    require_role,
+)
 from kpi_calculator import initialize_kpi_calculation_schema
 from repair_catalog import initialize_repair_schema
 
@@ -475,6 +481,13 @@ def start(message):
             ).fetchone()
             if same_login and same_login['chatid'] not in (None, ''):
                 bot.send_message(message.chat.id, 'Этот Telegram username уже привязан к другой учётной записи. Обратитесь к руководству.')
+                return
+            if same_login and not can_auto_bind_by_username(same_login):
+                bot.send_message(
+                    message.chat.id,
+                    'Учётные записи менеджеров и руководителей нельзя привязать автоматически. '
+                    'Обратитесь к действующему руководителю для ручной привязки Telegram ID.',
+                )
                 return
             with conn:
                 if same_login:

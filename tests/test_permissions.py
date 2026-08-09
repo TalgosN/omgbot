@@ -37,8 +37,15 @@ class PermissionsTest(unittest.TestCase):
         conn.close()
         self.db_patch = patch.object(permissions, 'DB_PATH', self.db_path)
         self.db_patch.start()
+        self.membership_patch = patch.object(
+            permissions,
+            'is_main_group_member',
+            return_value=True,
+        )
+        self.membership_patch.start()
 
     def tearDown(self):
+        self.membership_patch.stop()
         self.db_patch.stop()
         os.remove(self.db_path)
 
@@ -64,6 +71,30 @@ class PermissionsTest(unittest.TestCase):
         self.assertIsNotNone(permissions.require_role(update(20), bot, permissions.ROLE_MANAGER))
         self.assertIsNone(permissions.require_role(update(20), bot, permissions.ROLE_OWNER))
         self.assertIsNone(permissions.require_role(update(10), bot, permissions.ROLE_TECHNICIAN))
+
+    def test_active_user_outside_main_group_is_denied(self):
+        bot = Mock()
+        self.membership_patch.stop()
+        self.membership_patch = patch.object(
+            permissions,
+            'is_main_group_member',
+            return_value=False,
+        )
+        self.membership_patch.start()
+
+        self.assertIsNone(
+            permissions.require_role(update(30), bot, permissions.ROLE_OWNER)
+        )
+        bot.send_message.assert_called_once_with(
+            unittest.mock.ANY,
+            'Бот доступен только участникам основной рабочей группы.',
+        )
+
+    def test_privileged_user_cannot_be_auto_bound_by_username(self):
+        self.assertTrue(permissions.can_auto_bind_by_username({'status': None}))
+        self.assertTrue(permissions.can_auto_bind_by_username({'status': 1}))
+        self.assertFalse(permissions.can_auto_bind_by_username({'status': 2}))
+        self.assertFalse(permissions.can_auto_bind_by_username({'status': 3}))
 
     def test_owner_employee_mode_uses_effective_role_without_changing_database(self):
         bot = Mock()
