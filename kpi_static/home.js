@@ -41,6 +41,12 @@ function bookingIsPast(booking) {
   const boundary = booking.end || booking.start;
   return boundary ? new Date(boundary).getTime() < Date.now() : false;
 }
+function bookingIsActive(booking) {
+  const start = booking.start ? new Date(booking.start).getTime() : NaN;
+  const end = booking.end ? new Date(booking.end).getTime() : NaN;
+  const now = Date.now();
+  return Number.isFinite(start) && Number.isFinite(end) && start <= now && now <= end;
+}
 function syncTime(value) {
   if (!value) return 'Нет свежих данных';
   return `Обновлено ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))}`;
@@ -136,6 +142,12 @@ function renderPersonal(data) {
     <div class="summary-tile"><span>KPI за месяц</span><strong>${kpi ? percent(kpi.total_pct) : '—'}</strong></div>
     <div class="summary-tile"><span>Смен за месяц</span><strong>${kpi ? number(kpi.shifts) : '0'}</strong></div>
   `;
+  $('#kpiModuleText').textContent = kpi
+    ? `${number(kpi.shifts)} смен · KPI ${percent(kpi.total_pct)}`
+    : 'Открыть доску KPI';
+  $('#shiftModuleText').textContent = data.upcoming_shifts.length
+    ? `${dateLabel(data.upcoming_shifts[0].date)} · ${data.upcoming_shifts[0].club}`
+    : 'Ближайших смен нет';
   $('#shiftList').innerHTML = data.upcoming_shifts.length
     ? data.upcoming_shifts.map((shift) => `
       <article class="shift-card">
@@ -158,6 +170,10 @@ function renderManagement(data) {
     <div class="summary-tile"><span>Проверка</span><strong>${summary.problems.review}</strong><small>ждут решения</small></div>
     <div class="summary-tile"><span>Штрафы</span><strong>${summary.active_penalties}</strong></div>
   `;
+  $('#problemModuleText').textContent = `${summary.problems.work} в работе · ${summary.problems.review} на проверке`;
+  if (data.role === 3) {
+    $('#kpiModuleText').textContent = `Средний KPI ${percent(summary.average_pct)}`;
+  }
 }
 
 function renderClubs(data, bookingsData = null) {
@@ -186,18 +202,23 @@ function renderClubs(data, bookingsData = null) {
     const group = groups.get(club.club) || {
       count: 0, participants: 0, bookings: [],
     };
-    const nearest = group.bookings.find((booking) => !bookingIsPast(booking));
+    const activeBooking = group.bookings.some(bookingIsActive);
+    const bookingStatus = !opened ? '' : bookingsData
+      ? `<span class="club-booking-status ${activeBooking ? 'active' : 'empty'}">${activeBooking ? '🔥 Идёт бронь' : '● Броней сейчас нет'}</span>`
+      : '<span class="club-booking-status loading">Брони загружаются…</span>';
     return `
       <details class="club-card">
         <summary>
           <div class="club-head">
             <h3>${escapeHtml(club.club)}</h3>
-            <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
+            <div class="club-live-statuses">
+              <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
+              ${bookingStatus}
+            </div>
           </div>
-          <div class="club-shift" title="${escapeHtml(people)}">На смене: <strong>${escapeHtml(people)}</strong></div>
           <div class="club-meta">
+            <div class="club-people" title="${escapeHtml(people)}"><span>На смене</span><strong>${escapeHtml(people)}</strong></div>
             <div><span>Брони</span><strong>${bookingsData ? bookingCountLabel(group.count) : '—'}</strong></div>
-            <div><span>Ближайшая</span><strong>${nearest ? timeLabel(nearest.start) : '—'}</strong></div>
             <div><span>Проблемы</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></div>
           </div>
           <div class="club-expand">${bookingsData ? (group.count ? 'Показать брони' : 'Броней на сегодня нет') : 'Брони загружаются…'} <span>›</span></div>

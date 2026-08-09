@@ -85,12 +85,14 @@ button, input, select, textarea { font: inherit; }
 .booking-order { color: var(--purple); font-size: 9px; font-weight: 800; text-decoration: none; }
 .booking-empty { padding: 15px; color: var(--muted); font-size: 10px; text-align: center; }
 .modules-section { margin: 0 0 24px; }
-.module-grid { display:grid; gap:7px; }
-.module-card { display:grid; min-width:0; min-height:60px; padding:10px 14px; grid-template-columns:minmax(90px,.8fr) minmax(0,1.3fr) auto; align-items:center; gap:10px; overflow:hidden; border:1px solid rgba(255,255,255,.18); border-radius:16px; color:white; text-decoration:none; box-shadow:0 9px 20px rgba(50,32,94,.15); transition:transform .18s ease,box-shadow .18s ease; }
+.module-grid { display:grid; gap:9px; }
+.module-card { position:relative; display:grid; min-width:0; min-height:96px; padding:15px 58px 15px 17px; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:12px; overflow:hidden; border:1px solid rgba(255,255,255,.18); border-radius:20px; color:white; text-decoration:none; box-shadow:0 12px 26px rgba(50,32,94,.17); transition:transform .18s ease,box-shadow .18s ease; }
 .module-card:active { transform: scale(.985); }
-.module-card::after { content:'›'; display:grid; width:25px; height:25px; place-items:center; border:1px solid rgba(255,255,255,.22); border-radius:9px; background:rgba(255,255,255,.09); font-size:17px; }
-.module-card strong { max-width:100%; overflow:hidden; font-family:Furore,"Russo One",sans-serif; font-size:clamp(12px,4vw,16px); letter-spacing:.015em; text-overflow:ellipsis; white-space:nowrap; }
-.module-card small { color:rgba(255,255,255,.72); font-size:8px; font-weight:650; line-height:1.35; }
+.module-card h2 { margin:3px 0 5px; font-family:Furore,"Russo One",sans-serif; font-size:clamp(20px,6vw,26px); letter-spacing:.015em; line-height:1; }
+.module-card small { display:block; color:rgba(255,255,255,.78); font-size:9px; font-weight:650; line-height:1.35; }
+.module-card .eyebrow { color:rgba(255,255,255,.63); font-size:8px; }
+.module-icon { position:absolute; top:13px; right:14px; display:grid; width:34px; height:34px; place-items:center; border:1px solid rgba(255,255,255,.24); border-radius:12px; background:rgba(255,255,255,.1); font-size:17px; font-weight:800; }
+.module-open { align-self:end; color:rgba(255,255,255,.92); font-size:9px; font-weight:800; white-space:nowrap; }
 .kpi-module { background: linear-gradient(145deg, #7046d9, #3e238d); }
 .problem-module { background: linear-gradient(145deg, #a24de1, #6e2ea7); }
 .shift-module { background: linear-gradient(145deg, #21a99b, #106c68); }
@@ -100,18 +102,22 @@ button, input, select, textarea { font: inherit; }
 .club-card { padding:0; overflow:hidden; box-shadow:none; }
 .club-card > summary { display:block; padding:15px; cursor:pointer; list-style:none; }
 .club-card > summary::-webkit-details-marker { display:none; }
-.club-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.club-head h3 { margin: 0; font-size: 15px; }
+.club-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.club-head h3 { margin: 2px 0 0; font-size: 20px; line-height:1.15; }
+.club-live-statuses { display:grid; justify-items:end; gap:5px; }
 .club-status { padding: 5px 8px; border-radius: 999px; font-size: 8px; font-weight: 800; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
 .club-status.closed { color: var(--danger); background: rgba(214,75,113,.1); }
-.club-shift { margin-top:9px; overflow:hidden; color:var(--muted); font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
-.club-shift strong { color:var(--ink); }
-.club-meta { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:12px; }
+.club-booking-status { padding:5px 8px; border-radius:999px; font-size:7px; font-weight:800; white-space:nowrap; }
+.club-booking-status.active { color:#946000; background:rgba(255,193,7,.17); }
+.club-booking-status.empty { color:#37836a; background:rgba(68,170,132,.08); }
+.club-booking-status.loading { color:var(--muted); background:rgba(117,111,141,.08); }
+.club-meta { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,.7fr) minmax(0,1fr); gap:7px; margin-top:12px; }
 .club-meta div { padding: 9px; border-radius: 12px; background: rgba(112,70,217,.055); }
 .club-meta span, .club-meta strong { display: block; }
 .club-meta span { color: var(--muted); font-size: 7px; }
 .club-meta strong { margin-top: 3px; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.club-meta .club-people strong { white-space:normal; }
 .club-card .booking-rows { padding:0 10px 10px; background:rgba(112,70,217,.025); }
 .club-card .booking-empty { border-top:1px solid var(--line); }
 .club-expand { display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-top:9px; color:var(--purple); font-size:7px; font-weight:750; }
@@ -126,6 +132,6 @@ button, input, select, textarea { font: inherit; }
 }
 
 @media (max-width:390px) {
-  .module-card { grid-template-columns:minmax(84px,.9fr) minmax(0,1fr) auto; padding-inline:11px; gap:7px; }
-  .module-card small { font-size:7px; }
+  .module-card { padding-left:14px; padding-right:52px; }
+  .module-open { font-size:8px; }
 }

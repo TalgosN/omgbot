@@ -95,6 +95,9 @@ class KpiWebTest(unittest.TestCase):
                 html.index('id="personalSection"'),
             )
             self.assertIn('class="module-card shift-module" href="/shift"', html)
+            self.assertIn('<span class="module-icon">↗</span>', html)
+            self.assertIn('<span class="module-icon">?</span>', html)
+            self.assertIn('<span class="module-icon">✓</span>', html)
             self.assertNotIn('id="shiftConfigModule"', html)
             self.assertIn('Сегодня в клубах', html)
         finally:
@@ -103,6 +106,9 @@ class KpiWebTest(unittest.TestCase):
         script = self.client.get('/static/home.js')
         try:
             self.assertNotIn(b'club.red_zone', script.data)
+            self.assertNotIn('Ближайшая'.encode(), script.data)
+            self.assertIn('Идёт бронь'.encode(), script.data)
+            self.assertIn('Броней сейчас нет'.encode(), script.data)
         finally:
             script.close()
 
