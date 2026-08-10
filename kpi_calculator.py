@@ -30,6 +30,34 @@ DEFAULT_CLUB_WEIGHTS = {
     'Коллцентр': (0.0, 0.0),
 }
 
+
+def initialize_shift_time_schema(db_path=DB_PATH, connection=None):
+    conn = connection or sqlite3.connect(db_path)
+    owns_connection = connection is None
+    try:
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shifts'"
+        ).fetchone()
+        if not table_exists:
+            return
+        with conn:
+            columns = {
+                row[1] for row in conn.execute('PRAGMA table_info(shifts)')
+            }
+            for column in ('shift_start', 'shift_end'):
+                if column in columns:
+                    continue
+                try:
+                    conn.execute(
+                        f'ALTER TABLE shifts ADD COLUMN {column} TEXT'
+                    )
+                except sqlite3.OperationalError as error:
+                    if 'duplicate column name' not in str(error).lower():
+                        raise
+    finally:
+        if owns_connection:
+            conn.close()
+
 FACT_FIELDS = {
     'Отзывы': 'reviews',
     'Анкеты': 'forms',

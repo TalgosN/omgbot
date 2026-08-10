@@ -191,9 +191,15 @@ class PayrollReportTests(unittest.TestCase):
                 conn, datetime(2026, 7, 20), datetime(2026, 7, 21)
             )
 
-        rows = conn.execute('SELECT dur, source FROM shifts ORDER BY rowid').fetchall()
+        rows = conn.execute(
+            'SELECT dur, source, shift_start, shift_end '
+            'FROM shifts ORDER BY rowid'
+        ).fetchall()
         conn.close()
-        self.assertEqual(rows, [(3, 'omg_shift'), (3, 'omg_shift')])
+        self.assertEqual(rows, [
+            (3, 'omg_shift', '09:00', '12:00'),
+            (3, 'omg_shift', '13:00', '16:00'),
+        ])
         rasp.fetch_schedule_range_from_api.assert_called_once_with(
             '2026-07-20', '2026-07-20'
         )

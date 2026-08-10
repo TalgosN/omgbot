@@ -58,12 +58,18 @@ button, input, select, textarea { font: inherit; }
 .summary-tile span, .summary-tile small { display: block; color: var(--muted); font-size: 9px; }
 .summary-tile strong { display: block; margin-top: 5px; font-size: 23px; }
 .summary-tile.wide { grid-column: 1 / -1; }
+.clickable-card { position:relative; color:inherit; text-decoration:none; cursor:pointer; transition:transform .16s ease, border-color .16s ease; }
+.clickable-card::after { position:absolute; top:8px; right:9px; color:rgba(112,70,217,.55); font-size:14px; font-weight:800; content:'›'; }
+.clickable-card:active { transform:scale(.975); }
+.summary-tile.clickable-card { padding-right:25px; }
 .shift-list, .club-list { display: grid; gap: 9px; }
 .shift-card { display: flex; align-items: center; justify-content: space-between; padding: 15px; }
 .shift-card strong, .shift-card span, .shift-card small { display: block; }
 .shift-card strong { font-size: 16px; }
 .shift-card span { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .shift-card small { color: var(--purple); font-size: 13px; font-weight: 750; }
+.shift-link { padding-right:34px; }
+.shift-link::after { top:50%; right:12px; transform:translateY(-50%); }
 .bookings-freshness { color: var(--muted); font-size: 8px; font-weight: 700; text-align: right; }
 .booking-warning { margin-bottom: 9px; padding: 10px 12px; border: 1px solid rgba(197,136,25,.24); border-radius: 13px; color: #8b5a08; background: rgba(255,201,83,.14); font-size: 9px; }
 .booking-list { display: grid; gap: 9px; }

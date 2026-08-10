@@ -30,7 +30,10 @@ from permissions import (
     initialize_permissions_schema,
     require_role,
 )
-from kpi_calculator import initialize_kpi_calculation_schema
+from kpi_calculator import (
+    initialize_kpi_calculation_schema,
+    initialize_shift_time_schema,
+)
 from repair_catalog import initialize_repair_schema
 
 validate_config()
@@ -437,6 +440,7 @@ initialize_permissions_schema()
 initialize_club_status_dashboard_schema()
 create_tables_KPI()
 initialize_kpi_calculation_schema()
+initialize_shift_time_schema()
 initialize_repair_schema()
 finalize_legacy_kpi_approval()
 kpi.initialize_hashtag_events()

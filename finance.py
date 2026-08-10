@@ -997,13 +997,19 @@ def _fetch_missing_payroll_shifts(conn, start_dt, end_dt):
                 if row_key in seen:
                     continue
                 seen.add(row_key)
-                rows.append((second_name, first_name, date_iso, club, duration, login))
+                rows.append((
+                    second_name, first_name, date_iso, club, duration, login,
+                    shift['start'], shift['end'],
+                ))
 
     if rows:
+        from kpi_calculator import initialize_shift_time_schema
+        initialize_shift_time_schema(connection=conn)
         conn.executemany(
             """INSERT INTO shifts
-               (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source)
-               VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')""",
+               (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login,
+                shift_start, shift_end, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'omg_shift')""",
             rows,
         )
         conn.commit()

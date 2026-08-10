@@ -587,7 +587,10 @@ class KpiTest(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            fresh_rows = [["Новая", "Смена", "2026-07-20", "Клуб", 7.0, "@new"]]
+            fresh_rows = [[
+                "Новая", "Смена", "2026-07-20", "Клуб", 7.0, "@new",
+                "09:00", "16:00",
+            ]]
             with patch.object(self.kpi.pd, "Timestamp", timestamp, create=True), \
                     patch.object(self.kpi.pd, "DateOffset", side_effect=lambda days: timedelta(days=days), create=True), \
                     patch.object(self.kpi.pd, "DataFrame", side_effect=lambda rows, columns: rows, create=True), \
@@ -597,14 +600,15 @@ class KpiTest(unittest.TestCase):
 
             conn = real_connect(db_path)
             rows = conn.execute(
-                "SELECT shift_second_name, date(dt_shift), source FROM shifts ORDER BY dt_shift, source"
+                "SELECT shift_second_name, date(dt_shift), source, shift_start, shift_end "
+                "FROM shifts ORDER BY dt_shift, source"
             ).fetchall()
             conn.close()
             self.assertEqual(rows, [
-                ("Старый", "2026-07-01", "omg_shift"),
-                ("Архив", "2026-07-18", "legacy_shifton"),
-                ("Без", "2026-07-20", None),
-                ("Новая", "2026-07-20", "omg_shift"),
+                ("Старый", "2026-07-01", "omg_shift", None, None),
+                ("Архив", "2026-07-18", "legacy_shifton", None, None),
+                ("Без", "2026-07-20", None, None, None),
+                ("Новая", "2026-07-20", "omg_shift", "09:00", "16:00"),
             ])
 
     def test_omg_shift_duplicate_payload_rows_are_ignored(self):
@@ -629,6 +633,7 @@ class KpiTest(unittest.TestCase):
 
         self.assertEqual(len(rows), 15)
         self.assertTrue(all(row[4] == 6.0 for row in rows))
+        self.assertTrue(all(row[6:8] == ['09:00', '15:00'] for row in rows))
         rasp.fetch_schedule_range_from_api.assert_called_once_with(
             '2026-07-14', '2026-07-28'
         )

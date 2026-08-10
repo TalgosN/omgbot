@@ -352,6 +352,9 @@ async function init() {
     renderFilters();
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
     await loadTasks();
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
+      $('#createDialog').showModal();
+    }
   } catch (error) {
     $('#problemList').innerHTML = `<div class="empty-card">${escapeHtml(error.message)}</div>`;
   }

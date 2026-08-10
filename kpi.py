@@ -20,6 +20,7 @@ from kpi_calculator import (
     compare_with_sheet,
     import_sheet_penalty,
     initialize_kpi_calculation_schema,
+    initialize_shift_time_schema,
     mirror_legacy_penalty,
     set_monthly_stream,
 )
@@ -161,7 +162,10 @@ def fetch_omg_shift_rows(start_date):
                 if shift_key in seen_shifts:
                     continue
                 seen_shifts.add(shift_key)
-                schedule_list.append([s_name, f_name, date_iso, club, dur, telegram or None])
+                schedule_list.append([
+                    s_name, f_name, date_iso, club, dur, telegram or None,
+                    start_t, end_t,
+                ])
 
     return schedule_list
 
@@ -178,13 +182,14 @@ def read_shifts():
     try:
         with conn:
             cur = conn.cursor()
-            cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL, source varchar(30), shift_login varchar(50))')
+            cur.execute('CREATE TABLE IF NOT EXISTS shifts (shift_second_name varchar(50), shift_first_name varchar(50), dt_shift date, club varchar(50), dur REAL, source varchar(30), shift_login varchar(50), shift_start TEXT, shift_end TEXT)')
+            initialize_shift_time_schema(connection=conn)
             cur.execute(
                 "DELETE FROM shifts WHERE dt_shift >= ? AND source = 'omg_shift'",
                 (start_str,),
             )
             cur.executemany(
-                "INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, source) VALUES (?, ?, ?, ?, ?, ?, 'omg_shift')",
+                "INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift, club, dur, shift_login, shift_start, shift_end, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'omg_shift')",
                 schedule_list,
             )
             cur.close()

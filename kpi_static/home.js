@@ -139,8 +139,8 @@ function renderPersonal(data) {
   $('#personalSection').hidden = false;
   const kpi = data.personal_kpi;
   $('#personalSummary').innerHTML = `
-    <div class="summary-tile"><span>KPI за месяц</span><strong>${kpi ? percent(kpi.total_pct) : '—'}</strong></div>
-    <div class="summary-tile"><span>Смен за месяц</span><strong>${kpi ? number(kpi.shifts) : '0'}</strong></div>
+    <a class="summary-tile clickable-card" href="/kpi"><span>KPI за месяц</span><strong>${kpi ? percent(kpi.total_pct) : '—'}</strong></a>
+    <a class="summary-tile clickable-card" href="/shift"><span>Смен за месяц</span><strong>${kpi ? number(kpi.shifts) : '0'}</strong></a>
   `;
   $('#kpiModuleText').textContent = kpi
     ? `${number(kpi.shifts)} смен · KPI ${percent(kpi.total_pct)}`
@@ -150,10 +150,10 @@ function renderPersonal(data) {
     : 'Ближайших смен нет';
   $('#shiftList').innerHTML = data.upcoming_shifts.length
     ? data.upcoming_shifts.map((shift) => `
-      <article class="shift-card">
+      <a class="shift-card clickable-card shift-link" href="/shift">
         <div><strong>${escapeHtml(shift.club)}</strong><span>${dateLabel(shift.date)}</span></div>
         <small>${number(shift.duration)} ч</small>
-      </article>
+      </a>
     `).join('')
     : '<div class="empty-card">Ближайших смен в расписании нет</div>';
 }
@@ -163,12 +163,12 @@ function renderManagement(data) {
   if (!summary) return;
   $('#managementSection').hidden = false;
   $('#managementSummary').innerHTML = `
-    <div class="summary-tile"><span>Средний KPI</span><strong>${percent(summary.average_pct)}</strong></div>
-    <div class="summary-tile"><span>В рейтинге</span><strong>${summary.participants}</strong></div>
-    <div class="summary-tile"><span>Красная зона</span><strong>${summary.red_zone}</strong></div>
-    <div class="summary-tile"><span>Проблемы</span><strong>${summary.problems.work}</strong><small>в работе</small></div>
-    <div class="summary-tile"><span>Проверка</span><strong>${summary.problems.review}</strong><small>ждут решения</small></div>
-    <div class="summary-tile"><span>Штрафы</span><strong>${summary.active_penalties}</strong></div>
+    <a class="summary-tile clickable-card" href="/kpi"><span>Средний KPI</span><strong>${percent(summary.average_pct)}</strong></a>
+    <a class="summary-tile clickable-card" href="/kpi"><span>В рейтинге</span><strong>${summary.participants}</strong></a>
+    <a class="summary-tile clickable-card" href="/kpi"><span>Красная зона</span><strong>${summary.red_zone}</strong></a>
+    <a class="summary-tile clickable-card" href="/problems"><span>Проблемы</span><strong>${summary.problems.work}</strong><small>в работе</small></a>
+    <a class="summary-tile clickable-card" href="/problems"><span>Проверка</span><strong>${summary.problems.review}</strong><small>ждут решения</small></a>
+    <a class="summary-tile clickable-card" href="/kpi"><span>Штрафы</span><strong>${summary.active_penalties}</strong></a>
   `;
   $('#problemModuleText').textContent = `${summary.problems.work} в работе · ${summary.problems.review} на проверке`;
   if (data.role === 3) {

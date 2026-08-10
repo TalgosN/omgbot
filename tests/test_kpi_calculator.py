@@ -99,6 +99,21 @@ class KpiCalculatorTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_shift_time_schema_migration_is_idempotent(self):
+        kpi_calculator.initialize_shift_time_schema(self.db_path)
+        kpi_calculator.initialize_shift_time_schema(self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            columns = {
+                row[1] for row in conn.execute('PRAGMA table_info(shifts)')
+            }
+        finally:
+            conn.close()
+
+        self.assertIn('shift_start', columns)
+        self.assertIn('shift_end', columns)
+
     def test_calculates_sheet_formula_and_weighted_shifts(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute(

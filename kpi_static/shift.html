@@ -26,6 +26,22 @@
       <p>Расписание и инструменты рабочей смены в одном месте.</p>
     </section>
 
+    <section id="employeeShiftDashboard" class="shift-dashboard" hidden>
+      <article id="nearestShift" class="nearest-shift"></article>
+
+      <div class="shift-section-heading">
+        <p class="eyebrow">Расписание</p>
+        <h2>Следующие смены</h2>
+      </div>
+      <div id="upcomingShiftList" class="upcoming-shift-list"></div>
+
+      <div class="shift-section-heading">
+        <p class="eyebrow">Текущий месяц</p>
+        <h2>Моя нагрузка</h2>
+      </div>
+      <div id="shiftMonthSummary" class="shift-month-summary"></div>
+    </section>
+
     <section id="shiftActions" class="shift-actions" hidden>
       <a id="openExternalShift" class="shift-action primary" href="#" target="_blank" rel="noopener">
         <span class="shift-action-icon">↗</span>
@@ -34,6 +50,10 @@
       <a id="openShiftConfig" class="shift-action management" href="/shift-config" hidden>
         <span class="shift-action-icon">✓</span>
         <div><small>Для менеджмента</small><strong>Сценарии смен</strong><p>Вопросы и чек-листы открытия и закрытия</p></div>
+      </a>
+      <a id="reportProblem" class="shift-action taskboard" href="/problems?new=1" hidden>
+        <span class="shift-action-icon">?</span>
+        <div><small>Taskboard</small><strong>Сообщить о проблеме</strong><p>Создать новое обращение</p></div>
       </a>
     </section>
 

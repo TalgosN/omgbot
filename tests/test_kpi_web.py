@@ -166,6 +166,18 @@ class KpiWebTest(unittest.TestCase):
                 script.data.index(b'class="club-shift-summary"'),
                 script.data.index(b'class="club-meta"'),
             )
+            self.assertIn(
+                b'class="summary-tile clickable-card" href="/kpi"',
+                script.data,
+            )
+            self.assertIn(
+                b'class="summary-tile clickable-card" href="/problems"',
+                script.data,
+            )
+            self.assertIn(
+                b'class="shift-card clickable-card shift-link" href="/shift"',
+                script.data,
+            )
         finally:
             script.close()
 
@@ -174,6 +186,13 @@ class KpiWebTest(unittest.TestCase):
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'OMG_SHIFT_URL', 'http://shift.test/'),
             patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[{
+                'date': '2026-08-10', 'club': 'Дмитровка', 'duration': 12.5,
+                'start': '10:00', 'end': '22:30',
+            }]),
+            patch.object(kpi_web, '_shift_month_summary', return_value={
+                'shifts': 8, 'hours': 86.0,
+            }),
         ):
             employee_response = self.client.get(
                 '/api/shift', headers=self.headers,
@@ -183,18 +202,40 @@ class KpiWebTest(unittest.TestCase):
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'OMG_SHIFT_URL', 'http://shift.test/'),
             patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+            patch.object(kpi_web, '_shift_month_summary', return_value={
+                'shifts': 0, 'hours': 0.0,
+            }),
         ):
             manager_response = self.client.get(
                 '/api/shift', headers=self.headers,
             )
 
         self.assertEqual(employee_response.status_code, 200)
-        self.assertEqual(employee_response.get_json(), {
-            'external_url': 'http://shift.test/',
-            'can_manage': False,
+        employee_payload = employee_response.get_json()
+        self.assertEqual(employee_payload['external_url'], 'http://shift.test/')
+        self.assertFalse(employee_payload['can_manage'])
+        self.assertEqual(employee_payload['employee_dashboard']['month_summary'], {
+            'shifts': 8, 'hours': 86.0,
         })
+        self.assertEqual(
+            employee_payload['employee_dashboard']['upcoming_shifts'][0]['club'],
+            'Дмитровка',
+        )
+        self.assertEqual(
+            employee_payload['employee_dashboard']['upcoming_shifts'][0]['start'],
+            '10:00',
+        )
         self.assertEqual(manager_response.status_code, 200)
         self.assertTrue(manager_response.get_json()['can_manage'])
+
+        shift_css = self.client.get('/static/shift.css')
+        try:
+            self.assertIn(b'.shift-actions[hidden]', shift_css.data)
+            self.assertIn(b'.shift-action[hidden]', shift_css.data)
+            self.assertIn(b'display:none !important', shift_css.data)
+        finally:
+            shift_css.close()
 
     def test_owner_is_excluded_from_active_kpi_employees(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -38,6 +38,7 @@ from kpi_calculator import (
     get_kpi_freshness,
     get_kpi_settings,
     initialize_kpi_calculation_schema,
+    initialize_shift_time_schema,
     list_penalties,
     save_kpi_settings,
     set_month_status,
@@ -91,6 +92,7 @@ _membership_bot_lock = threading.Lock()
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
 initialize_bukza_schema(DB_PATH)
+initialize_shift_time_schema(DB_PATH)
 
 
 def _clear_analytics_cache():
@@ -461,7 +463,8 @@ def _upcoming_shifts(login, limit=3):
         rows = conn.execute(
             '''
             SELECT date(substr(sh.dt_shift, 1, 10)), sh.club,
-                   ROUND(SUM(COALESCE(sh.dur, 0)), 1)
+                   ROUND(SUM(COALESCE(sh.dur, 0)), 1),
+                   MIN(sh.shift_start), MAX(sh.shift_end)
             FROM shifts sh
             JOIN users employee ON lower(employee.login)=?
              AND (
@@ -482,9 +485,48 @@ def _upcoming_shifts(login, limit=3):
     finally:
         conn.close()
     return [
-        {'date': row[0], 'club': row[1], 'duration': float(row[2] or 0)}
+        {
+            'date': row[0],
+            'club': row[1],
+            'duration': float(row[2] or 0),
+            'start': row[3],
+            'end': row[4],
+        }
         for row in rows
     ]
+
+
+def _shift_month_summary(login, month):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            '''
+            SELECT COUNT(*), ROUND(SUM(grouped.duration), 1)
+            FROM (
+                SELECT date(substr(sh.dt_shift, 1, 10)), sh.club,
+                       SUM(COALESCE(sh.dur, 0)) AS duration
+                FROM shifts sh
+                JOIN users employee ON lower(employee.login)=?
+                 AND (
+                    (sh.shift_login IS NOT NULL
+                     AND lower(sh.shift_login)=lower(employee.login))
+                    OR
+                    (sh.shift_login IS NULL
+                     AND sh.shift_second_name=employee.second_name
+                     AND sh.shift_first_name=employee.first_name)
+                 )
+                WHERE substr(sh.dt_shift, 1, 7)=?
+                GROUP BY date(substr(sh.dt_shift, 1, 10)), sh.club
+            ) grouped
+            ''',
+            (login, month),
+        ).fetchone()
+    finally:
+        conn.close()
+    return {
+        'shifts': int(row[0] or 0),
+        'hours': float(row[1] or 0),
+    }
 
 
 def _today_shift_clubs(login):
@@ -1163,9 +1205,21 @@ def api_shift_config():
 @app.get('/api/shift')
 @require_user
 def api_shift():
+    role = int(g.kpi_user['status'])
+    today = _moscow_today()
+    dashboard = None
+    if role != ROLE_OWNER:
+        dashboard = {
+            'today': today.isoformat(),
+            'upcoming_shifts': _upcoming_shifts(_actor_login(), limit=4),
+            'month_summary': _shift_month_summary(
+                _actor_login(), today.strftime('%Y-%m'),
+            ),
+        }
     return jsonify({
         'external_url': OMG_SHIFT_URL,
-        'can_manage': int(g.kpi_user['status']) >= ROLE_MANAGER,
+        'can_manage': role >= ROLE_MANAGER,
+        'employee_dashboard': dashboard,
     })
 
 
