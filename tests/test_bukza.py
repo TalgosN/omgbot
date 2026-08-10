@@ -346,6 +346,44 @@ class BukzaTest(unittest.TestCase):
         bot.send_message.assert_called_once()
         self.assertEqual(bot.send_message.call_args.args[0], 'owner')
 
+    def test_test_command_sends_report_to_callcenter_and_confirms_to_manager(self):
+        bot = Mock()
+        message = Mock()
+        message.chat.id = 123
+        with patch.object(
+            bukza,
+            'send_daily_notification',
+            return_value=2,
+        ) as notification, patch.dict(
+            bukza.CHATS,
+            {'callcenter': '-851937975'},
+        ):
+            result = bukza.send_test_notification(message, bot)
+
+        self.assertEqual(result, 2)
+        notification.assert_called_once_with(bot)
+        bot.send_message.assert_called_once_with(
+            123,
+            '✅ Отчёт отправлен в чат Коллцентра. Броней: 2.',
+        )
+
+    def test_test_command_reports_when_no_matching_orders_exist(self):
+        bot = Mock()
+        message = Mock()
+        message.chat.id = -851937975
+        with patch.object(
+            bukza,
+            'send_daily_notification',
+            return_value=0,
+        ):
+            result = bukza.send_test_notification(message, bot)
+
+        self.assertEqual(result, 0)
+        bot.send_message.assert_called_once_with(
+            -851937975,
+            '✅ Проверка завершена. Подходящих броней без предоплаты нет.',
+        )
+
     def test_upcoming_unpaid_orders_excludes_past_paid_and_cancelled(self):
         now = bukza.MOSCOW.localize(datetime(2026, 8, 8, 12, 0))
         orders = [

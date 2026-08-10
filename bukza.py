@@ -907,6 +907,26 @@ def send_daily_notification(bot, today=None):
         return None
 
 
+def send_test_notification(message, bot):
+    result = send_daily_notification(bot)
+    if result is None:
+        bot.send_message(
+            message.chat.id,
+            '❌ Не удалось сформировать отчёт Bukza. Ошибка отправлена руководству.',
+        )
+    elif result == 0:
+        bot.send_message(
+            message.chat.id,
+            '✅ Проверка завершена. Подходящих броней без предоплаты нет.',
+        )
+    elif str(message.chat.id) != str(CHATS['callcenter']):
+        bot.send_message(
+            message.chat.id,
+            f'✅ Отчёт отправлен в чат Коллцентра. Броней: {result}.',
+        )
+    return result
+
+
 if __name__ == '__main__':
     if not BUKZA_EMAIL or not BUKZA_PASSWORD:
         raise SystemExit('Не заданы BUKZA_EMAIL и BUKZA_PASSWORD')

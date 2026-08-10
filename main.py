@@ -24,6 +24,7 @@ from bot_routing import CommandAwareTeleBot, CommandCooldown
 from sender import safe_send
 from permissions import (
     ROLE_EMPLOYEE,
+    ROLE_MANAGER,
     can_auto_bind_by_username,
     get_user,
     initialize_permissions_schema,
@@ -557,6 +558,13 @@ def cmd_today_schedule(message):
             bot.send_message(message.chat.id, text)
         except Exception as e:
             bot.send_message(message.chat.id, f"Произошла ошибка при получении расписания: {e}")
+
+
+@bot.message_handler(commands=['bukza_test'])
+def command_bukza_test(message):
+    if require_role(message, bot, ROLE_MANAGER):
+        from bukza import send_test_notification
+        send_test_notification(message, bot)
 
 @bot.message_handler(commands=['repair'])
 def repair_list(message):
