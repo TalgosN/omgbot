@@ -679,7 +679,8 @@ def _club_dashboard(team_rows, problem_counts):
             '''
             SELECT sh.club,
                    COALESCE(NULLIF(employee.nick_name, ''),
-                            NULLIF(employee.first_name, ''), employee.login)
+                            NULLIF(employee.first_name, ''), employee.login),
+                   employee.login
             FROM shifts sh
             LEFT JOIN users employee ON (
                 sh.shift_login IS NOT NULL
@@ -699,10 +700,13 @@ def _club_dashboard(team_rows, problem_counts):
     finally:
         conn.close()
 
-    shift_names = {}
-    for club, name in shifts:
+    shift_people = {}
+    for club, name, login in shifts:
         if name:
-            shift_names.setdefault(club, []).append(name)
+            people = shift_people.setdefault(club, [])
+            person = {'name': name, 'login': login}
+            if person not in people:
+                people.append(person)
     physical_clubs = {
         name
         for name, settings in get_clubs().items()
@@ -713,7 +717,10 @@ def _club_dashboard(team_rows, problem_counts):
             'club': row['club'],
             'status': _normalize_legacy_text(row['status']),
             'changed_at': row[2],
-            'on_shift': shift_names.get(row['club'], []),
+            'on_shift': [
+                person['name'] for person in shift_people.get(row['club'], [])
+            ],
+            'on_shift_contacts': shift_people.get(row['club'], []),
             'problems': problem_counts.get(row['club'], {'work': 0, 'review': 0}),
         }
         for row in clubs

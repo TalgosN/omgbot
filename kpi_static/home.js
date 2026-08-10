@@ -23,6 +23,10 @@ function dateLabel(value) {
     .format(new Date(year, month - 1, day));
 }
 function timeLabel(value) { return value ? value.slice(11, 16) : '??:??'; }
+function telegramUsername(value) {
+  const username = String(value || '').trim().replace(/^@/, '');
+  return /^[A-Za-z0-9_]{5,32}$/.test(username) ? username : '';
+}
 function guestLabel(value) {
   const count = Number(value || 0);
   const tail = count % 100;
@@ -198,7 +202,18 @@ function renderClubs(data, bookingsData = null) {
   });
   $('#clubList').innerHTML = clubs.map((club) => {
     const opened = club.status === 'Открыт';
-    const people = club.on_shift.length ? club.on_shift.join(', ') : 'Никого';
+    const contacts = club.on_shift_contacts?.length
+      ? club.on_shift_contacts
+      : (club.on_shift || []).map((name) => ({ name, login: '' }));
+    const people = contacts.length
+      ? contacts.map((person) => person.name).join(', ')
+      : 'Никого';
+    const peopleLinks = contacts.length ? contacts.map((person) => {
+      const username = telegramUsername(person.login);
+      return username
+        ? `<a class="shift-person" href="https://t.me/${username}" data-telegram-username="${username}">${escapeHtml(person.name)}</a>`
+        : `<span>${escapeHtml(person.name)}</span>`;
+    }).join('<span class="shift-person-separator">, </span>') : 'Никого';
     const group = groups.get(club.club) || {
       count: 0, participants: 0, bookings: [],
     };
@@ -215,7 +230,7 @@ function renderClubs(data, bookingsData = null) {
           <div class="club-overview">
             <div class="club-shift-summary" title="${escapeHtml(people)}">
               <span>На смене</span>
-              <strong>${escapeHtml(people)}</strong>
+              <strong>${peopleLinks}</strong>
             </div>
             <div class="club-live-statuses">
               <span class="club-status ${opened ? 'open' : 'closed'}">${opened ? '● Открыт' : '● Закрыт'}</span>
@@ -255,6 +270,15 @@ async function load() {
 
 load();
 setInterval(loadBookings, 60 * 1000);
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('[data-telegram-username]');
+  if (!link) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const url = `https://t.me/${link.dataset.telegramUsername}`;
+  if (tg?.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url, '_blank', 'noopener');
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) loadBookings();
 });

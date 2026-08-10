@@ -275,6 +275,8 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn('Идёт бронь'.encode(), script.data)
             self.assertIn('Броней сейчас нет'.encode(), script.data)
             self.assertIn(b'class="club-shift-summary"', script.data)
+            self.assertIn(b'data-telegram-username', script.data)
+            self.assertIn(b'tg.openTelegramLink(url)', script.data)
             self.assertLess(
                 script.data.index(b'class="club-shift-summary"'),
                 script.data.index(b'class="club-meta"'),
@@ -413,6 +415,55 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(payload['upcoming_shifts'], [])
         self.assertEqual(payload['clubs'], clubs)
         upcoming.assert_not_called()
+
+    def test_club_dashboard_includes_shift_telegram_contacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'home.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''
+                CREATE TABLE clubs (club TEXT, status TEXT);
+                CREATE TABLE users (
+                    ID INTEGER PRIMARY KEY,
+                    login TEXT,
+                    first_name TEXT,
+                    second_name TEXT,
+                    nick_name TEXT
+                );
+                CREATE TABLE shifts (
+                    club TEXT,
+                    dt_shift TEXT,
+                    shift_login TEXT,
+                    shift_first_name TEXT,
+                    shift_second_name TEXT
+                );
+                INSERT INTO clubs VALUES ('Марьино', 'Открыт');
+                INSERT INTO users VALUES (
+                    1, '@employee', 'Иван', 'Иванов', 'Ваня'
+                );
+                INSERT INTO shifts VALUES (
+                    'Марьино', '2026-08-10', '@employee', 'Иван', 'Иванов'
+                );
+                '''
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, '_moscow_today', return_value=date(2026, 8, 10)),
+                patch.object(
+                    kpi_web, 'get_clubs',
+                    return_value={'Марьино': {'is_physical': True}},
+                ),
+            ):
+                clubs = kpi_web._club_dashboard([], {})
+
+        self.assertEqual(clubs[0]['on_shift'], ['Ваня'])
+        self.assertEqual(
+            clubs[0]['on_shift_contacts'],
+            [{'name': 'Ваня', 'login': '@employee'}],
+        )
 
     def test_manager_home_also_contains_operational_club_dashboard(self):
         clubs = [{

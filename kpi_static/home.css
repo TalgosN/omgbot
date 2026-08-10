@@ -113,6 +113,9 @@ button, input, select, textarea { font: inherit; }
 .club-shift-summary span, .club-shift-summary strong { display:block; }
 .club-shift-summary span { color:var(--muted); font-size:9px; font-weight:650; }
 .club-shift-summary strong { margin-top:3px; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.shift-person { color:var(--purple-dark); text-decoration:none; border-bottom:1px dashed rgba(77,42,169,.35); }
+.shift-person:active { opacity:.65; }
+.shift-person-separator { color:var(--ink); }
 .club-live-statuses { display:grid; justify-items:end; gap:4px; }
 .club-status { padding:4px 7px; border-radius:999px; font-size:10px; font-weight:800; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
