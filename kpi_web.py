@@ -1058,7 +1058,7 @@ def _shift_report_test_data(scenario, payload):
     return answers, photos
 
 
-def _shift_report_test_messages(scenario, answers, photo_count):
+def _shift_report_test_messages(scenario, answers):
     user = g.kpi_user
     name = user.get('nick_name') or user.get('first_name') or user.get('login')
     login = str(user.get('login') or '—')
@@ -1070,15 +1070,14 @@ def _shift_report_test_messages(scenario, answers, photo_count):
             value for value in (shift.get('start'), shift.get('end')) if value
         ) or 'время не указано'
     )
+    heading_emoji = '🌅' if scenario['action_label'] == 'Открытие' else '🌙'
     heading = '\n'.join([
-        f"🧪 <b>ТЕСТ · {html.escape(scenario['action_label'].upper())} СМЕНЫ</b>",
+        f"{heading_emoji} <b>{html.escape(scenario['action_label'])} смены</b>",
         '',
         f"📍 <b>Клуб:</b> {html.escape(scenario['club'])}",
         f"👤 <b>Сотрудник:</b> {html.escape(str(name))} · {html.escape(login)}",
         f"📅 <b>Смена:</b> {html.escape(str(shift.get('date') or '—'))} · {html.escape(time_label)}",
         f"🕒 <b>Отправлен:</b> {datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m.%Y %H:%M')}",
-        f"🧩 <b>Набор:</b> {html.escape(scenario['variant_label'])}",
-        f"📷 <b>Фотографий:</b> {photo_count}",
         '',
         '⚠️ Статус клуба, рабочая БД, Google Sheets и рабочие чаты не изменены.',
     ])
@@ -1121,36 +1120,68 @@ def _shift_report_test_messages(scenario, answers, photo_count):
     return messages
 
 
-def _send_shift_report_test(scenario, answers, photos):
-    bot = _notification_bot()
-    if not bot:
-        raise RuntimeError('Telegram-бот временно недоступен')
-    for message in _shift_report_test_messages(scenario, answers, len(photos)):
-        bot.send_message(
-            CAMERA_TEST_RECIPIENT_CHAT_ID,
-            message,
-            parse_mode='HTML',
+def _send_shift_report_test_photos(bot, photos, report_caption=None):
+    total = len(photos)
+
+    def caption(index, photo):
+        photo_label = (
+            f"📸 <b>{index}/{total}</b> · "
+            f"{html.escape(photo['question']['text'][:900])}"
         )
-    if len(photos) == 1:
+        if report_caption and index == 1:
+            return f'{report_caption}\n\n{photo_label}'
+        return photo_label
+
+    if total == 1:
         photo = photos[0]
         media_file = io.BytesIO(photo['content'])
         media_file.name = photo['filename']
         bot.send_photo(
             CAMERA_TEST_RECIPIENT_CHAT_ID,
             media_file,
-            caption=f"1/1 · {photo['question']['text'][:900]}",
+            caption=caption(1, photo),
+            parse_mode='HTML',
         )
-    elif photos:
-        media = []
-        for index, photo in enumerate(photos, 1):
-            media_file = io.BytesIO(photo['content'])
-            media_file.name = photo['filename']
-            caption = (
-                f"{index}/{len(photos)} · "
-                f"{photo['question']['text'][:900]}"
-            )
-            media.append(telebot.types.InputMediaPhoto(media_file, caption=caption))
-        bot.send_media_group(CAMERA_TEST_RECIPIENT_CHAT_ID, media=media)
+        return
+
+    media = []
+    for index, photo in enumerate(photos, 1):
+        media_file = io.BytesIO(photo['content'])
+        media_file.name = photo['filename']
+        media.append(telebot.types.InputMediaPhoto(
+            media_file,
+            caption=caption(index, photo),
+            parse_mode='HTML',
+        ))
+    bot.send_media_group(CAMERA_TEST_RECIPIENT_CHAT_ID, media=media)
+
+
+def _send_shift_report_test(scenario, answers, photos):
+    bot = _notification_bot()
+    if not bot:
+        raise RuntimeError('Telegram-бот временно недоступен')
+    messages = _shift_report_test_messages(scenario, answers)
+    if photos and len(messages) == 1:
+        first_photo_label = (
+            f"📸 <b>1/{len(photos)}</b> · "
+            f"{html.escape(photos[0]['question']['text'][:900])}"
+        )
+        unified_caption = f'{messages[0]}\n\n{first_photo_label}'
+        if len(unified_caption) <= 1024:
+            try:
+                _send_shift_report_test_photos(bot, photos, messages[0])
+                return bot
+            except Exception as error:
+                print(f'Единая отправка тестового отчёта не удалась: {error}')
+
+    for message in messages:
+        bot.send_message(
+            CAMERA_TEST_RECIPIENT_CHAT_ID,
+            message,
+            parse_mode='HTML',
+        )
+    if photos:
+        _send_shift_report_test_photos(bot, photos)
     return bot
 
 

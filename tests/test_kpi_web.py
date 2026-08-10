@@ -447,14 +447,15 @@ class KpiWebTest(unittest.TestCase):
         self.assertIn('Количество фотографий', incomplete_response.get_json()['error'])
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['photos'], 2)
-        bot.send_message.assert_called_once()
-        self.assertEqual(bot.send_message.call_args.args[0], '592831529')
-        self.assertIn('ТЕСТ · ОТКРЫТИЕ СМЕНЫ', bot.send_message.call_args.args[1])
+        bot.send_message.assert_not_called()
         bot.send_media_group.assert_called_once()
         self.assertEqual(bot.send_media_group.call_args.args[0], '592831529')
         album = bot.send_media_group.call_args.kwargs['media']
         self.assertEqual(len(album), 2)
+        self.assertIn('🌅 <b>Открытие смены</b>', album[0].caption)
         self.assertIn('Фото клуба', album[0].caption)
+        self.assertNotIn('Набор:', album[0].caption)
+        self.assertNotIn('Фотографий:', album[0].caption)
 
         script = self.client.get('/static/shift_test.js')
         try:
@@ -491,8 +492,47 @@ class KpiWebTest(unittest.TestCase):
             kpi_web._send_shift_report_test(scenario, {}, photos)
 
         bot.send_photo.assert_called_once()
+        bot.send_message.assert_not_called()
         bot.send_media_group.assert_not_called()
+        self.assertIn(
+            '🌙 <b>Закрытие смены</b>',
+            bot.send_photo.call_args.kwargs['caption'],
+        )
         self.assertIn('Фото клуба', bot.send_photo.call_args.kwargs['caption'])
+
+    def test_shift_test_falls_back_when_unified_photo_send_fails(self):
+        bot = Mock()
+        bot.send_photo.side_effect = [RuntimeError('caption rejected'), None]
+        scenario = {
+            'action_label': 'Открытие',
+            'club': 'Тестовый клуб',
+            'variant_label': 'A',
+            'shift': {
+                'date': '2026-08-10', 'start': '10:00', 'end': '22:00',
+            },
+            'questions': [{
+                'id': 'q1', 'position': 1, 'text': 'Фото клуба', 'type': 'photo',
+            }],
+        }
+        photos = [{
+            'content': b'jpeg',
+            'filename': 'q1.jpg',
+            'question': scenario['questions'][0],
+        }]
+        with (
+            kpi_web.app.test_request_context(),
+            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+        ):
+            kpi_web.g.kpi_user = user(0)
+            kpi_web._send_shift_report_test(scenario, {}, photos)
+
+        self.assertEqual(bot.send_photo.call_count, 2)
+        bot.send_message.assert_called_once()
+        self.assertIn(
+            '🌅 <b>Открытие смены</b>',
+            bot.send_message.call_args.args[1],
+        )
 
     def test_camera_photo_is_sent_to_configured_private_chat(self):
         bot = Mock()
