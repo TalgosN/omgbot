@@ -145,6 +145,9 @@ class KpiWebTest(unittest.TestCase):
         response = self.client.get('/problems')
         try:
             taskboard_html = response.get_data(as_text=True)
+            self.assertNotIn('class="back-link"', taskboard_html)
+            self.assertIn('id="problemUserName"', taskboard_html)
+            self.assertIn('id="problemUserBadge"', taskboard_html)
             self.assertLess(
                 taskboard_html.index('id="newProblem"'),
                 taskboard_html.index('id="repairCatalog"'),
@@ -162,9 +165,21 @@ class KpiWebTest(unittest.TestCase):
         finally:
             response.close()
 
+        response = self.client.get('/shift')
+        try:
+            shift_html = response.get_data(as_text=True)
+            self.assertNotIn('class="shift-back"', shift_html)
+            self.assertIn('id="shiftUserName"', shift_html)
+            self.assertIn('id="shiftRole"', shift_html)
+        finally:
+            response.close()
+
         response = self.client.get('/static/app.js')
         try:
             app_script = response.get_data(as_text=True)
+            self.assertIn(
+                'Команда OMG VR · ${state.me.name}', app_script,
+            )
             self.assertIn('owner-settings-button', app_script)
             self.assertIn("state.me.role_name", app_script)
             self.assertIn('omg-kpi-manager-filters', app_script)
@@ -272,9 +287,11 @@ class KpiWebTest(unittest.TestCase):
         try:
             self.assertNotIn(b'club.red_zone', script.data)
             self.assertNotIn('Ближайшая'.encode(), script.data)
-            self.assertIn('Идёт бронь'.encode(), script.data)
-            self.assertIn('Броней сейчас нет'.encode(), script.data)
+            self.assertIn('Есть бронь'.encode(), script.data)
+            self.assertIn('Нет брони'.encode(), script.data)
             self.assertIn(b'class="club-shift-summary"', script.data)
+            self.assertIn(b'class="club-live-statuses"', script.data)
+            self.assertIn(b'class="shift-person"', script.data)
             self.assertIn(b'data-telegram-username', script.data)
             self.assertIn(b'tg.openTelegramLink(url)', script.data)
             self.assertLess(
@@ -295,6 +312,15 @@ class KpiWebTest(unittest.TestCase):
             )
         finally:
             script.close()
+
+        problem_script = self.client.get('/static/problems.js')
+        try:
+            self.assertIn(b'class="media-badge photo"', problem_script.data)
+            self.assertIn(b'class="media-badge video"', problem_script.data)
+            self.assertNotIn('▧'.encode(), problem_script.data)
+            self.assertNotIn('▶'.encode(), problem_script.data)
+        finally:
+            problem_script.close()
 
     def test_shift_module_is_visible_to_employee_and_unlocks_manager_tools(self):
         with (
@@ -329,6 +355,8 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(employee_response.status_code, 200)
         employee_payload = employee_response.get_json()
         self.assertEqual(employee_payload['external_url'], 'http://shift.test/')
+        self.assertEqual(employee_payload['user_name'], 'Тестер')
+        self.assertEqual(employee_payload['role_name'], 'Сотрудник')
         self.assertFalse(employee_payload['can_manage'])
         self.assertEqual(employee_payload['employee_dashboard']['month_summary'], {
             'shifts': 8, 'hours': 86.0,
@@ -342,7 +370,9 @@ class KpiWebTest(unittest.TestCase):
             '10:00',
         )
         self.assertEqual(manager_response.status_code, 200)
-        self.assertTrue(manager_response.get_json()['can_manage'])
+        manager_payload = manager_response.get_json()
+        self.assertTrue(manager_payload['can_manage'])
+        self.assertEqual(manager_payload['role_name'], 'Менеджер')
 
         shift_css = self.client.get('/static/shift.css')
         try:

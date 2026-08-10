@@ -78,6 +78,8 @@ async function loadShift() {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Не удалось открыть OMG Shift');
+  document.querySelector('#shiftUserName').textContent = `Команда OMG VR · ${payload.user_name}`;
+  document.querySelector('#shiftRole').textContent = payload.role_name;
   if (!payload.external_url) throw new Error('Адрес OMG Shift не настроен');
 
   externalLink.href = payload.external_url;
@@ -86,9 +88,6 @@ async function loadShift() {
   renderEmployeeDashboard(payload.employee_dashboard);
   shiftActions.classList.toggle('manager', payload.can_manage);
   shiftActions.hidden = false;
-  document.querySelector('#shiftRole').textContent = payload.can_manage
-    ? 'Менеджмент'
-    : 'Сотрудник';
 }
 
 externalLink.addEventListener('click', (event) => {

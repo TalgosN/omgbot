@@ -139,7 +139,7 @@ function renderList() {
   const tasks = state.tasks.filter((task) => (!club || task.club === club) && (!type || task.type === type));
   $('#problemList').innerHTML = tasks.length ? tasks.map((task) => `
     <button class="problem-card" type="button" data-id="${task.id}">
-      <div class="problem-card-head"><h3>${escapeHtml(task.title)}${task.has_photo ? '<span class="photo-mark">▧</span>' : ''}${task.has_video ? '<span class="photo-mark">▶</span>' : ''}</h3><span class="type-badge">${escapeHtml(task.type)}</span></div>
+      <div class="problem-card-head"><h3>${escapeHtml(task.title)}</h3><div class="problem-card-badges"><span class="type-badge">${escapeHtml(task.type)}</span>${task.has_photo ? '<span class="media-badge photo">● Фото</span>' : ''}${task.has_video ? '<span class="media-badge video">● Видео</span>' : ''}</div></div>
       <p>${escapeHtml(task.club)} · ${dateLabel(task.date)}</p>
     </button>
   `).join('') : '<div class="empty-card">В этом разделе задач нет</div>';
@@ -518,6 +518,8 @@ $('#messageForm').addEventListener('submit', async (event) => {
 async function init() {
   try {
     [state.me, state.meta] = await Promise.all([api('/api/me'), api('/api/problems-meta')]);
+    $('#problemUserName').textContent = `Команда OMG VR · ${state.me.name}`;
+    $('#problemUserBadge').textContent = state.me.role_name;
     renderFilters();
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
     $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);

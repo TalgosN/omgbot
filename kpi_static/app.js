@@ -1206,7 +1206,7 @@ async function initialize() {
   updateChartOptions();
   try {
     state.me = await api('/api/me');
-    $('#kpiUserName').textContent = `${state.me.name} · Команда OMG VR`;
+    $('#kpiUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#userBadge').textContent = state.me.role_name;
     $('#userBadge').classList.remove('skeleton');
     if (state.me.can_edit_settings) {

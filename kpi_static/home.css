@@ -36,7 +36,8 @@ button, input, select, textarea { font: inherit; }
 .brand {
   color: var(--purple-dark);
   font-family: Furore, "Russo One", sans-serif;
-  font-size: clamp(25px, 8vw, 38px);
+  font-size: clamp(34px, 10vw, 48px);
+  line-height: .95;
   letter-spacing: .035em;
 }
 .brand-eyebrow { margin: 0 0 3px; color: var(--purple); }
@@ -108,16 +109,19 @@ button, input, select, textarea { font: inherit; }
 .club-card { padding:0; overflow:hidden; box-shadow:none; }
 .club-card > summary { display:block; padding:13px; cursor:pointer; list-style:none; }
 .club-card > summary::-webkit-details-marker { display:none; }
-.club-head h3 { margin:0; font-size:20px; line-height:1.15; }
-.club-overview { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10px; margin-top:10px; }
+.club-head { display:flex; align-items:center; justify-content:space-between; min-width:0; gap:9px; }
+.club-head h3 { min-width:0; margin:0; font-size:20px; line-height:1.15; }
+.club-overview { margin-top:13px; }
 .club-shift-summary span, .club-shift-summary strong { display:block; }
-.club-shift-summary span { color:var(--muted); font-size:9px; font-weight:650; }
-.club-shift-summary strong { margin-top:3px; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-.shift-person { color:var(--purple-dark); text-decoration:none; border-bottom:1px dashed rgba(77,42,169,.35); }
-.shift-person:active { opacity:.65; }
-.shift-person-separator { color:var(--ink); }
-.club-live-statuses { display:grid; justify-items:end; gap:4px; }
-.club-status { padding:4px 7px; border-radius:999px; font-size:10px; font-weight:800; }
+.club-shift-summary > span { color:var(--muted); font-size:12px; font-weight:750; }
+.club-shift-summary strong.shift-people-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; overflow:visible; font-size:14px; white-space:normal; }
+.shift-person { display:inline-flex; min-height:34px; padding:0 11px; align-items:center; gap:4px; border:1px solid rgba(112,70,217,.16); border-radius:11px; color:var(--purple-dark); text-decoration:none; background:var(--lavender); font-size:13px; font-weight:750; }
+.shift-person i { font-size:10px; font-style:normal; opacity:.65; }
+.shift-person:active { opacity:.65; transform:scale(.98); }
+.shift-person.static { color:var(--ink); }
+.shift-person-empty { color:var(--muted); font-size:13px; font-weight:650; }
+.club-live-statuses { display:flex; flex:none; align-items:center; justify-content:flex-end; gap:4px; }
+.club-status { padding:4px 7px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
 .club-status.closed { color: var(--danger); background: rgba(214,75,113,.1); }
 .club-booking-status { padding:4px 7px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
@@ -145,4 +149,7 @@ button, input, select, textarea { font: inherit; }
 @media (max-width:390px) {
   .module-card { padding-left:14px; padding-right:52px; }
   .module-open { font-size:8px; }
+  .club-head { gap:6px; }
+  .club-head h3 { font-size:18px; }
+  .club-status,.club-booking-status { padding-inline:5px; font-size:8px; }
 }

@@ -1452,6 +1452,12 @@ def api_shift():
         }
     return jsonify({
         'external_url': OMG_SHIFT_URL,
+        'user_name': (
+            g.kpi_user.get('nick_name')
+            or g.kpi_user.get('first_name')
+            or g.kpi_user['login']
+        ),
+        'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
         'camera_test_available': bool(
             TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
