@@ -55,20 +55,42 @@ def _task_identity(task_type, club, title):
     return f"📍 <b>{safe_club}</b>\n{title_icon} <b>{safe_title}</b>"
 
 
-def created_task_notification(task_type, club, title, description):
+def _actor_line(event, actor):
+    if not actor:
+        return ''
+    name = str(actor.get('name') or actor.get('login') or 'Сотрудник').strip()
+    if event == 'completed' and name == 'Система':
+        return '⚙️ <b>Закрыто автоматически</b>'
+    login = str(actor.get('login') or '').strip()
+    display = html.escape(name)
+    if login and login.lower().lstrip('@') != name.lower().lstrip('@'):
+        display += f" ({html.escape(login)})"
+    labels = {
+        'created': '👤 <b>Создал:</b>',
+        'solution': '🧑‍🔧 <b>Ответил:</b>',
+        'returned': '↩️ <b>Вернул в работу:</b>',
+        'completed': '✅ <b>Закрыл:</b>',
+    }
+    return f"{labels[event]} {display}"
+
+
+def created_task_notification(task_type, club, title, description, actor=None):
     copy = _copy(task_type)
     identity = _task_identity(task_type, club, title)
     safe_description = html.escape(str(description or '')[:800])
+    actor = actor if task_type == REPAIR_TASK_TYPE else None
+    actor_line = _actor_line('created', actor)
+    identity_with_actor = f"{identity}\n{actor_line}" if actor_line else identity
     full = (
         f"{copy['created']}\n\n"
-        f"{identity}\n\n"
+        f"{identity_with_actor}\n\n"
         f"📝 <b>Описание:</b>\n{safe_description}"
     )
-    short = f"{copy['created']}\n\n{identity}"
+    short = f"{copy['created']}\n\n{identity_with_actor}"
     return full, short, copy['confirmation']
 
 
-def progress_task_notification(event, task_type, club, title, message):
+def progress_task_notification(event, task_type, club, title, message, actor=None):
     if event not in {'solution', 'returned', 'completed'}:
         raise ValueError('Неизвестное событие обращения')
     copy = _copy(task_type)
@@ -79,7 +101,9 @@ def progress_task_notification(event, task_type, club, title, message):
         '\n\n👉 <b>Проверьте и подтвердите выполнение на доске задач!</b>'
         if event == 'solution' else ''
     )
-    full = f"{copy[event]}\n\n{identity}"
+    actor_line = _actor_line(event, actor)
+    identity_with_actor = f"{identity}\n{actor_line}" if actor_line else identity
+    full = f"{copy[event]}\n\n{identity_with_actor}"
     short = full
     if event != 'completed':
         full += f"\n\n💬 <b>{label}:</b>\n{safe_message}"

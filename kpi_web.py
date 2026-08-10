@@ -77,7 +77,13 @@ from task_notifications import (
     created_task_notification,
     progress_task_notification,
 )
-from task_analytics import build_task_analytics, record_task_event
+from task_analytics import (
+    build_task_analytics,
+    initialize_task_analytics_schema,
+    record_task_event,
+    task_activity_payload,
+    task_actor_snapshot,
+)
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -818,7 +824,9 @@ def _problem_mentions(task_type, club):
     return club_tag
 
 
-def _send_problem_notification(event, task, message='', photo=None, video=None):
+def _send_problem_notification(
+    event, task, message='', photo=None, video=None, actor=None,
+):
     bot = _notification_bot()
     if not bot:
         return None
@@ -832,8 +840,14 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                 task['club'],
                 task['title'],
                 task.get('description'),
+                actor=actor,
             )
             report_text = f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot"
+            repair_chat = (
+                CHATS.get('repair_extra')
+                if task_type == REPAIR_TASK_TYPE else None
+            )
+            telegram_media = None
             if video and CHATS.get('reports'):
                 video_file = io.BytesIO(video['content'])
                 video_file.name = video['filename']
@@ -869,11 +883,27 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                     CHATS['main_group'], f"{mentions}\n\n{short}",
                     parse_mode='HTML',
                 )
-            if task_type == REPAIR_TASK_TYPE and CHATS.get('repair_extra'):
-                bot.send_message(
-                    CHATS['repair_extra'], f"@RobinKruzo1\n\n{short}",
-                    parse_mode='HTML',
-                )
+            if repair_chat:
+                if video and telegram_media:
+                    if video['mimetype'] == 'video/mp4':
+                        bot.send_video(
+                            repair_chat, telegram_media.file_id, caption=full,
+                            parse_mode='HTML', supports_streaming=True,
+                        )
+                    else:
+                        bot.send_document(
+                            repair_chat, telegram_media.file_id, caption=full,
+                            parse_mode='HTML',
+                        )
+                elif photo:
+                    repair_photo = io.BytesIO(photo)
+                    repair_photo.name = 'problem.jpg'
+                    bot.send_photo(
+                        repair_chat, repair_photo, caption=full,
+                        parse_mode='HTML',
+                    )
+                else:
+                    bot.send_message(repair_chat, full, parse_mode='HTML')
         elif event in {'solution', 'returned', 'completed'}:
             full, short = progress_task_notification(
                 event,
@@ -881,6 +911,7 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                 task['club'],
                 task['title'],
                 message,
+                actor=actor,
             )
             if CHATS.get('reports'):
                 bot.send_message(
@@ -894,8 +925,7 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                 )
             if task_type == REPAIR_TASK_TYPE and CHATS.get('repair_extra'):
                 bot.send_message(
-                    CHATS['repair_extra'],
-                    f"@RobinKruzo1\n\n{short}",
+                    CHATS['repair_extra'], full,
                     parse_mode='HTML',
                 )
     except Exception as error:
@@ -1796,6 +1826,7 @@ def api_map_legacy_repair(task_id):
 @require_user
 def api_problem(task_id):
     initialize_repair_schema(DB_PATH)
+    initialize_task_analytics_schema(DB_PATH)
     _initialize_problem_video_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1810,12 +1841,14 @@ def api_problem(task_id):
             (task_id,),
         ).fetchone()
         repair = repair_payload(conn, task_id) if row else None
+        activity = task_activity_payload(conn, task_id) if row else []
     finally:
         conn.close()
     if not row:
         return jsonify({'error': 'Проблема не найдена.'}), 404
     result = _task_payload(row)
     result['repair'] = repair
+    result['activity'] = activity
     return jsonify(result)
 
 
@@ -1917,6 +1950,7 @@ def api_create_problem():
     _initialize_problem_video_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    actor = task_actor_snapshot(g.kpi_user) if task_type == REPAIR_TASK_TYPE else None
     try:
         with conn:
             cursor = conn.execute(
@@ -1926,7 +1960,7 @@ def api_create_problem():
                 (_moscow_today().isoformat(), task_type, club, title, photo, description),
             )
             task_id = cursor.lastrowid
-            record_task_event(conn, task_id, 'created')
+            record_task_event(conn, task_id, 'created', actor=actor)
             if task_type == REPAIR_TASK_TYPE:
                 title = create_repair_case(
                     conn, task_id, club, item_id, detail_id, location_ids,
@@ -1942,7 +1976,7 @@ def api_create_problem():
         conn.close()
     if video:
         video_reference = _send_problem_notification(
-            'created', task, video=video,
+            'created', task, video=video, actor=actor,
         )
         if not video_reference:
             _delete_problem_after_failed_video(task_id, DB_PATH)
@@ -1968,11 +2002,13 @@ def api_create_problem():
         finally:
             conn.close()
     else:
-        _send_problem_notification('created', task, photo=photo)
+        _send_problem_notification('created', task, photo=photo, actor=actor)
     return jsonify({'id': task_id, 'status': 'В работе'}), 201
 
 
-def _change_problem_status(task_id, expected_status, new_status, entry=None):
+def _change_problem_status(
+    task_id, expected_status, new_status, entry=None, actor=None,
+):
     initialize_repair_schema(DB_PATH)
     placeholders, statuses = _status_sql((expected_status,))
     conn = sqlite3.connect(DB_PATH)
@@ -2013,6 +2049,7 @@ def _change_problem_status(task_id, expected_status, new_status, entry=None):
                 conn,
                 task_id,
                 event_types.get(new_status, 'solution'),
+                actor=actor,
             )
             return dict(task)
     finally:
@@ -2029,29 +2066,33 @@ def api_problem_solution(task_id):
     if not solution or len(solution) > 1000:
         raise ValueError('Решение должно быть не длиннее 1000 символов')
     today_short = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m')
+    actor = task_actor_snapshot(g.kpi_user)
     task = _change_problem_status(
         task_id,
         'В работе',
         'На проверке',
         f'<b>[{today_short}] Админ:</b> {html.escape(solution)}',
+        actor=actor,
     )
     if not task:
         return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
-    _send_problem_notification('solution', task, message=solution)
+    _send_problem_notification('solution', task, message=solution, actor=actor)
     return jsonify({'status': 'На проверке'})
 
 
 @app.post('/api/problems/<int:task_id>/confirm')
 @require_user
 def api_problem_confirm(task_id):
+    actor = task_actor_snapshot(g.kpi_user)
     task = _change_problem_status(
         task_id,
         'На проверке',
         'Выполнено',
+        actor=actor,
     )
     if not task:
         return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
-    _send_problem_notification('completed', task)
+    _send_problem_notification('completed', task, actor=actor)
     return jsonify({'status': 'Выполнено'})
 
 
@@ -2063,15 +2104,17 @@ def api_problem_return(task_id):
     if not reason or len(reason) > 1000:
         raise ValueError('Укажите причину возврата не длиннее 1000 символов')
     today_short = datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m')
+    actor = task_actor_snapshot(g.kpi_user)
     task = _change_problem_status(
         task_id,
         'На проверке',
         'В работе',
         f'<b>[{today_short}] Сотрудник:</b> {html.escape(reason)}',
+        actor=actor,
     )
     if not task:
         return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
-    _send_problem_notification('returned', task, message=reason)
+    _send_problem_notification('returned', task, message=reason, actor=actor)
     return jsonify({'status': 'В работе'})
 
 

@@ -277,6 +277,28 @@ async function openTask(taskId) {
     const repairIdentity = repair ? `
       <div class="repair-identity"><span>Оборудование</span><strong>${escapeHtml(repair.item.name)}${repair.detail ? ` · ${escapeHtml(repair.detail.name)}` : ''}</strong><small>${repair.locations.map((location) => escapeHtml(location.name)).join(' · ')}</small></div>
     ` : '';
+    const activityLabels = {
+      created: ['Создано', '👤'],
+      solution: ['Ответ отправлен', '🧑‍🔧'],
+      returned: ['Возвращено в работу', '↩️'],
+      confirmed: ['Выполнено', '✅'],
+    };
+    const taskActivity = task.activity?.length
+      ? task.activity
+      : (task.type === 'Ремонт' ? [{ event_type: 'created', event_at: task.date, actor: null }] : []);
+    const activity = taskActivity.length ? `
+      <section class="task-activity">
+        <div class="history-head"><span>История заявки</span><b>${taskActivity.length}</b></div>
+        ${taskActivity.map((event) => {
+          const [label, icon] = activityLabels[event.event_type] || [event.event_type, '•'];
+          const actor = event.actor
+            ? `${event.actor.name || event.actor.login}${event.actor.login && event.actor.login !== event.actor.name ? ` (${event.actor.login})` : ''}`
+            : (task.type === 'Ремонт' && event.event_type === 'created' ? 'Автор неизвестен' : '');
+          return `<div class="task-activity-row">
+            <i>${icon}</i><div><strong>${escapeHtml(label)}</strong>${actor ? `<span>${escapeHtml(actor)}</span>` : ''}</div><time>${dateTimeLabel(event.event_at)}</time>
+          </div>`;
+        }).join('')}
+      </section>` : '';
     const history = repair ? `
       <section class="repair-history"><div class="history-head"><span>История оборудования</span><b>${repair.history.length}</b></div>
         ${repair.history.map((entry) => `<button type="button" class="history-entry" data-history-task="${entry.task_id}">
@@ -290,6 +312,7 @@ async function openTask(taskId) {
       <div class="detail-description"><span>Описание</span><p>${escapeHtml(task.description)}</p></div>
       ${task.has_photo ? '<div id="detailPhoto" class="empty-card">Загрузка фото…</div>' : ''}
       ${task.has_video ? '<div id="detailVideo" class="empty-card">Загрузка видео…</div>' : ''}
+      ${activity}
       <div class="detail-feedback"><span>История решения</span><p>${escapeHtml(task.feedback || 'Ожидает решения…')}</p></div>
       ${history}
       ${actions ? `<div class="detail-actions">${actions}</div>` : ''}

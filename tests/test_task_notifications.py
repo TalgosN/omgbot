@@ -15,12 +15,15 @@ class TaskNotificationsTest(unittest.TestCase):
             'Клуб <1>',
             'Вопрос & идея',
             '<b>Описание</b>',
+            actor={'name': 'Скрытый автор', 'login': '@hidden'},
         )
 
         self.assertIn('Новое общее обращение', full)
         self.assertIn('Клуб &lt;1&gt;', full)
         self.assertNotIn('Клуб:', full)
         self.assertNotIn('Тема:', full)
+        self.assertNotIn('Скрытый автор', full)
+        self.assertNotIn('@hidden', short)
         self.assertIn('📍 <b>Клуб &lt;1&gt;</b>', short)
         self.assertIn('💬 <b>Вопрос &amp; идея</b>', short)
         self.assertIn('&lt;b&gt;Описание&lt;/b&gt;', full)
@@ -50,6 +53,17 @@ class TaskNotificationsTest(unittest.TestCase):
         self.assertIn('Заявка на ремонт возвращена в работу', returned_short)
         self.assertIn('📍 <b>Марьино</b>', short)
         self.assertIn('🔧 <b>Не работает шлем</b>', short)
+        self.assertNotIn('Нет изображения', short)
+
+        repair_with_actor, repair_short, _ = created_task_notification(
+            REPAIR_TASK_TYPE,
+            'Марьино',
+            'Не работает шлем',
+            'Нет изображения',
+            actor={'name': 'Иван', 'login': '@ivan'},
+        )
+        self.assertIn('Создал:</b> Иван (@ivan)', repair_with_actor)
+        self.assertIn('Создал:</b> Иван (@ivan)', repair_short)
 
         completed_full, completed_short = progress_task_notification(
             'completed', REPAIR_TASK_TYPE, 'Марьино', 'Не работает шлем', '',
@@ -57,6 +71,14 @@ class TaskNotificationsTest(unittest.TestCase):
         self.assertEqual(completed_full, completed_short)
         self.assertIn('Заявка на ремонт выполнена', completed_full)
         self.assertNotIn('Причина возврата', completed_full)
+
+        solution_full, solution_short = progress_task_notification(
+            'solution', REPAIR_TASK_TYPE, 'Марьино', 'Не работает шлем',
+            'Переподключил питание',
+            actor={'name': 'Алексей', 'login': '@alex'},
+        )
+        self.assertIn('Ответил:</b> Алексей (@alex)', solution_full)
+        self.assertIn('Ответил:</b> Алексей (@alex)', solution_short)
 
 
 if __name__ == '__main__':

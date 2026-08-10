@@ -3,7 +3,13 @@ from constants import *
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
-from permissions import ROLE_EMPLOYEE, ROLE_TECHNICIAN, require_role, role_of
+from permissions import (
+    ROLE_EMPLOYEE,
+    ROLE_TECHNICIAN,
+    get_user,
+    require_role,
+    role_of,
+)
 from task_notifications import (
     BOT_TASK_TYPE,
     GENERAL_TASK_TYPE,
@@ -11,10 +17,66 @@ from task_notifications import (
     created_task_notification,
     progress_task_notification,
 )
-from task_analytics import record_task_event
+from task_analytics import (
+    record_task_event,
+    system_task_actor,
+    task_actor_snapshot,
+)
 
 TASK_DB_PATH = 'db/omgbot.sql'
 TASK_REVIEW_DAYS = 14
+
+
+def _task_mentions(task_type, club):
+    club_tag = str(get_clubs().get(club, {}).get('tag') or '').strip()
+    if task_type == REPAIR_TASK_TYPE:
+        repair_tag = extra_tags.get(task_type, '')
+        return ' '.join(
+            value for value in (
+                repair_tag if club_tag != repair_tag else '', club_tag,
+            ) if value
+        )
+    if task_type == BOT_TASK_TYPE:
+        return extra_tags.get(task_type, '')
+    return club_tag
+
+
+def _send_task_notification(
+    bot, event, task_type, club, title, description='', message='',
+    actor=None, photo_id=None,
+):
+    if event == 'created':
+        full, short, _confirmation = created_task_notification(
+            task_type, club, title, description, actor=actor,
+        )
+    else:
+        full, short = progress_task_notification(
+            event, task_type, club, title, message, actor=actor,
+        )
+    report_text = f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot"
+    if photo_id:
+        bot.send_photo(
+            CHATS['reports'], photo=photo_id, caption=report_text,
+            parse_mode='HTML',
+        )
+    else:
+        bot.send_message(CHATS['reports'], report_text, parse_mode='HTML')
+
+    mentions = _task_mentions(task_type, club)
+    prefix = mentions if event in {'created', 'returned', 'completed'} else ''
+    bot.send_message(
+        CHATS['main_group'],
+        f"{prefix}\n\n{short}" if prefix else short,
+        parse_mode='HTML',
+    )
+    if task_type == REPAIR_TASK_TYPE:
+        if photo_id:
+            bot.send_photo(
+                CHATS['repair_extra'], photo=photo_id, caption=full,
+                parse_mode='HTML',
+            )
+        else:
+            bot.send_message(CHATS['repair_extra'], full, parse_mode='HTML')
 
 
 def _task_type_intro(task_type):
@@ -218,6 +280,10 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         return
     today=datetime.today().strftime('%Y-%m-%d')
     photo_id_to_send = None # Инициализируем переменную для фото
+    actor = (
+        task_actor_snapshot(get_user(message))
+        if task_type == REPAIR_TASK_TYPE else None
+    )
 
     if message.text=="Вернуться":
         returnback(message,bot)
@@ -228,7 +294,7 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type, club, title, desc,status) VALUES (?,?,?,?,?,?)""", data_tuple)
-        record_task_event(conn, cur.lastrowid, 'created')
+        record_task_event(conn, cur.lastrowid, 'created', actor=actor)
         conn.commit()
         cur.close()
         conn.close()
@@ -248,7 +314,7 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title, photo_add,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type,club, title, photo, desc,status) VALUES (?,?,?,?,?,?,?)""", data_tuple)
-        record_task_event(conn, cur.lastrowid, 'created')
+        record_task_event(conn, cur.lastrowid, 'created', actor=actor)
         conn.commit()
         cur.close()
         conn.close()
@@ -261,40 +327,19 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         return # <-- ИСПРАВЛЕНИЕ: прерываем выполнение, ждем фото
 
     # 2. Подготовка данных
-    clubs = get_clubs()
-    club_tag = clubs[club_task]['tag']
-    notification_full, notification_short, confirmation = created_task_notification(
+    _notification_full, _notification_short, confirmation = created_task_notification(
         task_type,
         club_task,
         title,
         descrip,
+        actor=actor,
     )
-    
-    # 3. Логика определения тегов
-    mentions = ""
-    if task_type == REPAIR_TASK_TYPE:
-        extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
-        mentions = f"{extra} {club_tag}"
-        # Отправка в доп. чат для ремонта (КОРОТКО)
-        bot.send_message(CHATS['repair_extra'], f"@RobinKruzo1\n\n{notification_short}", parse_mode='html')
-    
-    elif task_type == BOT_TASK_TYPE:
-        mentions = extra_tags[task_type] 
-    
-    else:
-        mentions = club_tag
 
-    # 4. Универсальные уведомления
     bot.send_message(message.chat.id, confirmation)
-    
-    # В КАНАЛ ОТЧЕТОВ — Полная версия (с фото, если оно есть)
-    if photo_id_to_send:
-        bot.send_photo(CHATS['reports'], photo=photo_id_to_send, caption=f"#задачи\n\n{notification_full}\n\n@OMGVR_Admin_Bot", parse_mode='html')
-    else:
-        bot.send_message(CHATS['reports'], f"#задачи\n\n{notification_full}\n\n@OMGVR_Admin_Bot", parse_mode='html')
-
-    # В РАБОЧИЙ ЧАТ — Короткая версия (всегда текстом, без фото)
-    bot.send_message(CHATS['main_group'], f"{mentions}\n\n{notification_short}", parse_mode='html')
+    _send_task_notification(
+        bot, 'created', task_type, club_task, title,
+        description=descrip, actor=actor, photo_id=photo_id_to_send,
+    )
 
     returnback(message, bot)
 
@@ -465,45 +510,23 @@ def dotask(message, task_id, current_status, bot):
                 (task_id,),
             )
             task = cur.fetchone()
+            actor = task_actor_snapshot(get_user(message))
             cur.execute(
                 "UPDATE tasks SET status = 'Выполнено', dtfb = ? WHERE id = ? AND status = 'На проверке'",
                 (today, task_id),
             )
             changed = cur.rowcount
             if changed:
-                record_task_event(conn, task_id, 'confirmed')
+                record_task_event(conn, task_id, 'confirmed', actor=actor)
             conn.commit()
             cur.close()
             conn.close()
             if changed:
                 bot.send_message(message.chat.id, "✅ Спасибо! Проблема окончательно закрыта и перенесена в архив.", reply_markup=types.ReplyKeyboardRemove())
-                msg_full, notification_short = progress_task_notification(
-                    'completed', task['type'], task['club'], task['title'], '',
+                _send_task_notification(
+                    bot, 'completed', task['type'], task['club'],
+                    task['title'], actor=actor,
                 )
-                clubs = get_clubs()
-                club_tag = clubs[task['club']]['tag']
-                mentions = club_tag
-                if task['type'] == REPAIR_TASK_TYPE:
-                    extra = extra_tags[task['type']] if club_tag != '@RobinKruzo1' else ''
-                    mentions = f"{extra} {club_tag}".strip()
-                elif task['type'] == BOT_TASK_TYPE:
-                    mentions = extra_tags[task['type']]
-                bot.send_message(
-                    CHATS['reports'],
-                    f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot",
-                    parse_mode='HTML',
-                )
-                bot.send_message(
-                    CHATS['main_group'],
-                    f"{mentions}\n\n{notification_short}" if mentions else notification_short,
-                    parse_mode='HTML',
-                )
-                if task['type'] == REPAIR_TASK_TYPE:
-                    bot.send_message(
-                        CHATS['repair_extra'],
-                        f"@RobinKruzo1\n\n{notification_short}",
-                        parse_mode='HTML',
-                    )
             else:
                 bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.", reply_markup=types.ReplyKeyboardRemove())
             show_review_tasks(message, bot)
@@ -548,6 +571,7 @@ def change_task(message, task_id, answer, bot):
         now = datetime.now(pytz.timezone('Europe/Moscow'))
         today_short = now.strftime('%d.%m')
         review_since = now.strftime('%Y-%m-%d')
+        actor = task_actor_snapshot(get_user(message))
         
         conn = sqlite3.connect('db/omgbot.sql')
         conn.row_factory = sqlite3.Row
@@ -577,7 +601,9 @@ def change_task(message, task_id, answer, bot):
         )
         changed = cur.rowcount
         if changed:
-            record_task_event(conn, task_id, 'solution', event_at=now)
+            record_task_event(
+                conn, task_id, 'solution', event_at=now, actor=actor,
+            )
         conn.commit()
         cur.close()
         conn.close()
@@ -590,19 +616,10 @@ def change_task(message, task_id, answer, bot):
         bot.send_message(message.chat.id, "✅ Решение отправлено! Задача ожидает подтверждения.", reply_markup=types.ReplyKeyboardRemove())
         
         # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
-        msg_full, msg_short = progress_task_notification(
-            'solution', task_type, club_task, title, answer,
+        _send_task_notification(
+            bot, 'solution', task_type, club_task, title,
+            message=answer, actor=actor,
         )
-
-        bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
-        bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
-        
-        if task_type == REPAIR_TASK_TYPE:
-            bot.send_message(
-                CHATS['repair_extra'],
-                f"@RobinKruzo1\n\n{msg_short}",
-                parse_mode='HTML',
-            )
             
         show_active_tasks(message, bot)
 
@@ -616,6 +633,7 @@ def return_task_to_work(message, task_id, bot):
 
     reason = message.text
     today_short = datetime.today().strftime('%d.%m')
+    actor = task_actor_snapshot(get_user(message))
 
     conn = sqlite3.connect('db/omgbot.sql')
     conn.row_factory = sqlite3.Row
@@ -645,7 +663,7 @@ def return_task_to_work(message, task_id, bot):
     )
     changed = cur.rowcount
     if changed:
-        record_task_event(conn, task_id, 'returned')
+        record_task_event(conn, task_id, 'returned', actor=actor)
     conn.commit()
     cur.close()
     conn.close()
@@ -658,31 +676,10 @@ def return_task_to_work(message, task_id, bot):
     bot.send_message(message.chat.id, "❌ Задача возвращена в работу. Админы увидят ваш комментарий.", reply_markup=types.ReplyKeyboardRemove())
     
     # --- ФОРМИРОВАНИЕ УВЕДОМЛЕНИЙ ---
-    clubs = get_clubs()
-    club_tag = clubs[club_task]['tag']
-    mentions = ""
-    if task_type == REPAIR_TASK_TYPE:
-        extra = extra_tags[task_type] if club_tag != '@RobinKruzo1' else ''
-        mentions = f"{extra} {club_tag}"
-    elif task_type == BOT_TASK_TYPE:
-        mentions = extra_tags[task_type] 
-    else:
-        mentions = club_tag
-
-    msg_full, notification_short = progress_task_notification(
-        'returned', task_type, club_task, title, reason,
+    _send_task_notification(
+        bot, 'returned', task_type, club_task, title,
+        message=reason, actor=actor,
     )
-    msg_short = f"{mentions}\n\n{notification_short}" if mentions else notification_short
-
-    bot.send_message(CHATS['reports'], f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot", parse_mode='HTML')
-    bot.send_message(CHATS['main_group'], msg_short, parse_mode='HTML')
-    
-    if task_type == REPAIR_TASK_TYPE:
-        bot.send_message(
-            CHATS['repair_extra'],
-            f"@RobinKruzo1\n\n{notification_short}",
-            parse_mode='HTML',
-        )
         
     show_review_tasks(message, bot)
 
@@ -695,6 +692,7 @@ def auto_close_review_tasks(now=None, bot=None):
     today_iso = today.strftime('%Y-%m-%d')
     deadline_iso = deadline.strftime('%Y-%m-%d')
     today_short = today.strftime('%d.%m')
+    actor = system_task_actor()
 
     conn = sqlite3.connect(TASK_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -720,7 +718,7 @@ def auto_close_review_tasks(now=None, bot=None):
                     (today_iso, feedback, task['id']),
                 )
                 record_task_event(
-                    conn, task['id'], 'confirmed', event_at=now,
+                    conn, task['id'], 'confirmed', event_at=now, actor=actor,
                 )
     finally:
         conn.close()
@@ -729,23 +727,10 @@ def auto_close_review_tasks(now=None, bot=None):
         print(f"Автозакрытие задач: {len(tasks)}")
         if bot:
             for task in tasks:
-                msg_full, notification_short = progress_task_notification(
-                    'completed', task['type'], task['club'], task['title'], '',
+                _send_task_notification(
+                    bot, 'completed', task['type'], task['club'],
+                    task['title'], actor=actor,
                 )
-                bot.send_message(
-                    CHATS['reports'],
-                    f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot",
-                    parse_mode='HTML',
-                )
-                bot.send_message(
-                    CHATS['main_group'], notification_short, parse_mode='HTML',
-                )
-                if task['type'] == REPAIR_TASK_TYPE:
-                    bot.send_message(
-                        CHATS['repair_extra'],
-                        f"@RobinKruzo1\n\n{notification_short}",
-                        parse_mode='HTML',
-                    )
     return len(tasks)
 
 

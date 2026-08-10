@@ -27,6 +27,12 @@ def _create_schema(conn):
             event_at TEXT NOT NULL
         )'''
     )
+    columns = {
+        row[1] for row in conn.execute('PRAGMA table_info(task_events)')
+    }
+    for name in ('actor_chatid', 'actor_login', 'actor_name'):
+        if name not in columns:
+            conn.execute(f'ALTER TABLE task_events ADD COLUMN {name} TEXT')
     conn.execute(
         '''CREATE INDEX IF NOT EXISTS idx_task_events_task
            ON task_events(task_id, event_type, event_at)'''
@@ -42,18 +48,84 @@ def initialize_task_analytics_schema(db_path='db/omgbot.sql'):
         conn.close()
 
 
-def record_task_event(conn, task_id, event_type, event_at=None):
+def task_actor_snapshot(user):
+    if not user:
+        return None
+
+    def value(key):
+        try:
+            return user[key]
+        except (IndexError, KeyError, TypeError):
+            return None
+
+    login = str(value('login') or '').strip()
+    name = str(
+        value('nick_name')
+        or ' '.join(
+            part for part in (
+                str(value('first_name') or '').strip(),
+                str(value('second_name') or '').strip(),
+            ) if part
+        )
+        or login
+        or 'Сотрудник'
+    ).strip()
+    return {
+        'chatid': str(value('chatid') or '').strip(),
+        'login': login,
+        'name': name,
+    }
+
+
+def system_task_actor():
+    return {'chatid': '', 'login': '', 'name': 'Система'}
+
+
+def record_task_event(conn, task_id, event_type, event_at=None, actor=None):
     if event_type not in EVENT_TYPES:
         raise ValueError('Неизвестное событие заявки')
     _create_schema(conn)
     current = event_at or datetime.now(MOSCOW)
     if current.tzinfo is None:
         current = current.replace(tzinfo=MOSCOW)
+    actor = actor or {}
     conn.execute(
-        '''INSERT INTO task_events(task_id, event_type, event_at)
-           VALUES (?, ?, ?)''',
-        (task_id, event_type, current.isoformat(timespec='seconds')),
+        '''INSERT INTO task_events(
+               task_id, event_type, event_at,
+               actor_chatid, actor_login, actor_name
+           ) VALUES (?, ?, ?, ?, ?, ?)''',
+        (
+            task_id,
+            event_type,
+            current.isoformat(timespec='seconds'),
+            str(actor.get('chatid') or '') or None,
+            str(actor.get('login') or '') or None,
+            str(actor.get('name') or '') or None,
+        ),
     )
+
+
+def task_activity_payload(conn, task_id):
+    _create_schema(conn)
+    rows = conn.execute(
+        '''SELECT event_type, event_at, actor_login, actor_name
+           FROM task_events WHERE task_id=? ORDER BY event_at, id''',
+        (task_id,),
+    ).fetchall()
+    return [
+        {
+            'event_type': row['event_type'],
+            'event_at': row['event_at'],
+            'actor': (
+                {
+                    'name': row['actor_name'],
+                    'login': row['actor_login'],
+                }
+                if row['actor_name'] or row['actor_login'] else None
+            ),
+        }
+        for row in rows
+    ]
 
 
 def _normalize_legacy_text(value):

@@ -13,12 +13,21 @@ def load_taskboard_module():
     telebot = types.ModuleType('telebot')
     telebot.__all__ = []
     constants = types.ModuleType('constants')
-    constants.__all__ = []
+    constants.__all__ = ['CHATS', 'extra_tags', 'get_clubs']
+    constants.CHATS = {'reports': -1, 'main_group': -2, 'repair_extra': -3}
+    constants.extra_tags = {'Ремонт': '@repair', 'Улучшение бота': '@bot'}
+    constants.get_clubs = lambda: {
+        'Клуб': {'tag': '@club'},
+        'Прокшино': {'tag': '@prokshino'},
+    }
     permissions = types.ModuleType('permissions')
     permissions.ROLE_EMPLOYEE = 0
     permissions.ROLE_TECHNICIAN = 1
     permissions.require_role = lambda *_args: True
     permissions.role_of = lambda *_args: 0
+    permissions.get_user = lambda *_args: {
+        'chatid': '123', 'login': '@tester', 'nick_name': 'Тестер',
+    }
     pytz = types.ModuleType('pytz')
     pytz.timezone = lambda _name: timezone(timedelta(hours=3))
 
@@ -83,7 +92,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute('SELECT id, status, dtfb, feedback FROM tasks ORDER BY id').fetchall()
         events = conn.execute(
-            "SELECT task_id, event_type FROM task_events ORDER BY task_id"
+            "SELECT task_id, event_type, actor_name FROM task_events ORDER BY task_id"
         ).fetchall()
         conn.close()
         self.assertEqual(closed, 1)
@@ -91,7 +100,33 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.assertIn('автоматически закрыта', rows[0][3])
         self.assertEqual(rows[1][1], 'На проверке')
         self.assertEqual(rows[2][1:3], ('На проверке', '2026-07-15'))
-        self.assertEqual(events, [(1, 'confirmed')])
+        self.assertEqual(events, [(1, 'confirmed', 'Система')])
+
+    def test_repair_photo_uses_full_copy_outside_main_chat(self):
+        bot = Mock()
+        self.taskboard._send_task_notification(
+            bot,
+            'created',
+            'Ремонт',
+            'Прокшино',
+            'Шлем — 1 зона',
+            description='Не включается',
+            actor={'name': 'Иван', 'login': '@ivan'},
+            photo_id='telegram-photo',
+        )
+
+        self.assertEqual(bot.send_photo.call_count, 2)
+        report = bot.send_photo.call_args_list[0].kwargs['caption']
+        repair = bot.send_photo.call_args_list[1].kwargs['caption']
+        main = bot.send_message.call_args.args[1]
+        self.assertIn('#задачи', report)
+        self.assertIn('@OMGVR_Admin_Bot', report)
+        self.assertIn('Не включается', report)
+        self.assertNotIn('#задачи', repair)
+        self.assertNotIn('@OMGVR_Admin_Bot', repair)
+        self.assertIn('Не включается', repair)
+        self.assertIn('Создал:</b> Иван (@ivan)', repair)
+        self.assertNotIn('Не включается', main)
 
     def test_reminders_go_only_to_today_shift_employees_by_club(self):
         conn = sqlite3.connect(self.db_path)
@@ -134,7 +169,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.assertIn('Проверить ответ', messages[103])
         self.assertNotIn(104, messages)
 
-    def test_first_solution_has_no_mentions_in_main_chat(self):
+    def test_first_solution_has_actor_but_no_club_mentions_in_main_chat(self):
         connection = Mock()
         cursor = connection.cursor.return_value
         cursor.fetchone.return_value = {
@@ -153,6 +188,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.taskboard.types = types.SimpleNamespace(ReplyKeyboardRemove=lambda: None)
 
         with patch.object(self.taskboard.sqlite3, 'connect', return_value=connection), \
+                patch.object(self.taskboard, 'record_task_event'), \
                 patch.object(self.taskboard, 'show_active_tasks'):
             self.taskboard.change_task(message, 1, 'Всё исправлено', bot)
 
@@ -161,7 +197,8 @@ class TaskboardLifecycleTest(unittest.TestCase):
             for call in bot.send_message.call_args_list
             if call.args[0] == self.taskboard.CHATS['main_group']
         )
-        self.assertNotIn('@', main_message)
+        self.assertNotIn('@prokshino', main_message)
+        self.assertIn('@tester', main_message)
         self.assertTrue(main_message.startswith('👀 <b>Ответ'))
 
 

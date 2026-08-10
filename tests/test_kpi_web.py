@@ -696,6 +696,10 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(
             detail_response.get_json()['repair']['history'][0]['task_id'], 1,
         )
+        self.assertEqual(
+            detail_response.get_json()['activity'][0]['actor'],
+            {'name': 'Тестер', 'login': '@tester'},
+        )
         notify.assert_called_once()
 
     def test_problem_video_is_stored_as_telegram_reference(self):
@@ -798,6 +802,55 @@ class KpiWebTest(unittest.TestCase):
         self.assertTrue(bot.send_video.call_args.kwargs['supports_streaming'])
         self.assertEqual(bot.send_video.call_args.args[1].name, 'problem.mp4')
 
+    def test_repair_video_is_copied_to_repair_chat_but_not_main_chat(self):
+        bot = Mock()
+        bot.send_video.return_value.video = Mock(
+            file_id='telegram-video-id',
+            file_unique_id='telegram-unique-id',
+        )
+        task = {
+            'type': 'Ремонт',
+            'club': 'Марьино',
+            'title': 'Шлем — 2 зона',
+            'description': 'Не включается',
+        }
+        actor = {'chatid': '1001', 'login': '@tester', 'name': 'Тестер'}
+
+        with (
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(
+                kpi_web, 'get_clubs',
+                return_value={'Марьино': {'tag': '@maryino'}},
+            ),
+            patch.dict(
+                kpi_web.CHATS,
+                {'reports': -1, 'main_group': -2, 'repair_extra': -3},
+                clear=True,
+            ),
+        ):
+            kpi_web._send_problem_notification(
+                'created',
+                task,
+                video={
+                    'content': b'video',
+                    'filename': 'problem.mp4',
+                    'mimetype': 'video/mp4',
+                },
+                actor=actor,
+            )
+
+        self.assertEqual(bot.send_video.call_count, 2)
+        report_caption = bot.send_video.call_args_list[0].kwargs['caption']
+        repair_caption = bot.send_video.call_args_list[1].kwargs['caption']
+        main_text = bot.send_message.call_args.args[1]
+        self.assertIn('#задачи', report_caption)
+        self.assertIn('Не включается', report_caption)
+        self.assertNotIn('#задачи', repair_caption)
+        self.assertNotIn('@OMGVR_Admin_Bot', repair_caption)
+        self.assertIn('Не включается', repair_caption)
+        self.assertNotIn('Не включается', main_text)
+        self.assertIn('Создал:</b> Тестер (@tester)', main_text)
+
     def test_problem_confirmation_sends_completed_notification(self):
         task = {
             'ID': 1,
@@ -816,7 +869,10 @@ class KpiWebTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        notify.assert_called_once_with('completed', task)
+        notify.assert_called_once_with(
+            'completed', task,
+            actor={'chatid': '1001', 'login': '@tester', 'name': 'Тестер'},
+        )
 
     def test_problem_video_is_streamed_from_telegram(self):
         with tempfile.TemporaryDirectory() as temp_dir:

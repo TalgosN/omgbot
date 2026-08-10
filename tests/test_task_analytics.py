@@ -5,7 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from task_analytics import build_task_analytics, record_task_event
+from task_analytics import (
+    build_task_analytics,
+    record_task_event,
+    task_activity_payload,
+)
 
 
 class TaskAnalyticsTest(unittest.TestCase):
@@ -92,6 +96,25 @@ class TaskAnalyticsTest(unittest.TestCase):
     def test_invalid_period_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Неизвестный период'):
             build_task_analytics(str(self.db_path), mode='week')
+
+    def test_task_activity_keeps_actor_snapshot(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        record_task_event(
+            conn,
+            2,
+            'solution',
+            actor={'chatid': '123', 'login': '@repairer', 'name': 'Ремонтник'},
+        )
+        conn.commit()
+        activity = task_activity_payload(conn, 2)
+        conn.close()
+
+        self.assertEqual(activity[0]['event_type'], 'solution')
+        self.assertEqual(
+            activity[0]['actor'],
+            {'name': 'Ремонтник', 'login': '@repairer'},
+        )
 
 
 if __name__ == '__main__':
