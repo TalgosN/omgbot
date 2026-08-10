@@ -93,7 +93,7 @@ _membership_bot = None
 _membership_bot_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
-app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 22 * 1024 * 1024
 initialize_bukza_schema(DB_PATH)
 initialize_shift_time_schema(DB_PATH)
 
@@ -736,12 +736,13 @@ def _problem_mentions(task_type, club):
     return club_tag
 
 
-def _send_problem_notification(event, task, message='', photo=None):
+def _send_problem_notification(event, task, message='', photo=None, video=None):
     bot = _notification_bot()
     if not bot:
-        return
+        return None
     task_type = _normalize_legacy_text(task['type'])
     mentions = _problem_mentions(task_type, task['club'])
+    video_reference = None
     try:
         if event == 'created':
             full, short, _confirmation = created_task_notification(
@@ -751,7 +752,28 @@ def _send_problem_notification(event, task, message='', photo=None):
                 task.get('description'),
             )
             report_text = f"#задачи\n\n{full}\n\n@OMGVR_Admin_Bot"
-            if photo and CHATS.get('reports'):
+            if video and CHATS.get('reports'):
+                video_file = io.BytesIO(video['content'])
+                video_file.name = video['filename']
+                if video['mimetype'] == 'video/mp4':
+                    sent = bot.send_video(
+                        CHATS['reports'], video_file, caption=report_text,
+                        parse_mode='HTML', supports_streaming=True,
+                    )
+                    telegram_media = sent.video
+                else:
+                    sent = bot.send_document(
+                        CHATS['reports'], video_file, caption=report_text,
+                        parse_mode='HTML',
+                    )
+                    telegram_media = sent.document
+                video_reference = {
+                    'file_id': telegram_media.file_id,
+                    'file_unique_id': telegram_media.file_unique_id,
+                    'mimetype': video['mimetype'],
+                    'file_size': len(video['content']),
+                }
+            elif photo and CHATS.get('reports'):
                 photo_file = io.BytesIO(photo)
                 photo_file.name = 'problem.jpg'
                 bot.send_photo(
@@ -796,6 +818,62 @@ def _send_problem_notification(event, task, message='', photo=None):
                 )
     except Exception as error:
         print(f'Ошибка уведомления Mini App Taskboard: {error}')
+    return video_reference
+
+
+def _initialize_problem_video_schema(db_path=DB_PATH):
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS task_videos (
+                       task_id INTEGER PRIMARY KEY,
+                       telegram_file_id TEXT NOT NULL,
+                       telegram_file_unique_id TEXT,
+                       mime_type TEXT NOT NULL,
+                       file_size INTEGER NOT NULL
+                   )'''
+            )
+    finally:
+        conn.close()
+
+
+def _delete_problem_after_failed_video(task_id, db_path=DB_PATH):
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            for table in (
+                'repair_case_locations', 'repair_events', 'repair_cases',
+                'task_videos',
+            ):
+                if table in tables:
+                    conn.execute(f'DELETE FROM {table} WHERE task_id=?', (task_id,))
+            conn.execute('DELETE FROM tasks WHERE ID=?', (task_id,))
+    finally:
+        conn.close()
+
+
+def _read_problem_video(upload):
+    if not upload or not upload.filename:
+        return None
+    if upload.mimetype not in {
+        'video/mp4', 'video/quicktime', 'video/webm',
+    }:
+        raise ValueError('Видео должно быть в формате MP4, MOV или WebM')
+    content = upload.read(20 * 1024 * 1024 + 1)
+    if len(content) > 20 * 1024 * 1024:
+        raise ValueError('Видео должно быть не больше 20 МБ')
+    return {
+        'content': content,
+        'filename': upload.filename,
+        'mimetype': upload.mimetype,
+    }
 
 
 def _employee_explanation(row):
@@ -1087,7 +1165,7 @@ def handle_value_error(error):
 
 @app.errorhandler(413)
 def handle_upload_too_large(_error):
-    return jsonify({'error': 'Файл слишком большой. Максимум 6 МБ.'}), 413
+    return jsonify({'error': 'Файл слишком большой. Максимум видео — 20 МБ.'}), 413
 
 
 @app.get('/')
@@ -1300,6 +1378,7 @@ def _task_payload(row, include_description=True):
         'status': _normalize_legacy_text(row['status']),
         'closed_at': row['dtfb'],
         'has_photo': row['photo'] is not None,
+        'has_video': 'has_video' in row.keys() and bool(row['has_video']),
     }
     if include_description:
         result.update({
@@ -1314,6 +1393,7 @@ def _task_payload(row, include_description=True):
 @app.get('/api/problems')
 @require_user
 def api_problems():
+    _initialize_problem_video_schema(DB_PATH)
     requested_status = str(request.args.get('status') or 'work').strip().lower()
     status_map = {
         'work': ('В работе',),
@@ -1327,7 +1407,12 @@ def api_problems():
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            f'''SELECT * FROM tasks WHERE status IN ({placeholders})
+            f'''SELECT tasks.*,
+                       EXISTS (
+                           SELECT 1 FROM task_videos videos
+                           WHERE videos.task_id=tasks.ID
+                       ) AS has_video
+                FROM tasks WHERE status IN ({placeholders})
                 ORDER BY date(dtrep) DESC, ID DESC LIMIT 200''',
             statuses,
         ).fetchall()
@@ -1532,10 +1617,19 @@ def api_map_legacy_repair(task_id):
 @require_user
 def api_problem(task_id):
     initialize_repair_schema(DB_PATH)
+    _initialize_problem_video_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute('SELECT * FROM tasks WHERE ID=?', (task_id,)).fetchone()
+        row = conn.execute(
+            '''SELECT tasks.*,
+                      EXISTS (
+                          SELECT 1 FROM task_videos videos
+                          WHERE videos.task_id=tasks.ID
+                      ) AS has_video
+               FROM tasks WHERE ID=?''',
+            (task_id,),
+        ).fetchone()
         repair = repair_payload(conn, task_id) if row else None
     finally:
         conn.close()
@@ -1564,6 +1658,33 @@ def api_problem_photo(task_id):
     else:
         mimetype = 'image/jpeg'
     return send_file(io.BytesIO(photo), mimetype=mimetype, max_age=0)
+
+
+@app.get('/api/problems/<int:task_id>/video')
+@require_user
+def api_problem_video(task_id):
+    _initialize_problem_video_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            '''SELECT telegram_file_id, mime_type FROM task_videos
+               WHERE task_id=?''',
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return jsonify({'error': 'Видео не найдено.'}), 404
+    bot = _notification_bot()
+    if not bot:
+        return jsonify({'error': 'Видео временно недоступно.'}), 503
+    try:
+        file_info = bot.get_file(row[0])
+        video = bot.download_file(file_info.file_path)
+    except Exception as error:
+        print(f'Ошибка загрузки видео Taskboard: {error}')
+        return jsonify({'error': 'Не удалось загрузить видео.'}), 502
+    return send_file(io.BytesIO(video), mimetype=row[1], max_age=0)
 
 
 @app.post('/api/problems')
@@ -1599,6 +1720,7 @@ def api_create_problem():
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise ValueError('Выберите оборудование и хотя бы одно место') from error
     upload = request.files.get('photo')
+    video_upload = request.files.get('video')
     photo = None
     if upload and upload.filename:
         if upload.mimetype not in {'image/jpeg', 'image/png', 'image/webp'}:
@@ -1606,9 +1728,14 @@ def api_create_problem():
         photo = upload.read(6 * 1024 * 1024 + 1)
         if len(photo) > 6 * 1024 * 1024:
             raise ValueError('Фото должно быть не больше 6 МБ')
+    video = _read_problem_video(video_upload)
+    if video:
+        if photo is not None:
+            raise ValueError('Прикрепите либо фото, либо видео')
 
     if task_type == REPAIR_TASK_TYPE:
         initialize_repair_schema(DB_PATH)
+    _initialize_problem_video_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -1625,15 +1752,43 @@ def api_create_problem():
                     conn, task_id, club, item_id, detail_id, location_ids,
                 )
                 conn.execute('UPDATE tasks SET title=? WHERE ID=?', (title, task_id))
+            task = {
+                'title': title,
+                'type': task_type,
+                'club': club,
+                'description': description,
+            }
     finally:
         conn.close()
-    task = {
-        'title': title,
-        'type': task_type,
-        'club': club,
-        'description': description,
-    }
-    _send_problem_notification('created', task, photo=photo)
+    if video:
+        video_reference = _send_problem_notification(
+            'created', task, video=video,
+        )
+        if not video_reference:
+            _delete_problem_after_failed_video(task_id, DB_PATH)
+            raise ValueError(
+                'Не удалось сохранить видео в Telegram. Попробуйте ещё раз.'
+            )
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            with conn:
+                conn.execute(
+                    '''INSERT INTO task_videos (
+                           task_id, telegram_file_id, telegram_file_unique_id,
+                           mime_type, file_size
+                       ) VALUES (?, ?, ?, ?, ?)''',
+                    (
+                        task_id,
+                        video_reference['file_id'],
+                        video_reference.get('file_unique_id'),
+                        video_reference['mimetype'],
+                        video_reference['file_size'],
+                    ),
+                )
+        finally:
+            conn.close()
+    else:
+        _send_problem_notification('created', task, photo=photo)
     return jsonify({'id': task_id, 'status': 'В работе'}), 201
 
 

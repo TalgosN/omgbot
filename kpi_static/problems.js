@@ -139,7 +139,7 @@ function renderList() {
   const tasks = state.tasks.filter((task) => (!club || task.club === club) && (!type || task.type === type));
   $('#problemList').innerHTML = tasks.length ? tasks.map((task) => `
     <button class="problem-card" type="button" data-id="${task.id}">
-      <div class="problem-card-head"><h3>${escapeHtml(task.title)}${task.has_photo ? '<span class="photo-mark">▧</span>' : ''}</h3><span class="type-badge">${escapeHtml(task.type)}</span></div>
+      <div class="problem-card-head"><h3>${escapeHtml(task.title)}${task.has_photo ? '<span class="photo-mark">▧</span>' : ''}${task.has_video ? '<span class="photo-mark">▶</span>' : ''}</h3><span class="type-badge">${escapeHtml(task.type)}</span></div>
       <p>${escapeHtml(task.club)} · ${dateLabel(task.date)}</p>
     </button>
   `).join('') : '<div class="empty-card">В этом разделе задач нет</div>';
@@ -184,12 +184,14 @@ async function openTask(taskId) {
       ${repairIdentity}
       <div class="detail-description"><span>Описание</span><p>${escapeHtml(task.description)}</p></div>
       ${task.has_photo ? '<div id="detailPhoto" class="empty-card">Загрузка фото…</div>' : ''}
+      ${task.has_video ? '<div id="detailVideo" class="empty-card">Загрузка видео…</div>' : ''}
       <div class="detail-feedback"><span>История решения</span><p>${escapeHtml(task.feedback || 'Ожидает решения…')}</p></div>
       ${history}
       ${actions ? `<div class="detail-actions">${actions}</div>` : ''}
     `;
     $('#detailDialog').showModal();
     if (task.has_photo) loadProblemPhoto(task.id);
+    if (task.has_video) loadProblemVideo(task.id);
   } catch (error) { toast(error.message, true); }
 }
 
@@ -204,6 +206,21 @@ async function loadProblemPhoto(taskId) {
     if (container) container.outerHTML = `<img class="detail-photo" src="${url}" alt="Фото проблемы">`;
   } catch (error) {
     const container = $('#detailPhoto');
+    if (container) container.textContent = error.message;
+  }
+}
+
+async function loadProblemVideo(taskId) {
+  try {
+    const response = await fetch(`/api/problems/${taskId}/video`, {
+      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+    });
+    if (!response.ok) throw new Error('Не удалось загрузить видео');
+    const url = URL.createObjectURL(await response.blob());
+    const container = $('#detailVideo');
+    if (container) container.outerHTML = `<video class="detail-video" src="${url}" controls playsinline preload="metadata"></video>`;
+  } catch (error) {
+    const container = $('#detailVideo');
     if (container) container.textContent = error.message;
   }
 }

@@ -14,10 +14,10 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .hidden { display: none !important; }
 .problem-intro { margin:22px 0 18px; }
 .problem-intro > p:last-child { max-width: 620px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
-.problem-tabs { display:flex; gap:5px; padding:5px; overflow-x:auto; border:1px solid var(--line); border-radius:16px; background:rgba(31,12,59,.76); box-shadow:var(--shadow); backdrop-filter:blur(16px); }
-.problem-tabs button { min-height: 37px; padding: 0 11px; border: 0; border-radius: 11px; color: var(--muted); background: transparent; font-size: 9px; font-weight: 750; white-space: nowrap; cursor: pointer; }
+.problem-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:5px; border:1px solid var(--line); border-radius:16px; background:rgba(31,12,59,.76); box-shadow:var(--shadow); backdrop-filter:blur(16px); }
+.problem-tabs button { display:flex; align-items:center; justify-content:center; width:100%; min-width:0; min-height:37px; gap:3px; padding:0 5px; border:0; border-radius:11px; color:var(--muted); background:transparent; font-size:9px; font-weight:750; white-space:nowrap; cursor:pointer; }
 .problem-tabs button.active { color: white; background: var(--purple); }
-.problem-tabs b { display: inline-grid; min-width: 18px; height: 18px; margin-left: 3px; place-items: center; border-radius: 999px; background: rgba(255,255,255,.15); }
+.problem-tabs b { display:inline-grid; min-width:18px; height:18px; place-items:center; border-radius:999px; background:rgba(255,255,255,.15); }
 .problem-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 12px 0; }
 .problem-filters select, .problem-dialog input, .problem-dialog select, .problem-dialog textarea { width:100%; border:1px solid var(--line); border-radius:13px; color:var(--ink); outline:none; background:rgba(43,16,71,.88); }
 .problem-filters select { min-height: 41px; padding: 0 10px; font-size: 9px; }
@@ -39,6 +39,7 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .problem-dialog input, .problem-dialog select { min-height: 44px; padding: 0 11px; font-size: 10px; }
 .problem-dialog textarea { padding: 11px; resize: vertical; font-size: 10px; line-height: 1.5; }
 .photo-field input { padding: 10px; }
+.photo-field small { display:block; margin-top:6px; color:var(--muted); font-size:8px; line-height:1.45; }
 .repair-fields { margin:3px 0 13px; padding:13px; border:1px solid var(--line); border-radius:17px; background:rgba(162,77,225,.09); }
 .repair-fields fieldset { min-width: 0; margin: 0 0 11px; padding: 0; border: 0; }
 .repair-fields legend, .generated-title span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 8px; font-weight: 700; }
@@ -88,6 +89,7 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .detail-description span, .detail-feedback span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 8px; font-weight: 700; }
 .detail-description p, .detail-feedback p { margin: 0; font-size: 10px; line-height: 1.55; white-space: pre-wrap; }
 .detail-photo { display:block; width:100%; max-height:420px; margin-top:12px; object-fit:contain; border-radius:16px; background:#210c39; }
+.detail-video { display:block; width:100%; max-height:420px; margin-top:12px; border-radius:16px; background:#210c39; }
 .detail-actions { display: grid; gap: 7px; margin-top: 14px; }
 .action-button { min-height: 43px; border: 0; border-radius: 13px; color: white; background: var(--purple); font-size: 10px; font-weight: 750; cursor: pointer; }
 .action-button.return { color: var(--danger); background: rgba(214,75,113,.09); }

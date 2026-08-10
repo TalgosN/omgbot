@@ -6,9 +6,10 @@ import tempfile
 import time
 import unittest
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import kpi_web
 
@@ -542,6 +543,192 @@ class KpiWebTest(unittest.TestCase):
             detail_response.get_json()['repair']['history'][0]['task_id'], 1,
         )
         notify.assert_called_once()
+
+    def test_problem_video_is_stored_as_telegram_reference(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   )'''
+            )
+            conn.commit()
+            conn.close()
+            video_reference = {
+                'file_id': 'telegram-video-id',
+                'file_unique_id': 'telegram-unique-id',
+                'mimetype': 'video/mp4',
+                'file_size': 11,
+            }
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'get_clubs', return_value={'Марьино': {}}),
+                patch.object(
+                    kpi_web,
+                    '_send_problem_notification',
+                    return_value=video_reference,
+                ) as notify,
+            ):
+                response = self.client.post(
+                    '/api/problems',
+                    headers=self.headers,
+                    data={
+                        'type': 'Общее обращение',
+                        'club': 'Марьино',
+                        'title': 'Проблема со звуком',
+                        'description': 'На видео слышен посторонний шум',
+                        'video': (BytesIO(b'video-bytes'), 'problem.mp4', 'video/mp4'),
+                    },
+                )
+                detail = self.client.get('/api/problems/1', headers=self.headers)
+
+            conn = sqlite3.connect(db_path)
+            stored = conn.execute(
+                '''SELECT telegram_file_id, telegram_file_unique_id,
+                          mime_type, file_size
+                   FROM task_videos WHERE task_id=1'''
+            ).fetchone()
+            photo = conn.execute('SELECT photo FROM tasks WHERE ID=1').fetchone()[0]
+            conn.close()
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            stored,
+            ('telegram-video-id', 'telegram-unique-id', 'video/mp4', 11),
+        )
+        self.assertIsNone(photo)
+        self.assertTrue(detail.get_json()['has_video'])
+        self.assertEqual(notify.call_args.kwargs['video']['content'], b'video-bytes')
+
+    def test_mp4_problem_notification_returns_telegram_reference(self):
+        bot = Mock()
+        bot.send_video.return_value.video = Mock(
+            file_id='telegram-video-id',
+            file_unique_id='telegram-unique-id',
+        )
+        task = {
+            'type': 'Общее обращение',
+            'club': 'Марьино',
+            'title': 'Проблема со звуком',
+            'description': 'На записи слышен шум',
+        }
+
+        with (
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(kpi_web, 'get_clubs', return_value={'Марьино': {}}),
+            patch.dict(kpi_web.CHATS, {'reports': -100500}, clear=True),
+        ):
+            reference = kpi_web._send_problem_notification(
+                'created',
+                task,
+                video={
+                    'content': b'video',
+                    'filename': 'problem.mp4',
+                    'mimetype': 'video/mp4',
+                },
+            )
+
+        self.assertEqual(reference, {
+            'file_id': 'telegram-video-id',
+            'file_unique_id': 'telegram-unique-id',
+            'mimetype': 'video/mp4',
+            'file_size': 5,
+        })
+        self.assertTrue(bot.send_video.call_args.kwargs['supports_streaming'])
+        self.assertEqual(bot.send_video.call_args.args[1].name, 'problem.mp4')
+
+    def test_problem_video_is_streamed_from_telegram(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            kpi_web._initialize_problem_video_schema(str(db_path))
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''INSERT INTO task_videos (
+                       task_id, telegram_file_id, telegram_file_unique_id,
+                       mime_type, file_size
+                   ) VALUES (1, 'telegram-video-id', 'unique-id', 'video/mp4', 5)'''
+            )
+            conn.commit()
+            conn.close()
+            bot = Mock()
+            bot.get_file.return_value.file_path = 'videos/problem.mp4'
+            bot.download_file.return_value = b'video'
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, '_notification_bot', return_value=bot),
+            ):
+                response = self.client.get(
+                    '/api/problems/1/video', headers=self.headers,
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b'video')
+        self.assertEqual(response.mimetype, 'video/mp4')
+        bot.get_file.assert_called_once_with('telegram-video-id')
+        bot.download_file.assert_called_once_with('videos/problem.mp4')
+
+    def test_problem_is_removed_when_telegram_rejects_video(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   )'''
+            )
+            conn.commit()
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'get_clubs', return_value={'Марьино': {}}),
+                patch.object(
+                    kpi_web, '_send_problem_notification', return_value=None,
+                ),
+            ):
+                response = self.client.post(
+                    '/api/problems',
+                    headers=self.headers,
+                    data={
+                        'type': 'Общее обращение',
+                        'club': 'Марьино',
+                        'title': 'Проблема со звуком',
+                        'description': 'Telegram временно недоступен',
+                        'video': (BytesIO(b'video'), 'problem.mp4', 'video/mp4'),
+                    },
+                )
+
+            conn = sqlite3.connect(db_path)
+            task_count = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+            conn.close()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Не удалось сохранить видео', response.get_json()['error'])
+        self.assertEqual(task_count, 0)
+
+    def test_problem_video_over_20_mb_is_rejected(self):
+        upload = Mock(filename='problem.mp4', mimetype='video/mp4')
+        upload.read.return_value = b'x' * (20 * 1024 * 1024 + 1)
+
+        with self.assertRaisesRegex(ValueError, 'не больше 20 МБ'):
+            kpi_web._read_problem_video(upload)
+
+        upload.read.assert_called_once_with(20 * 1024 * 1024 + 1)
 
     def test_problem_follows_existing_solution_and_return_lifecycle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
