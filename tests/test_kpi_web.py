@@ -181,6 +181,76 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.get_json()['can_manage'])
 
+    def test_camera_prototype_is_linked_from_shift(self):
+        shift_response = self.client.get('/shift')
+        camera_response = self.client.get('/camera-test')
+        try:
+            self.assertEqual(shift_response.status_code, 200)
+            self.assertIn('id="openCameraTest"', shift_response.get_data(as_text=True))
+            self.assertEqual(camera_response.status_code, 200)
+            camera_html = camera_response.get_data(as_text=True)
+            self.assertIn('id="cameraStage"', camera_html)
+            self.assertIn('id="sendCapture"', camera_html)
+            self.assertIn('/static/camera_test.js', camera_html)
+        finally:
+            shift_response.close()
+            camera_response.close()
+
+    def test_camera_photo_is_sent_to_configured_private_chat(self):
+        bot = Mock()
+        diagnostics = {
+            'platform': 'ios',
+            'telegram_version': '9.0',
+            'capture_method': 'Короткое нажатие в Mini App',
+            'mime_type': 'image/jpeg',
+            'camera_status': 'Работает',
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(kpi_web, '_camera_test_sent_at', {}),
+        ):
+            response = self.client.post(
+                '/api/camera-test',
+                headers=self.headers,
+                data={
+                    'consent': 'yes',
+                    'diagnostics': json.dumps(diagnostics),
+                    'media': (BytesIO(b'jpeg-bytes'), 'camera-test.jpg', 'image/jpeg'),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['delivery'], 'photo')
+        bot.send_photo.assert_called_once()
+        self.assertEqual(bot.send_photo.call_args.args[0], '592831529')
+        self.assertIn('Тест камеры Mini App', bot.send_photo.call_args.kwargs['caption'])
+
+    def test_camera_webm_is_sent_as_document(self):
+        bot = Mock()
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(kpi_web, '_camera_test_sent_at', {}),
+        ):
+            response = self.client.post(
+                '/api/camera-test',
+                headers=self.headers,
+                data={
+                    'consent': 'yes',
+                    'diagnostics': '{}',
+                    'media': (BytesIO(b'webm-bytes'), 'camera-test.webm', 'video/webm'),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['delivery'], 'document')
+        bot.send_document.assert_called_once()
+
     def test_home_places_compact_shift_module_before_dashboard(self):
         response = self.client.get('/')
         try:

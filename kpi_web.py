@@ -87,11 +87,17 @@ OMG_SHIFT_URL = os.getenv(
     'OMG_SHIFT_URL',
     'http://31.129.109.167/?page=settings',
 ).strip()
+CAMERA_TEST_RECIPIENT_CHAT_ID = str(
+    os.getenv('CAMERA_TEST_RECIPIENT_CHAT_ID') or CHATS.get('me') or ''
+).strip()
+CAMERA_TEST_COOLDOWN_SECONDS = 8
 ANALYTICS_CACHE_SECONDS = 60
 _analytics_cache = {}
 _analytics_cache_lock = threading.Lock()
 _membership_bot = None
 _membership_bot_lock = threading.Lock()
+_camera_test_sent_at = {}
+_camera_test_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 22 * 1024 * 1024
@@ -736,6 +742,69 @@ def _notification_bot():
     return telebot.TeleBot(TELEGRAM_API_KEY) if TELEGRAM_API_KEY else None
 
 
+def _camera_test_caption(diagnostics, media_type, media_size):
+    user = g.kpi_user
+    name = (
+        user.get('nick_name') or user.get('first_name') or user.get('login')
+    )
+    fields = (
+        ('Платформа', 'platform'),
+        ('Telegram WebApp', 'telegram_version'),
+        ('Способ съёмки', 'capture_method'),
+        ('Формат', 'mime_type'),
+        ('Разрешение', 'resolution'),
+        ('Продолжительность', 'duration'),
+        ('Камера', 'camera_status'),
+        ('Микрофон', 'microphone_status'),
+        ('MediaRecorder', 'recorder_status'),
+        ('WebView', 'user_agent'),
+        ('Ошибка', 'error'),
+    )
+    lines = [
+        '🧪 <b>Тест камеры Mini App</b>',
+        '',
+        f"👤 {html.escape(str(name))} · {html.escape(str(user.get('login') or '—'))}",
+        f"📎 {html.escape(media_type)} · {media_size / (1024 * 1024):.2f} МБ",
+    ]
+    for label, key in fields:
+        value = str(diagnostics.get(key) or '').strip()
+        if value:
+            lines.append(f"<b>{label}:</b> {html.escape(value[:180])}")
+    return '\n'.join(lines)[:1000]
+
+
+def _camera_test_upload():
+    upload = request.files.get('media')
+    if not upload or not upload.filename:
+        return None
+    mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
+    image_types = {
+        'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+    }
+    video_types = {'video/mp4', 'video/quicktime', 'video/webm'}
+    if mimetype in image_types:
+        maximum = 6 * 1024 * 1024
+        media_type = 'Фото'
+    elif mimetype in video_types:
+        maximum = 20 * 1024 * 1024
+        media_type = 'Видео'
+    else:
+        raise ValueError('Тест камеры принимает только JPEG, PNG, WebP, HEIC, MP4, MOV или WebM')
+    content = upload.read(maximum + 1)
+    if not content:
+        raise ValueError('Камера вернула пустой файл')
+    if len(content) > maximum:
+        raise ValueError(
+            'Фото должно быть не больше 6 МБ, видео — не больше 20 МБ'
+        )
+    return {
+        'content': content,
+        'filename': str(upload.filename or 'camera-test').replace('/', '_')[:100],
+        'mimetype': mimetype,
+        'media_type': media_type,
+    }
+
+
 def _problem_mentions(task_type, club):
     club_tag = str(get_clubs().get(club, {}).get('tag') or '').strip()
     if task_type == REPAIR_TASK_TYPE:
@@ -1206,6 +1275,11 @@ def shift_index():
     return send_from_directory(STATIC_DIR, 'shift.html')
 
 
+@app.get('/camera-test')
+def camera_test_index():
+    return send_from_directory(STATIC_DIR, 'camera_test.html')
+
+
 @app.get('/static/<path:filename>')
 def static_file(filename):
     return send_from_directory(STATIC_DIR, filename)
@@ -1342,8 +1416,87 @@ def api_shift():
     return jsonify({
         'external_url': OMG_SHIFT_URL,
         'can_manage': role >= ROLE_MANAGER,
+        'camera_test_available': bool(
+            TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
+        ),
         'employee_dashboard': dashboard,
     })
+
+
+@app.post('/api/camera-test')
+@require_user
+def api_camera_test():
+    if request.form.get('consent') != 'yes':
+        raise ValueError('Подтвердите отправку тестового материала Павлу')
+    if not CAMERA_TEST_RECIPIENT_CHAT_ID:
+        raise ValueError('Получатель теста камеры не настроен')
+    try:
+        diagnostics = json.loads(request.form.get('diagnostics') or '{}')
+    except json.JSONDecodeError as error:
+        raise ValueError('Некорректная диагностика камеры') from error
+    if not isinstance(diagnostics, dict):
+        raise ValueError('Некорректная диагностика камеры')
+
+    actor = _actor_login()
+    now = time.monotonic()
+    with _camera_test_lock:
+        previous = _camera_test_sent_at.get(actor, 0)
+        if now - previous < CAMERA_TEST_COOLDOWN_SECONDS:
+            return jsonify({
+                'error': 'Подождите несколько секунд перед следующим тестом.'
+            }), 429
+
+    media = _camera_test_upload()
+    media_type = media['media_type'] if media else 'Только диагностика'
+    media_size = len(media['content']) if media else 0
+    caption = _camera_test_caption(diagnostics, media_type, media_size)
+    bot = _notification_bot()
+    if not bot:
+        return jsonify({'error': 'Telegram-бот временно недоступен.'}), 503
+
+    delivery = 'text'
+    try:
+        if not media:
+            bot.send_message(
+                CAMERA_TEST_RECIPIENT_CHAT_ID, caption, parse_mode='HTML',
+            )
+        else:
+            media_file = io.BytesIO(media['content'])
+            media_file.name = media['filename']
+            if media['mimetype'] in {'image/jpeg', 'image/png', 'image/webp'}:
+                bot.send_photo(
+                    CAMERA_TEST_RECIPIENT_CHAT_ID,
+                    media_file,
+                    caption=caption,
+                    parse_mode='HTML',
+                )
+                delivery = 'photo'
+            elif media['mimetype'] == 'video/mp4':
+                bot.send_video(
+                    CAMERA_TEST_RECIPIENT_CHAT_ID,
+                    media_file,
+                    caption=caption,
+                    parse_mode='HTML',
+                    supports_streaming=True,
+                )
+                delivery = 'video'
+            else:
+                bot.send_document(
+                    CAMERA_TEST_RECIPIENT_CHAT_ID,
+                    media_file,
+                    caption=caption,
+                    parse_mode='HTML',
+                )
+                delivery = 'document'
+    except Exception as error:
+        print(f'Ошибка отправки теста камеры: {error}')
+        return jsonify({
+            'error': 'Не удалось отправить тест Павлу через Telegram.'
+        }), 502
+
+    with _camera_test_lock:
+        _camera_test_sent_at[actor] = now
+    return jsonify({'sent': True, 'delivery': delivery})
 
 
 @app.put('/api/shift-config')

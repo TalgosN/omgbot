@@ -150,6 +150,19 @@ function localMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
+const russianMonths = [
+  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+];
+
+function analyticsPeriodLabel() {
+  if (state.analyticsMode === 'month') {
+    return $('#analyticsMonth').selectedOptions[0]?.textContent || '';
+  }
+  if (state.analyticsMode === 'year') return $('#analyticsYear').value;
+  return 'Всё время';
+}
+
 function percentLabel(value) {
   return `${Math.round(Number(value || 0) * 100)}%`;
 }
@@ -179,13 +192,13 @@ function renderAnalyticsBreakdown(selector, rows) {
 
 function renderProblemAnalytics(data) {
   state.analytics = data;
-  $('#analyticsPeriodLabel').textContent = data.period.label;
+  $('#analyticsPeriodLabel').textContent = analyticsPeriodLabel();
   const summary = data.summary;
   $('#analyticsSummary').innerHTML = `
-    <article><span>Создано</span><strong>${summary.created}</strong><small>за выбранный период</small></article>
-    <article><span>Выполнено</span><strong>${percentLabel(summary.completion_rate)}</strong><small>${summary.completed} заявок</small></article>
-    <article><span>Среднее решение</span><strong>${durationLabel(summary.average_seconds, summary.precision)}</strong><small>медиана ${durationLabel(summary.median_seconds, summary.precision)}</small></article>
-    <article><span>Осталось открыто</span><strong>${summary.open}</strong><small>в работе или на проверке</small></article>
+    <article><span>Создано</span><strong>${summary.created}</strong></article>
+    <article><span>Выполнено</span><strong>${summary.completed} (${percentLabel(summary.completion_rate)})</strong></article>
+    <article><span>Среднее решение</span><strong>${durationLabel(summary.average_seconds, summary.precision)}</strong></article>
+    <article><span>Осталось открыто</span><strong>${summary.open}</strong></article>
   `;
   $('#analyticsStatusBar').innerHTML = data.statuses.map((item) => (
     `<i class="status-${item.key}" style="width:${Number(item.share || 0) * 100}%" title="${escapeHtml(item.label)}: ${item.count}"></i>`
@@ -485,8 +498,17 @@ async function init() {
     renderFilters();
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
     $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);
-    $('#analyticsMonth').value = localMonth();
     const currentYear = new Date().getFullYear();
+    const monthOptions = [];
+    for (let year = currentYear; year >= 2024; year -= 1) {
+      const lastMonth = year === currentYear ? new Date().getMonth() : 11;
+      for (let month = lastMonth; month >= 0; month -= 1) {
+        const value = `${year}-${String(month + 1).padStart(2, '0')}`;
+        monthOptions.push(`<option value="${value}">${russianMonths[month]} ${year}</option>`);
+      }
+    }
+    $('#analyticsMonth').innerHTML = monthOptions.join('');
+    $('#analyticsMonth').value = localMonth();
     $('#analyticsYear').innerHTML = Array.from(
       { length: currentYear - 2023 }, (_, index) => currentYear - index,
     ).map((year) => `<option value="${year}">${year}</option>`).join('');
