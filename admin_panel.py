@@ -21,6 +21,7 @@ from club_config_sync import (
     write_validation,
 )
 from sender import safe_send
+from kpi_calculator import active_kpi_employee_logins, calculate_monthly_kpi
 from permissions import (
     ROLE_BLOCKED,
     ROLE_EMPLOYEE,
@@ -364,27 +365,27 @@ def build_kpi_shadow_report(comparison, controls):
     return '\n'.join(lines)
 
 
-def build_monthly_kpi_report(values):
-    selected_date = values[0][2] if values and len(values[0]) > 2 else 'текущий месяц'
+def format_kpi_report_percent(value):
+    percent = float(value or 0) * 100
+    return f'{percent:.1f}'.rstrip('0').rstrip('.') + '%'
+
+
+def build_monthly_kpi_report(rows, selected_date):
     employees = []
-    for row in values[7:]:
-        name = str(row[1]).strip() if len(row) > 1 else ''
-        shifts = row[2] if len(row) > 2 and row[2] not in ('', None) else '0'
-        weighted_shifts = row[3] if len(row) > 3 and row[3] not in ('', None) else '0'
-        if (
-            not name
-            or parse_report_number(shifts) <= 0
-            or parse_report_number(weighted_shifts) <= 0
-        ):
+    for row in rows:
+        name = str(row.get('nickname') or row.get('login') or '').strip()
+        shifts = float(row.get('shifts') or 0)
+        weighted_shifts = float(row.get('weighted_shifts') or 0)
+        if not name or shifts <= 0 or weighted_shifts <= 0:
             continue
-        total_pct = row[20] if len(row) > 20 and row[20] not in ('', None) else '0%'
-        weighted_pct = row[21] if len(row) > 21 and row[21] not in ('', None) else '0%'
+        total_pct = float(row.get('total_pct') or 0)
+        weighted_pct = float(row.get('weighted_pct') or 0)
         employees.append({
             'name': name,
             'shifts': shifts,
             'total_pct': total_pct,
             'weighted_pct': weighted_pct,
-            'sort_pct': parse_report_number(total_pct),
+            'sort_pct': total_pct,
         })
 
     employees.sort(key=lambda employee: (employee['sort_pct'], employee['name'].lower()))
@@ -392,15 +393,12 @@ def build_monthly_kpi_report(values):
     average_pct = sum(non_zero_results) / len(non_zero_results) if non_zero_results else 0
     median_pct = median(non_zero_results) if non_zero_results else 0
 
-    def format_percent(value):
-        return f'{value:.1f}'.rstrip('0').rstrip('.') + '%'
-
     header = (
         '📊 <b>KPI сотрудников за месяц</b>\n'
         f'📅 <i>Расчётная дата: {html.escape(str(selected_date))}</i>\n'
         f'👥 Сотрудников в отчёте: <b>{len(employees)}</b>\n\n'
-        f'📈 Средний KPI: <b>{format_percent(average_pct)}</b>\n'
-        f'📐 Медианный KPI: <b>{format_percent(median_pct)}</b>\n'
+        f'📈 Средний KPI: <b>{format_kpi_report_percent(average_pct)}</b>\n'
+        f'📐 Медианный KPI: <b>{format_kpi_report_percent(median_pct)}</b>\n'
         f'ℹ️ <i>Среднее и медиана рассчитаны без нулевых KPI.</i>'
     )
     if not employees:
@@ -411,9 +409,9 @@ def build_monthly_kpi_report(values):
     def employee_line(employee, icon):
         return (
             f'{icon} <b>{html.escape(str(employee["name"]))}</b>: '
-            f'KPI <b>{html.escape(str(employee["total_pct"]))}</b> '
-            f'<i>({html.escape(str(employee["weighted_pct"]))} взв.)</i> | '
-            f'📆 Смен: <b>{html.escape(str(employee["shifts"]))}</b>'
+            f'KPI <b>{format_kpi_report_percent(employee["total_pct"])}</b> '
+            f'<i>({format_kpi_report_percent(employee["weighted_pct"])} взв.)</i> | '
+            f'📆 Смен: <b>{employee["shifts"]:g}</b>'
         )
 
     messages = [
@@ -439,12 +437,17 @@ def handle_monthly_kpi_report(message, bot):
         return
     wait_message = bot.send_message(message.chat.id, '⏳ Собираю KPI сотрудников...')
     try:
-        client = pygsheets.authorize(service_file=KEY_FILE)
-        spreadsheet = client.open('KPI OMG VR')
-        values = spreadsheet.worksheet_by_title('Главный').get_values(
-            start='A1', end='AA60', returnas='matrix'
+        now = datetime.now(pytz.timezone('Europe/Moscow'))
+        selected_date = now.strftime('%Y-%m-%d')
+        rows = calculate_monthly_kpi(
+            now.replace(day=1).strftime('%Y-%m-%d'),
+            employee_logins=active_kpi_employee_logins(),
+            period_end=selected_date,
         )
-        reports = build_monthly_kpi_report(values)
+        reports = build_monthly_kpi_report(
+            rows,
+            now.strftime('%d.%m.%Y'),
+        )
         bot.delete_message(message.chat.id, wait_message.message_id)
         for report in reports:
             bot.send_message(message.chat.id, report, parse_mode='HTML')

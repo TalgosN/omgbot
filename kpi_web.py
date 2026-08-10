@@ -27,6 +27,7 @@ from bukza import (
 from constants import CHATS, TELEGRAM_API_KEY, extra_tags, get_clubs
 from group_membership import is_main_group_member
 from kpi_calculator import (
+    active_kpi_employee_logins,
     add_penalty,
     calculate_daily_kpi_series,
     calculate_monthly_kpi,
@@ -306,21 +307,7 @@ def require_owner(handler):
 
 
 def _active_employee_logins():
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        rows = conn.execute(
-            '''
-            SELECT lower(login)
-            FROM users
-            WHERE status IN (0, 1, 2)
-              AND login IS NOT NULL
-              AND trim(login) <> ''
-            ORDER BY ID
-            '''
-        ).fetchall()
-        return [row[0] for row in rows]
-    finally:
-        conn.close()
+    return active_kpi_employee_logins(DB_PATH)
 
 
 def _employee_logins_with_month_shifts(employee_logins, month):

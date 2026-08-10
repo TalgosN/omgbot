@@ -3,12 +3,12 @@ import re
 import sqlite3
 from datetime import date, datetime
 
-import pygsheets
 import pytz
 import telebot
 
 import sql_scripts
 from constants import funclist_acc
+from kpi_calculator import active_kpi_employee_logins, calculate_monthly_kpi
 from sheets import tables, update_table, update_table_open, update_users
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, require_role
 
@@ -560,52 +560,25 @@ def other_stats_show(message, bot, login, display_name):
     account_settings(message, bot)
 
 
-def get_main_kpi(login):
-    client = pygsheets.authorize(service_file='key/omgbot-430116-e9a4d9c69b7f.json')
-    spreadsheet = client.open('KPI OMG VR')
-    employees = spreadsheet.worksheet_by_title('Сотрудники').get_values(
-        start='A1', end='B60', returnas='matrix'
-    )
-    nickname = next(
-        (row[0] for row in employees if len(row) > 1 and str(row[1]).lower() == login.lower()),
-        None,
-    )
-    if not nickname:
-        raise ValueError('Telegram username не найден на листе «Сотрудники»')
-
-    values = spreadsheet.worksheet_by_title('Главный').get_values(
-        start='A1', end='AA60', returnas='matrix'
+def get_main_kpi(login, now=None):
+    now = now or datetime.now(pytz.timezone('Europe/Moscow'))
+    selected_date = now.strftime('%Y-%m-%d')
+    normalized_login = str(login or '').strip().lower()
+    if normalized_login not in set(active_kpi_employee_logins(DB_PATH)):
+        raise ValueError('Сотрудник не найден среди активных участников KPI')
+    rows = calculate_monthly_kpi(
+        now.replace(day=1).strftime('%Y-%m-%d'),
+        db_path=DB_PATH,
+        employee_logins=[normalized_login],
+        period_end=selected_date,
     )
     row = next(
-        (row for row in values[7:] if len(row) > 1 and str(row[1]).strip() == str(nickname).strip()),
+        (item for item in rows if item['login'] == normalized_login),
         None,
     )
     if not row:
-        raise ValueError('Сотрудник не найден на листе «Главный»')
-
-    def cell(index, default='0'):
-        value = row[index] if len(row) > index else ''
-        return value if value not in ('', None) else default
-
-    selected_date = values[0][2] if values and len(values[0]) > 2 else 'текущий месяц'
-    return {
-        'date': selected_date,
-        'nickname': nickname,
-        'shifts': cell(2),
-        'weighted_shifts': cell(3),
-        'reviews': cell(4), 'reviews_pct': cell(5),
-        'forms': cell(6), 'forms_pct': cell(7),
-        'extensions': cell(8), 'extensions_pct': cell(9),
-        'certificates': cell(10), 'certificates_pct': cell(11),
-        'subscriptions': cell(12), 'subscriptions_pct': cell(13),
-        'initiatives': cell(16), 'initiatives_pct': cell(17),
-        'stream': cell(18, 'FALSE'),
-        'penalties': cell(19),
-        'total_pct': cell(20),
-        'weighted_pct': cell(21),
-        'zone': cell(23, '—'),
-        'rank': cell(24, 'нет'),
-    }
+        raise ValueError('Не удалось рассчитать KPI сотрудника')
+    return {**row, 'date': selected_date}
 
 
 def get_database_stats(login, start=None, end=None):
@@ -679,6 +652,17 @@ def format_number(value):
         return str(value)
 
 
+def format_kpi_percent(value):
+    raw = str(value or '').strip()
+    if raw.endswith('%'):
+        return raw
+    try:
+        percent = float(value or 0) * 100
+    except (TypeError, ValueError):
+        return raw
+    return f'{percent:.1f}'.rstrip('0').rstrip('.') + '%'
+
+
 def escape_html(value):
     return html.escape(str(value))
 
@@ -706,25 +690,25 @@ def format_main_kpi(data, extras=None):
         f'👤 <b>{escape_html(data["nickname"])}</b>\n'
         f'📅 <i>Расчётная дата: {escape_html(report_date)}</i>\n\n'
         f'📈 <b>Основные показатели</b>\n\n'
-        f'🕒 Смены: <b>{escape_html(data["shifts"])}</b> '
-        f'<i>({escape_html(data["weighted_shifts"])} взв.)</i>\n'
-        f'⭐ Отзывы: <b>{escape_html(data["reviews"])}</b> '
-        f'<i>({escape_html(data["reviews_pct"])})</i>\n'
-        f'📝 Анкеты: <b>{escape_html(data["forms"])}</b> '
-        f'<i>({escape_html(data["forms_pct"])})</i>\n'
-        f'🔄 Продления: <b>{escape_html(data["extensions"])}</b> '
-        f'<i>({escape_html(data["extensions_pct"])})</i>\n'
-        f'🎫 Сертификаты: <b>{escape_html(data["certificates"])}</b> '
-        f'<i>({escape_html(data["certificates_pct"])})</i>\n'
-        f'💳 Абонементы: <b>{escape_html(data["subscriptions"])}</b> '
-        f'<i>({escape_html(data["subscriptions_pct"])})</i>\n'
-        f'💡 Инициативы: <b>{escape_html(data["initiatives"])}</b> '
-        f'<i>({escape_html(data["initiatives_pct"])})</i>\n'
-        f'⚠️ Штрафы: <b>{escape_html(data["penalties"])}</b>\n\n'
+        f'🕒 Смены: <b>{escape_html(format_number(data["shifts"]))}</b> '
+        f'<i>({escape_html(format_number(data["weighted_shifts"]))} взв.)</i>\n'
+        f'⭐ Отзывы: <b>{escape_html(format_number(data["reviews"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["reviews_pct"]))})</i>\n'
+        f'📝 Анкеты: <b>{escape_html(format_number(data["forms"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["forms_pct"]))})</i>\n'
+        f'🔄 Продления: <b>{escape_html(format_number(data["extensions"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["extensions_pct"]))})</i>\n'
+        f'🎫 Сертификаты: <b>{escape_html(format_number(data["certificates"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["certificates_pct"]))})</i>\n'
+        f'💳 Абонементы: <b>{escape_html(format_number(data["subscriptions"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["subscriptions_pct"]))})</i>\n'
+        f'💡 Инициативы: <b>{escape_html(format_number(data["initiatives"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["initiatives_pct"]))})</i>\n'
+        f'⚠️ Штрафы: <b>{escape_html(format_number(data["penalties"]))}</b>\n\n'
         f'🏆 <b>Результат</b>\n\n'
-        f'🎯 Итого KPI: <b>{escape_html(data["total_pct"])}</b> '
-        f'<i>({escape_html(data["weighted_pct"])} взв.)</i>\n'
-        f'🥇 Рейтинг: <b>{escape_html(data["rank"])}</b>\n'
+        f'🎯 Итого KPI: <b>{escape_html(format_kpi_percent(data["total_pct"]))}</b> '
+        f'<i>({escape_html(format_kpi_percent(data["weighted_pct"]))} взв.)</i>\n'
+        f'🥇 Рейтинг: <b>{escape_html(data["rank"] or "нет")}</b>\n'
         '\n'
         f'🚀 <b>Дополнительные показатели</b>\n\n'
         f'🚘 Автосимы: <b>{escape_html(format_number(extras.get("Автосимы", 0)))}</b>\n'
@@ -794,7 +778,7 @@ def send_monthly_stats(message, bot, login, display_name):
             display_name,
         )
         text += (
-            '\n\n⚠️ <i>Глобальный KPI из Google Sheets временно недоступен: '
+            '\n\n⚠️ <i>Не удалось выполнить внутренний расчёт KPI: '
             f'{escape_html(exc)}</i>'
         )
     bot.send_message(message.chat.id, text, parse_mode='HTML')

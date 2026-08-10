@@ -10,6 +10,12 @@ class Button:
     def __init__(self, text, **kwargs):
         self.text = text
         self.url = kwargs.get('url')
+        self.web_app = kwargs.get('web_app')
+
+
+class WebAppInfo:
+    def __init__(self, url):
+        self.url = url
 
 
 class Markup:
@@ -29,6 +35,8 @@ def load_menu_module():
         ReplyKeyboardMarkup=Markup,
         InlineKeyboardMarkup=Markup,
         InlineKeyboardButton=Button,
+        KeyboardButton=Button,
+        WebAppInfo=WebAppInfo,
     )
     telebot.telebot = telebot
 
@@ -38,6 +46,7 @@ def load_menu_module():
     constants.owner_admin_funclist = ()
     constants.OWNER_EMPLOYEE_MODE_BUTTON = '🧑🏻 Режим сотрудника'
     constants.OWNER_MODE_BUTTON = '👑 Вернуться в режим владельца'
+    constants.KPI_WEBAPP_URL = ''
 
     admin_panel = types.ModuleType('admin_panel')
     admin_panel.sync_config = Mock()
@@ -91,6 +100,22 @@ class HelpMenuTest(unittest.TestCase):
         self.menu.hello(123, bot)
 
         bot.register_next_step_handler.assert_not_called()
+
+    def test_problem_button_opens_mini_app_directly(self):
+        bot = Mock()
+        self.menu.funclist = {0: ('🚩 Доска проблем', 'Обычная кнопка')}
+        self.menu.get_user.return_value = {'status': 0, 'nick_name': 'Тест'}
+
+        with patch.object(self.menu.app_constants, 'KPI_WEBAPP_URL', 'https://bot.omg-vr.ru/'):
+            self.menu.hello(123, bot)
+
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        problem_button = markup.rows[0][0]
+        self.assertEqual(problem_button.text, '🚩 Доска проблем')
+        self.assertEqual(
+            problem_button.web_app.url,
+            'https://bot.omg-vr.ru/problems',
+        )
 
     def test_resource_links_include_shift_and_all_sheets(self):
         with patch.dict(os.environ, {

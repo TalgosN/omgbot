@@ -87,25 +87,25 @@ class AdminHealthTest(unittest.TestCase):
 
     def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
         def employee(name, shifts, weighted_shifts, total, weighted):
-            row = [''] * 27
-            row[1] = name
-            row[2] = shifts
-            row[3] = weighted_shifts
-            row[20] = total
-            row[21] = weighted
-            return row
+            return {
+                'nickname': name,
+                'shifts': shifts,
+                'weighted_shifts': weighted_shifts,
+                'total_pct': total,
+                'weighted_pct': weighted,
+            }
 
-        values = [['', '', '21.7.2026']] + [[] for _ in range(6)] + [
-            employee('Без смен', '0', '5', '1%', '1%'),
-            employee('Без взвешенных смен', '10', '0', '1%', '1%'),
-            employee('Нулевой KPI', '6', '7', '0%', '0%'),
-            employee('Четвёртый', '10', '12', '50%', '40%'),
-            employee('Первый', '8', '9', '10%', '8%'),
-            employee('Третий', '9', '11', '30%', '25%'),
-            employee('Второй', '7', '8', '20%', '15%'),
+        rows = [
+            employee('Без смен', 0, 5, 0.01, 0.01),
+            employee('Без взвешенных смен', 10, 0, 0.01, 0.01),
+            employee('Нулевой KPI', 6, 7, 0, 0),
+            employee('Четвёртый', 10, 12, 0.50, 0.40),
+            employee('Первый', 8, 9, 0.10, 0.08),
+            employee('Третий', 9, 11, 0.30, 0.25),
+            employee('Второй', 7, 8, 0.20, 0.15),
         ]
 
-        reports = self.admin.build_monthly_kpi_report(values)
+        reports = self.admin.build_monthly_kpi_report(rows, '21.07.2026')
         report = '\n'.join(reports)
 
         self.assertNotIn('Без смен', report)
@@ -121,6 +121,42 @@ class AdminHealthTest(unittest.TestCase):
         self.assertLess(report.index('Нулевой KPI'), report.index('Первый'))
         self.assertLess(report.index('Первый'), report.index('Второй'))
         self.assertNotIn('—', report)
+
+    def test_monthly_kpi_report_handler_does_not_read_google_sheet(self):
+        bot = Mock()
+        bot.send_message.return_value = types.SimpleNamespace(message_id=77)
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+        menu = types.ModuleType('menu')
+        menu.admin_menu = Mock()
+        rows = [{
+            'login': '@employee',
+            'nickname': 'Сотрудник',
+            'shifts': 5.0,
+            'weighted_shifts': 6.0,
+            'total_pct': 0.42,
+            'weighted_pct': 0.35,
+        }]
+        self.admin.pygsheets.authorize = Mock(
+            side_effect=AssertionError('Google Sheets must not be used'),
+        )
+
+        with patch.object(
+            self.admin, 'require_role', return_value={'status': 2},
+        ), patch.object(
+            self.admin,
+            'active_kpi_employee_logins',
+            return_value=['@employee'],
+        ), patch.object(
+            self.admin,
+            'calculate_monthly_kpi',
+            return_value=rows,
+        ) as calculate, patch.dict(sys.modules, {'menu': menu}):
+            self.admin.handle_monthly_kpi_report(message, bot)
+
+        calculate.assert_called_once()
+        self.admin.pygsheets.authorize.assert_not_called()
+        sent_texts = [call.args[1] for call in bot.send_message.call_args_list]
+        self.assertTrue(any('KPI сотрудников за месяц' in text for text in sent_texts))
 
     def test_extra_menu_keeps_owner_only_report_out_of_manager_menu(self):
         manager_buttons = [

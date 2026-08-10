@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -22,12 +23,17 @@ def load_account_module():
     pygsheets = types.ModuleType('pygsheets')
     pytz = types.ModuleType('pytz')
     pytz.timezone = lambda _name: None
+    permissions = types.ModuleType('permissions')
+    permissions.ROLE_EMPLOYEE = 0
+    permissions.ROLE_MANAGER = 2
+    permissions.require_role = Mock(return_value={'status': 0})
     modules = {
         'telebot': telebot,
         'constants': constants,
         'sheets': sheets,
         'pygsheets': pygsheets,
         'pytz': pytz,
+        'permissions': permissions,
     }
     with patch.dict(sys.modules, modules):
         spec = importlib.util.spec_from_file_location('account_under_test', 'account.py')
@@ -256,32 +262,37 @@ class AccountTest(unittest.TestCase):
         )
         account_settings.assert_called_once_with(message, bot)
 
-    def test_main_sheet_kpi_is_mapped_by_telegram_login(self):
-        employees_sheet = Mock()
-        employees_sheet.get_values.return_value = [['Ник', '@employee']]
-        main_sheet = Mock()
-        main_row = [
-            '1', 'Ник', '10', '12', '3', '30%', '8', '80%', '2', '20%',
-            '1000', '10%', '2000', '20%', '1', '15%', '4', '40%', 'TRUE',
-            '1', '55%', '46%', '1200 ₽', '●', '2', '5', '2',
-        ]
-        main_sheet.get_values.return_value = [
-            ['', '', '21.07.2026'], [], [], [], [], [], [], main_row,
-        ]
-        spreadsheet = Mock()
-        spreadsheet.worksheet_by_title.side_effect = lambda title: (
-            employees_sheet if title == 'Сотрудники' else main_sheet
-        )
-        client = Mock()
-        client.open.return_value = spreadsheet
+    def test_monthly_kpi_uses_internal_calculator_by_telegram_login(self):
+        internal_row = {
+            'login': '@employee',
+            'nickname': 'Ник',
+            'total_pct': 0.55,
+            'weighted_pct': 0.46,
+            'rank': 2,
+        }
+        now = datetime(2026, 7, 21, 12, 0)
 
-        with patch.object(self.account.pygsheets, 'authorize', return_value=client, create=True):
-            result = self.account.get_main_kpi('@employee')
+        with patch.object(
+            self.account,
+            'active_kpi_employee_logins',
+            return_value=['@employee'],
+        ), patch.object(
+            self.account,
+            'calculate_monthly_kpi',
+            return_value=[internal_row],
+        ) as calculate:
+            result = self.account.get_main_kpi('@employee', now=now)
 
         self.assertEqual(result['nickname'], 'Ник')
-        self.assertEqual(result['total_pct'], '55%')
-        self.assertEqual(result['weighted_pct'], '46%')
-        self.assertEqual(result['rank'], '2')
+        self.assertEqual(result['total_pct'], 0.55)
+        self.assertEqual(result['weighted_pct'], 0.46)
+        self.assertEqual(result['rank'], 2)
+        calculate.assert_called_once_with(
+            '2026-07-01',
+            db_path=self.account.DB_PATH,
+            employee_logins=['@employee'],
+            period_end='2026-07-21',
+        )
 
     def test_monthly_kpi_uses_approved_telegram_format(self):
         data = {

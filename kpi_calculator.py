@@ -31,6 +31,22 @@ DEFAULT_CLUB_WEIGHTS = {
 }
 
 
+def active_kpi_employee_logins(db_path=DB_PATH):
+    """Returns the same active employee set used by every KPI surface."""
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            '''SELECT lower(login) FROM users
+               WHERE status IN (0, 1, 2)
+                 AND login IS NOT NULL
+                 AND trim(login) <> ''
+               ORDER BY ID'''
+        ).fetchall()
+        return [row[0] for row in rows]
+    finally:
+        conn.close()
+
+
 def initialize_shift_time_schema(db_path=DB_PATH, connection=None):
     conn = connection or sqlite3.connect(db_path)
     owns_connection = connection is None

@@ -2,6 +2,7 @@ from telebot import *
 from html import escape
 import os
 import sqlite3
+import constants as app_constants
 from constants import *
 from admin_panel import sync_config
 from permissions import (
@@ -54,6 +55,28 @@ def chatid_to_users(chatid):
     conn.close()
     return users
 
+
+def _webapp_url(path=''):
+    webapp_url = getattr(app_constants, 'KPI_WEBAPP_URL', '').strip()
+    runtime_url_path = os.path.join('data', 'kpi_webapp_url.txt')
+    if not webapp_url and os.path.exists(runtime_url_path):
+        with open(runtime_url_path, 'r', encoding='utf-8') as runtime_url_file:
+            webapp_url = runtime_url_file.read().strip()
+    if not webapp_url:
+        return ''
+    return f'{webapp_url.rstrip("/")}/{path.lstrip("/")}' if path else webapp_url
+
+
+def _main_menu_button(text):
+    if text == '🚩 Доска проблем':
+        problems_url = _webapp_url('problems')
+        if problems_url:
+            return telebot.types.KeyboardButton(
+                text,
+                web_app=telebot.types.WebAppInfo(problems_url),
+            )
+    return text
+
 def hello(chatid, bot):
     bot.clear_step_handler_by_chat_id(chatid)
     user = get_user(telegram_id=chatid)
@@ -64,7 +87,10 @@ def hello(chatid, bot):
         bot.send_message(chatid, f'Привет, {user["nick_name"]}!')
         
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        buttons = list(funclist[user['status']])
+        buttons = [
+            _main_menu_button(text)
+            for text in funclist[user['status']]
+        ]
         if is_owner_employee_mode(telegram_id=chatid):
             buttons.append(OWNER_MODE_BUTTON)
         elif user['status'] == ROLE_OWNER:
