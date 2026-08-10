@@ -39,7 +39,6 @@ CONFIG_SPREADSHEET_ID = '1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q'
 temp_broadcasts = {}
 health_check_lock = threading.Lock()
 config_sync_lock = threading.Lock()
-kpi_shadow_lock = threading.Lock()
 
 def generate_days_keyboard(selected_days=""):
     markup = types.InlineKeyboardMarkup()
@@ -116,9 +115,6 @@ def admin_func_handler(message, bot):
 
     elif a == '🔄 Сотрудники OMG Shift':
         handle_shifton_employee_sync(message, bot)
-
-    elif a == '🧪 Диагностика KPI':
-        handle_kpi_shadow_diagnostics(message, bot)
 
     elif a == '📊 KPI сотрудников':
         handle_monthly_kpi_report(message, bot)
@@ -222,7 +218,6 @@ def admin_extra_menu_handler(message, bot):
         '⚙️ Обновить настройки',
         '🔄 Сотрудники OMG Shift',
         '🩺 Статус систем',
-        '🧪 Диагностика KPI',
         '📊 Тест недельного отчета',
         '📦 Тест отчета по расходникам',
     }:
@@ -620,9 +615,8 @@ def collect_system_health(bot):
 
     try:
         gc = pygsheets.authorize(service_file=KEY_FILE)
-        gc.open('KPI OMG VR')
         gc.open_by_key(CONFIG_SPREADSHEET_ID)
-        lines.append("✅ Google Sheets: KPI и Виарыч доступны")
+        lines.append("✅ Google Sheets: Виарыч доступен")
     except Exception as e:
         lines.append(f"❌ Google Sheets: {str(e)[:120]}")
 
@@ -842,46 +836,6 @@ def handle_system_health(message, bot):
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Ошибка проверки систем: {e}")
         finally:
             health_check_lock.release()
-            admin_extra_menu(message, bot)
-
-    threading.Thread(target=worker, daemon=True).start()
-
-
-def handle_kpi_shadow_diagnostics(message, bot):
-    if not require_role(message, bot, ROLE_MANAGER):
-        return
-    if not kpi_shadow_lock.acquire(blocking=False):
-        bot.send_message(message.chat.id, '⏳ Диагностика KPI уже выполняется.')
-        admin_extra_menu(message, bot)
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        '⏳ Сравниваю серверный KPI с Google Sheets...',
-    )
-
-    def worker():
-        try:
-            from kpi import compare_server_kpi_with_sheet
-            from kpi_calculator import get_kpi_control_status
-
-            comparison = compare_server_kpi_with_sheet()
-            controls = get_kpi_control_status(comparison['period_month'])
-            report = build_kpi_shadow_report(comparison, controls)
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=msg.message_id,
-                text=report,
-                parse_mode='HTML',
-            )
-        except Exception as error:
-            bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=msg.message_id,
-                text=f'❌ Ошибка диагностики KPI: {error}',
-            )
-        finally:
-            kpi_shadow_lock.release()
             admin_extra_menu(message, bot)
 
     threading.Thread(target=worker, daemon=True).start()

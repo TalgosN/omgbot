@@ -14,7 +14,8 @@ def load_kpi_module():
     telebot = types.ModuleType("telebot")
     telebot.__all__ = []
     constants = types.ModuleType("constants")
-    constants.__all__ = ["SHIFTON_API_URL", "SHIFTON_API_TOKEN", "TEXTS"]
+    constants.__all__ = ["CHATS", "SHIFTON_API_URL", "SHIFTON_API_TOKEN", "TEXTS"]
+    constants.CHATS = {}
     constants.SHIFTON_API_URL = "http://shifton.test"
     constants.SHIFTON_API_TOKEN = "test-token"
     constants.TEXTS = {"aff": ["Готово"], "penalty_phrases": ["Штраф записан"]}
@@ -58,6 +59,26 @@ class KpiTest(unittest.TestCase):
             "#серт", "#абик", "#штраф", "#продление",
             "#инициатива", "#отзывы",
         })
+
+    def test_init_keeps_forms_and_shifts_without_kpi_sheet_sync(self):
+        with patch.object(self.kpi, "read_ank_table") as read_forms, \
+                patch.object(self.kpi, "read_shifts") as read_shifts, \
+                patch.object(self.kpi, "write_data") as write_data, \
+                patch.object(self.kpi, "run_kpi_shadow_cycle") as shadow_cycle:
+            self.kpi.init()
+
+        read_forms.assert_called_once_with()
+        read_shifts.assert_called_once_with()
+        write_data.assert_not_called()
+        shadow_cycle.assert_not_called()
+
+    def test_update_kpi_refreshes_only_forms(self):
+        with patch.object(self.kpi, "read_ank_table") as read_forms, \
+                patch.object(self.kpi, "write_data") as write_data:
+            self.kpi.update_kpi()
+
+        read_forms.assert_called_once_with()
+        write_data.assert_not_called()
 
     def test_write_data_extends_sheet_before_clearing_unused_columns(self):
         events = []

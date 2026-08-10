@@ -9,7 +9,7 @@ import telebot
 import sql_scripts
 from constants import funclist_acc
 from kpi_calculator import active_kpi_employee_logins, calculate_monthly_kpi
-from sheets import tables, update_table, update_table_open, update_users
+from sheets import update_table_open, update_users
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, require_role
 
 
@@ -237,18 +237,6 @@ def sync_google_dependencies(full=False):
     operations = [('Сотрудники', update_users)]
     if full:
         operations.append(('Открытия и закрытия', update_table_open))
-        for table in [*tables, 'reviews']:
-            operations.append((f'KPI helper/{table}', lambda table=table: update_table(table)))
-
-        def update_kpi_sheets():
-            import kpi
-
-            kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts_ext), 'KPI helper', 'shifts')
-            kpi.write_data(kpi.sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
-            kpi.write_data(kpi.sql_select(sql_scripts.sheets_shifts), 'KPI OMG VR', 'shifts')
-            kpi.write_data(kpi.sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')
-
-        operations.append(('KPI OMG VR', update_kpi_sheets))
 
         try:
             from consumables import sync_consumables_to_sheets

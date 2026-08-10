@@ -563,7 +563,6 @@ def do_club_action(hashtag, message, text_args):
     # Запись в локальную базу
     table = action[hashtag]
     Insert(table, today, user_name, club, text_args)
-    update_table(table)
 
     # Формируем красивый ответ
     if shift_not_found:
@@ -592,7 +591,6 @@ def do_bonus(hashtag, message, text_args):
     today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
     who = "@" + message.from_user.username
     Insert_bonus(table, num, today, who, sale)
-    update_table(table)
     return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
 
 
@@ -614,7 +612,6 @@ def do_review(message, text_args):
     cur.close()
     conn.close()
     
-    update_table('reviews')
     return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
 
 
@@ -1151,13 +1148,6 @@ def run_kpi_shadow_cycle():
 def init():
     read_ank_table()
     read_shifts()
-    write_data(sql_select(sql_scripts.sheets_shifts_ext), 'KPI helper', 'shifts')
-    write_data(sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
-    write_data(sql_select(sql_scripts.sheets_shifts), 'KPI OMG VR', 'shifts')
-    write_data(sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')
-    run_kpi_shadow_cycle()
 
 def update_kpi():
     read_ank_table()
-    write_data(sql_select(sql_scripts.sheets_union), 'KPI OMG VR', 'data')
-    write_data(sql_select(sql_scripts.sheets_records), 'KPI OMG VR', 'raw')

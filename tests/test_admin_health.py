@@ -82,7 +82,7 @@ class AdminHealthTest(unittest.TestCase):
         self.assertIn("🎮 Steam Tracker", report)
         self.assertIn("последняя проверка 2026-07-21 12:00:00", report)
         self.assertEqual(request.call_args.kwargs["timeout"], 5)
-        google.open.assert_called_once_with("KPI OMG VR")
+        google.open.assert_not_called()
         google.open_by_key.assert_called_once_with(self.admin.CONFIG_SPREADSHEET_ID)
 
     def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
@@ -162,14 +162,12 @@ class AdminHealthTest(unittest.TestCase):
         manager_buttons = [
             '⚙️ Обновить настройки',
             '🩺 Статус систем',
-            '🧪 Диагностика KPI',
             '📦 Тест отчета по расходникам',
             '⬅️ Назад в админку',
         ]
         owner_buttons = [
             '⚙️ Обновить настройки',
             '🩺 Статус систем',
-            '🧪 Диагностика KPI',
             '📊 Тест недельного отчета',
             '📦 Тест отчета по расходникам',
             '⬅️ Назад в админку',
