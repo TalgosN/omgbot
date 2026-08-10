@@ -152,8 +152,38 @@ function photoQuestions() {
 }
 
 function setStage(stageId) {
-  ['loadingCard', 'errorCard', 'checklistStage', 'questionStage', 'photoStage', 'reviewStage', 'successStage']
+  ['loadingCard', 'errorCard', 'ownerClubStage', 'checklistStage', 'questionStage', 'photoStage', 'reviewStage', 'successStage']
     .forEach((id) => { $(`#${id}`).hidden = id !== stageId; });
+}
+
+function renderOwnerClubSelection(selection) {
+  const closing = selection.action === 'close';
+  $('#pageTitle').textContent = closing ? 'ТЕСТ ЗАКРЫТИЯ' : 'ТЕСТ ОТКРЫТИЯ';
+  $('#pageDescription').textContent = 'Смена на сегодня не найдена · выберите клуб для теста';
+  const clubList = $('#ownerClubList');
+  clubList.replaceChildren();
+  selection.clubs.forEach((clubName) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = clubName;
+    button.addEventListener('click', async () => {
+      const buttons = [...clubList.querySelectorAll('button')];
+      buttons.forEach((item) => { item.disabled = true; });
+      button.classList.add('loading');
+      try {
+        runtime.scenario = await fetchScenario(null, clubName);
+        setPageCopy();
+        createDraft();
+        renderChecklist();
+      } catch (error) {
+        toast(error.message, true);
+        button.classList.remove('loading');
+        buttons.forEach((item) => { item.disabled = false; });
+      }
+    });
+    clubList.append(button);
+  });
+  setStage('ownerClubStage');
 }
 
 function setPageCopy() {
@@ -521,7 +551,13 @@ async function fetchScenario(variant = null, club = '') {
 }
 
 async function startFreshScenario() {
-  runtime.scenario = await fetchScenario();
+  const response = await fetchScenario();
+  if (response.requires_club_selection) {
+    runtime.scenario = null;
+    renderOwnerClubSelection(response);
+    return;
+  }
+  runtime.scenario = response;
   setPageCopy();
   createDraft();
   renderChecklist();
@@ -687,6 +723,12 @@ async function initialize() {
     if (!localDraft) throw error;
     await deleteDraft(localDraft);
     runtime.scenario = await fetchScenario();
+  }
+  if (runtime.scenario.requires_club_selection) {
+    const selection = runtime.scenario;
+    runtime.scenario = null;
+    renderOwnerClubSelection(selection);
+    return;
   }
   setPageCopy();
   $('#loadingCard').hidden = true;

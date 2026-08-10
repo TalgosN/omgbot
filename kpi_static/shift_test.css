@@ -37,6 +37,11 @@ button { color:inherit; cursor:pointer; }
 .error-card h2,.success-card h2 { margin:7px 0; font-size:22px; }
 .error-card p,.success-card p { margin:0; color:var(--muted); font-size:10px; line-height:1.55; }
 .error-card a,.success-card a { display:grid; min-height:46px; margin-top:16px; place-items:center; border-radius:14px; color:white; text-decoration:none; background:linear-gradient(145deg,var(--accent),var(--accent-dark)); font-size:11px; font-weight:800; }
+.owner-club-list { display:grid; gap:8px; margin-top:17px; }
+.owner-club-list button { position:relative; min-height:52px; padding:0 42px 0 15px; border:1px solid rgba(77,224,199,.18); border-radius:14px; color:var(--ink); background:rgba(3,27,34,.5); font-size:12px; font-weight:750; text-align:left; }
+.owner-club-list button::after { position:absolute; top:50%; right:15px; color:#8de3d8; font-size:18px; content:'→'; transform:translateY(-50%); }
+.owner-club-list button:disabled { opacity:.55; cursor:wait; }
+.owner-club-list button.loading::after { width:15px; height:15px; border:2px solid rgba(77,224,199,.2); border-top-color:#8de3d8; border-radius:50%; content:''; animation:spin .8s linear infinite; }
 .scenario-meta { display:grid; grid-template-columns:2fr 1fr; gap:8px; margin-bottom:18px; }
 .scenario-meta div { min-width:0; padding:11px 12px; border:1px solid rgba(77,224,199,.13); border-radius:14px; background:rgba(3,27,34,.44); }
 .scenario-meta span,.scenario-meta strong { display:block; }

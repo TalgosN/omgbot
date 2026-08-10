@@ -215,6 +215,7 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn('/static/camera_test.js', camera_html)
             self.assertEqual(shift_test_response.status_code, 200)
             shift_test_html = shift_test_response.get_data(as_text=True)
+            self.assertIn('id="ownerClubStage"', shift_test_html)
             self.assertIn('id="checklistStage"', shift_test_html)
             self.assertIn('id="questionStage"', shift_test_html)
             self.assertIn('id="cameraStage"', shift_test_html)
@@ -295,14 +296,79 @@ class KpiWebTest(unittest.TestCase):
             ['num', 'photo', 'photo'],
         )
 
-    def test_shift_test_is_blocked_when_today_shift_is_missing(self):
+    def test_shift_test_is_blocked_for_manager_when_today_shift_is_missing(self):
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
-            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
             patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
         ):
             response = self.client.get(
                 '/api/shift-test/scenario?action=close', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('На сегодня смена', response.get_json()['error'])
+
+    def test_shift_test_owner_without_shift_can_select_configured_club(self):
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Клуб в расписании',
+                'questions': {
+                    '✅ Открыть смену': [[
+                        {'text': 'Комментарий', 'type': 'text'},
+                    ]],
+                },
+            },
+            'Без открытия': {
+                'shift_name': 'Другой клуб',
+                'questions': {},
+            },
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+            patch.object(kpi_web.random, 'randrange', return_value=0),
+        ):
+            selection_response = self.client.get(
+                '/api/shift-test/scenario?action=open', headers=self.headers,
+            )
+            scenario_response = self.client.get(
+                '/api/shift-test/scenario?action=open&club=Тестовый+клуб',
+                headers=self.headers,
+            )
+
+        self.assertEqual(selection_response.status_code, 200)
+        selection = selection_response.get_json()
+        self.assertTrue(selection['requires_club_selection'])
+        self.assertEqual(selection['clubs'], ['Тестовый клуб'])
+        self.assertEqual(scenario_response.status_code, 200)
+        scenario = scenario_response.get_json()
+        self.assertEqual(scenario['club'], 'Тестовый клуб')
+        self.assertTrue(scenario['shift']['manual'])
+        self.assertIsNone(scenario['shift']['start'])
+
+    def test_shift_test_manager_cannot_select_club_without_shift(self):
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Тестовый клуб',
+                'questions': {
+                    '✅ Открыть смену': [[
+                        {'text': 'Комментарий', 'type': 'text'},
+                    ]],
+                },
+            },
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+        ):
+            response = self.client.get(
+                '/api/shift-test/scenario?action=open&club=Тестовый+клуб',
+                headers=self.headers,
             )
 
         self.assertEqual(response.status_code, 400)

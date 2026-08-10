@@ -574,6 +574,20 @@ def _shift_report_test_club(shift_club):
     return None, None
 
 
+def _shift_report_test_owner_clubs(action):
+    if action not in SHIFT_ACTIONS:
+        raise ValueError('Выберите открытие или закрытие')
+    action_name = SHIFT_ACTIONS[action]
+    return sorted(
+        [
+            club_name
+            for club_name, club in get_clubs().items()
+            if club.get('questions', {}).get(action_name)
+        ],
+        key=str.casefold,
+    )
+
+
 def _shift_report_test_scenario(
     action, variant_index=None, now=None, requested_club=None,
 ):
@@ -582,10 +596,29 @@ def _shift_report_test_scenario(
     shift = _select_shift_report_test_shift(
         _actor_login(), now=now, requested_club=requested_club,
     )
+    manual_club = None
+    if (
+        not shift
+        and requested_club
+        and int(g.kpi_user['status']) == ROLE_OWNER
+        and not _select_shift_report_test_shift(_actor_login(), now=now)
+    ):
+        manual_club = _shift_report_test_club(requested_club)
+        if not manual_club[1]:
+            raise ValueError('Выбранный клуб не найден в настройках OMG Shift')
+        current = now or datetime.now(ZoneInfo('Europe/Moscow'))
+        shift = {
+            'date': current.date().isoformat(),
+            'club': manual_club[0],
+            'duration': 0,
+            'start': None,
+            'end': None,
+            'manual': True,
+        }
     if not shift:
         raise ValueError('На сегодня смена в OMG Shift не найдена')
 
-    club_name, club = _shift_report_test_club(shift.get('club'))
+    club_name, club = manual_club or _shift_report_test_club(shift.get('club'))
     if not club:
         raise ValueError('Для клуба из расписания не найден сценарий смены')
     action_name = SHIFT_ACTIONS[action]
@@ -1030,9 +1063,13 @@ def _shift_report_test_messages(scenario, answers, photo_count):
     name = user.get('nick_name') or user.get('first_name') or user.get('login')
     login = str(user.get('login') or '—')
     shift = scenario['shift']
-    time_label = '–'.join(
-        value for value in (shift.get('start'), shift.get('end')) if value
-    ) or 'время не указано'
+    time_label = (
+        'клуб выбран вручную'
+        if shift.get('manual')
+        else '–'.join(
+            value for value in (shift.get('start'), shift.get('end')) if value
+        ) or 'время не указано'
+    )
     heading = '\n'.join([
         f"🧪 <b>ТЕСТ · {html.escape(scenario['action_label'].upper())} СМЕНЫ</b>",
         '',
@@ -1777,10 +1814,26 @@ def api_shift():
 def api_shift_test_scenario():
     action = str(request.args.get('action') or '').strip()
     variant = request.args.get('variant')
+    requested_club = str(request.args.get('club') or '').strip() or None
+    if (
+        int(g.kpi_user['status']) == ROLE_OWNER
+        and not requested_club
+        and not _select_shift_report_test_shift(_actor_login())
+    ):
+        clubs = _shift_report_test_owner_clubs(action)
+        if not clubs:
+            raise ValueError('Для теста не настроено ни одного клуба')
+        return jsonify({
+            'test_mode': True,
+            'requires_club_selection': True,
+            'action': action,
+            'action_label': 'Открытие' if action == 'open' else 'Закрытие',
+            'clubs': clubs,
+        })
     scenario = _shift_report_test_scenario(
         action,
         variant_index=variant if variant not in (None, '') else None,
-        requested_club=str(request.args.get('club') or '').strip() or None,
+        requested_club=requested_club,
     )
     return jsonify(scenario)
 
