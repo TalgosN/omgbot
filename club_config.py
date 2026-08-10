@@ -132,12 +132,11 @@ def select_question_set(club_config, action):
     question_variants = club_config.get('questions', {}).get(action, [[]])
     variant_index = random.randrange(len(question_variants))
     questions = question_variants[variant_index]
-
-    checklist_variants = club_config.get('checklists', {}).get(action, [])
-    if checklist_variants and isinstance(checklist_variants[0], list):
-        checklist = checklist_variants[variant_index]
-    else:
-        checklist = checklist_variants
+    checklist = [
+        str(question.get('checklist') or '').strip()
+        for question in questions
+        if isinstance(question, dict) and str(question.get('checklist') or '').strip()
+    ]
     return questions, checklist
 
 

@@ -61,42 +61,43 @@ function rowActions(list, index) {
   return wrapper;
 }
 
-function renderList(target, list, kind) {
+function renderQuestions(target, list) {
   target.innerHTML = '';
   if (!list.length) {
-    target.innerHTML = `<div class="empty">${kind === 'question' ? 'Добавьте хотя бы один вопрос' : 'Чек-лист можно оставить пустым'}</div>`;
+    target.innerHTML = '<div class="empty">Добавьте хотя бы один вопрос</div>';
     return;
   }
   list.forEach((item, index) => {
-    const row = document.createElement('div'); row.className = `edit-row ${kind}`;
+    const row = document.createElement('div'); row.className = 'edit-row question';
     const number = document.createElement('span'); number.className = 'number'; number.textContent = index + 1;
-    const input = document.createElement('textarea'); input.rows = 1;
-    input.value = kind === 'question' ? item.text : item;
-    input.placeholder = kind === 'question' ? 'Текст вопроса' : 'Пункт чек-листа';
-    input.oninput = () => { if (kind === 'question') item.text = input.value; else list[index] = input.value; markDirty(); };
-    row.append(number, input);
-    if (kind === 'question') {
-      const select = document.createElement('select');
-      select.innerHTML = '<option value="text">Текст</option><option value="photo">Фото</option><option value="num">Число</option>';
-      select.value = item.type;
-      select.onchange = () => {
-        if (select.value === 'photo' && list.filter((question) => question.type === 'photo').length >= 10) {
-          select.value = item.type;
-          notice('В одном наборе можно добавить не более 10 вопросов с фото', true);
-          return;
-        }
-        item.type = select.value;
-        markDirty();
-      };
-      row.append(select);
-    }
+    const fields = document.createElement('div'); fields.className = 'question-fields';
+    const input = document.createElement('textarea'); input.rows = 1; input.value = item.text;
+    input.placeholder = 'Текст вопроса';
+    input.oninput = () => { item.text = input.value; markDirty(); };
+    const checklist = document.createElement('textarea'); checklist.rows = 1;
+    checklist.value = item.checklist || '';
+    checklist.placeholder = 'Пункт чек-листа перед вопросами (необязательно)';
+    checklist.oninput = () => { item.checklist = checklist.value; markDirty(); };
+    fields.append(input, checklist);
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="text">Текст</option><option value="photo">Фото</option><option value="num">Число</option>';
+    select.value = item.type;
+    select.onchange = () => {
+      if (select.value === 'photo' && list.filter((question) => question.type === 'photo').length >= 10) {
+        select.value = item.type;
+        notice('В одном наборе можно добавить не более 10 вопросов с фото', true);
+        return;
+      }
+      item.type = select.value;
+      markDirty();
+    };
+    row.append(number, fields, select);
     row.append(rowActions(list, index)); target.append(row);
   });
 }
 
 function renderItems() {
-  renderList($('#checklistList'), currentVariant().checklist, 'checklist');
-  renderList($('#questionList'), currentVariant().questions, 'question');
+  renderQuestions($('#questionList'), currentVariant().questions);
 }
 
 function renderVariants() {
@@ -145,19 +146,19 @@ document.querySelectorAll('.action-tab').forEach((button) => {
 });
 $('#addVariant').onclick = () => {
   if (currentVariants().length >= 26) return notice('Можно создать не более 26 наборов', true);
-  currentVariants().push({ checklist: [], questions: [{ text: '', type: 'text' }] });
+  currentVariants().push({ questions: [{ text: '', type: 'text', checklist: '' }] });
   selectedVariant = currentVariants().length - 1; markDirty(); renderVariants(); renderItems();
 };
 $('#removeVariant').onclick = () => {
   if (currentVariants().length === 1 || !window.confirm('Удалить этот набор?')) return;
   currentVariants().splice(selectedVariant, 1); selectedVariant = Math.max(0, selectedVariant - 1); markDirty(); renderVariants(); renderItems();
 };
-$('#addChecklist').onclick = () => { currentVariant().checklist.push(''); markDirty(); renderItems(); };
-$('#addQuestion').onclick = () => { currentVariant().questions.push({ text: '', type: 'text' }); markDirty(); renderItems(); };
+$('#addQuestion').onclick = () => { currentVariant().questions.push({ text: '', type: 'text', checklist: '' }); markDirty(); renderItems(); };
 $('#previewButton').onclick = () => {
   const variant = currentVariant();
   const list = (items, renderItem) => items.length ? `<ol>${items.map(renderItem).join('')}</ol>` : '<p class="hint">Нет пунктов</p>';
-  $('#previewContent').innerHTML = `<p><strong>${state.clubs[selectedClub].name}</strong> · ${selectedAction === 'open' ? 'Открытие' : 'Закрытие'} · Набор ${String.fromCharCode(65 + selectedVariant)}</p><div class="preview-block"><h3>Чек-лист</h3>${list(variant.checklist, (item) => `<li>${escapeHtml(item)}</li>`)}</div><div class="preview-block"><h3>Вопросы</h3>${list(variant.questions, (item) => `<li>${escapeHtml(item.text)} <small>(${item.type})</small></li>`)}</div>`;
+  const checklist = variant.questions.map((item) => item.checklist || '').filter((item) => item.trim());
+  $('#previewContent').innerHTML = `<p><strong>${state.clubs[selectedClub].name}</strong> · ${selectedAction === 'open' ? 'Открытие' : 'Закрытие'} · Набор ${String.fromCharCode(65 + selectedVariant)}</p><div class="preview-block"><h3>Чек-лист</h3>${list(checklist, (item) => `<li>${escapeHtml(item)}</li>`)}</div><div class="preview-block"><h3>Вопросы</h3>${list(variant.questions, (item) => `<li>${escapeHtml(item.text)} <small>(${item.type})</small></li>`)}</div>`;
   $('#previewDialog').showModal();
 };
 $('#closePreview').onclick = () => $('#previewDialog').close();

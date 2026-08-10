@@ -433,8 +433,7 @@ def preserve_shift_questions(current_config, new_config):
             continue
         if previous.get('questions'):
             info['questions'] = copy.deepcopy(previous['questions'])
-        if previous.get('checklists'):
-            info['checklists'] = copy.deepcopy(previous['checklists'])
+        info.pop('checklists', None)
     return new_config
 
 
@@ -467,7 +466,19 @@ def count_config(config):
     checklists = 0
     for info in config.values():
         questions += sum(len(items) for variants in info.get('questions', {}).values() for items in variants)
-        checklists += sum(len(items) for variants in info.get('checklists', {}).values() for items in variants)
+        embedded_checklists = sum(
+            bool(str(question.get('checklist') or '').strip())
+            for variants in info.get('questions', {}).values()
+            for questions in variants
+            for question in questions
+            if isinstance(question, dict)
+        )
+        legacy_checklists = sum(
+            len(items)
+            for variants in info.get('checklists', {}).values()
+            for items in variants
+        )
+        checklists += embedded_checklists or legacy_checklists
     return len(config), questions, checklists
 
 

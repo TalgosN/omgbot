@@ -5,6 +5,7 @@ const configLink = document.querySelector('#openShiftConfig');
 const reportProblemLink = document.querySelector('#reportProblem');
 const cameraTestLink = document.querySelector('#openCameraTest');
 const errorCard = document.querySelector('#shiftError');
+const shiftReportTest = document.querySelector('#shiftReportTest');
 
 tg?.ready();
 tg?.expand();
@@ -80,6 +81,7 @@ async function loadShift() {
   if (!response.ok) throw new Error(payload.error || 'Не удалось открыть OMG Shift');
   document.querySelector('#shiftUserName').textContent = `Команда OMG VR · ${payload.user_name}`;
   document.querySelector('#shiftRole').textContent = payload.role_name;
+  shiftReportTest.hidden = false;
   if (!payload.external_url) throw new Error('Адрес OMG Shift не настроен');
 
   externalLink.href = payload.external_url;

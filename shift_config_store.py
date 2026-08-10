@@ -30,7 +30,6 @@ def _snapshot(clubs):
         str(info['_config_id']): {
             'club': name,
             'questions': copy.deepcopy(info.get('questions', {})),
-            'checklists': copy.deepcopy(info.get('checklists', {})),
         }
         for name, info in clubs.items()
         if _is_editable(info)
@@ -119,16 +118,10 @@ def _question(value, club, action, variant, index):
         raise ValueError(f'{club}, {action}, набор {variant}: вопрос {index} длиннее {MAX_TEXT_LENGTH} символов')
     if question_type not in QUESTION_TYPES:
         raise ValueError(f'{club}, {action}, набор {variant}: неверный формат ответа')
-    return {'text': text, 'type': question_type}
-
-
-def _checklist_item(value, club, action, variant, index):
-    text = str(value or '').strip()
-    if not text:
-        raise ValueError(f'{club}, {action}, набор {variant}: пустой пункт чек-листа {index}')
-    if len(text) > MAX_TEXT_LENGTH:
+    checklist = str(value.get('checklist') or '').strip()
+    if len(checklist) > MAX_TEXT_LENGTH:
         raise ValueError(f'{club}, {action}, набор {variant}: пункт {index} длиннее {MAX_TEXT_LENGTH} символов')
-    return text
+    return {'text': text, 'type': question_type, 'checklist': checklist}
 
 
 def _compile_payload(payload, current_clubs):
@@ -154,23 +147,18 @@ def _compile_payload(payload, current_clubs):
         if not isinstance(actions, dict):
             raise ValueError(f'{club_name}: нет сценариев')
         questions = {}
-        checklists = {}
         for action_key, action_name in ACTIONS.items():
             variants = actions.get(action_key)
             if not isinstance(variants, list) or not 1 <= len(variants) <= MAX_VARIANTS:
                 raise ValueError(f'{club_name}: для «{action_name}» нужно от 1 до {MAX_VARIANTS} наборов')
             question_variants = []
-            checklist_variants = []
             for variant_index, raw_variant in enumerate(variants, 1):
                 if not isinstance(raw_variant, dict):
                     raise ValueError(f'{club_name}: набор {variant_index} задан неверно')
                 raw_questions = raw_variant.get('questions')
-                raw_checklist = raw_variant.get('checklist', [])
                 if not isinstance(raw_questions, list) or not raw_questions:
                     raise ValueError(f'{club_name}, {action_name}, набор {variant_index}: добавьте хотя бы один вопрос')
-                if not isinstance(raw_checklist, list):
-                    raise ValueError(f'{club_name}, {action_name}, набор {variant_index}: чек-лист задан неверно')
-                if len(raw_questions) > MAX_ITEMS or len(raw_checklist) > MAX_ITEMS:
+                if len(raw_questions) > MAX_ITEMS:
                     raise ValueError(f'{club_name}, {action_name}: в наборе может быть не более {MAX_ITEMS} строк')
                 compiled_questions = [
                     _question(item, club_name, action_name, variant_index, index)
@@ -186,17 +174,9 @@ def _compile_payload(payload, current_clubs):
                         f'можно добавить не более {MAX_PHOTO_QUESTIONS} вопросов с фото'
                     )
                 question_variants.append(compiled_questions)
-                checklist_variants.append([
-                    _checklist_item(item, club_name, action_name, variant_index, index)
-                    for index, item in enumerate(raw_checklist, 1)
-                ])
             questions[action_name] = question_variants
-            checklists[action_name] = checklist_variants
         result[club_name]['questions'] = questions
-        if any(items for variants in checklists.values() for items in variants):
-            result[club_name]['checklists'] = checklists
-        else:
-            result[club_name].pop('checklists', None)
+        result[club_name].pop('checklists', None)
     if received != set(editable):
         raise ValueError('В данных отсутствуют клубы из текущей конфигурации')
     return result
@@ -210,15 +190,10 @@ def _editor_payload(clubs, version_hash):
         actions = {}
         for action_key, action_name in ACTIONS.items():
             question_variants = info.get('questions', {}).get(action_name, [])
-            checklist_variants = info.get('checklists', {}).get(action_name, [])
             actions[action_key] = [
-                {
-                    'questions': copy.deepcopy(questions),
-                    'checklist': copy.deepcopy(checklist_variants[index])
-                    if index < len(checklist_variants) else [],
-                }
-                for index, questions in enumerate(question_variants)
-            ] or [{'questions': [], 'checklist': []}]
+                {'questions': copy.deepcopy(questions)}
+                for questions in question_variants
+            ] or [{'questions': []}]
         items.append({'id': str(info['_config_id']), 'name': name, 'actions': actions})
     return {'version': version_hash, 'clubs': items}
 
@@ -297,10 +272,7 @@ def rollback_version(db_path, version_id, expected_version, actor_login):
         for club_id, saved in snapshot.items():
             name = current_by_id[club_id]
             updated[name]['questions'] = copy.deepcopy(saved['questions'])
-            if saved.get('checklists'):
-                updated[name]['checklists'] = copy.deepcopy(saved['checklists'])
-            else:
-                updated[name].pop('checklists', None)
+            updated[name].pop('checklists', None)
         save_clubs(updated, source='shift_editor_rollback')
         version_hash = _record(connection, _snapshot(updated), actor_login, f'rollback:{version_id}')
         return _editor_payload(updated, version_hash)

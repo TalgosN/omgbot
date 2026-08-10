@@ -61,13 +61,24 @@ class ShiftConfigStoreTest(unittest.TestCase):
             'shift_config_store.save_clubs', side_effect=self._save
         ):
             payload = get_editor_config(self.db_path)
+            self.assertNotIn('checklist', payload['clubs'][0]['actions']['open'][0])
+            self.assertEqual(
+                payload['clubs'][0]['actions']['open'][0]['questions'][0].get('checklist', ''),
+                '',
+            )
             payload['clubs'][0]['actions']['open'][0]['questions'][0]['text'] = 'Новый вопрос'
+            payload['clubs'][0]['actions']['open'][0]['questions'][0]['checklist'] = 'Включить свет'
             saved = save_editor_config(self.db_path, payload, 'manager')
 
             self.assertEqual(
                 self.clubs['Клуб']['questions'][OPEN_ACTION][0][0]['text'],
                 'Новый вопрос',
             )
+            self.assertEqual(
+                self.clubs['Клуб']['questions'][OPEN_ACTION][0][0]['checklist'],
+                'Включить свет',
+            )
+            self.assertNotIn('checklists', self.clubs['Клуб'])
             self.assertNotEqual(saved['version'], payload['version'])
             self.assertEqual(len(list_versions(self.db_path)), 2)
 

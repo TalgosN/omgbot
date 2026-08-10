@@ -35,6 +35,8 @@ textarea { min-height:46px; resize:vertical; }
 .empty { padding:16px; border:1px dashed var(--line); border-radius:12px; color:var(--muted); text-align:center; }
 .edit-row { display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:9px; }
 .edit-row.question { grid-template-columns:34px minmax(0,1fr) 130px auto; }
+.question-fields { display:grid; gap:8px; }
+.question-fields textarea:last-child { border-color:rgba(137,223,212,.34); background:rgba(33,169,155,.08); }
 .number { display:grid; width:30px; height:30px; place-items:center; border-radius:50%; color:#69ddcf; background:rgba(33,169,155,.15); font-weight:800; }
 .row-actions { display:flex; gap:4px; }
 .icon-button { padding:7px 9px; color:var(--ink); background:rgba(33,169,155,.13); }

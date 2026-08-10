@@ -25,6 +25,9 @@ if [ -z "$ready" ]; then
 fi
 
 docker compose exec -T bot \
+    python scripts/migrate_shift_checklists.py
+
+docker compose exec -T bot \
     python scripts/set_kpi_menu_button.py "$webapp_url"
 
 echo "KPI Mini App is available at: $webapp_url"

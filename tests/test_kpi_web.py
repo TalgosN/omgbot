@@ -5,11 +5,12 @@ import sqlite3
 import tempfile
 import time
 import unittest
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlencode
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import kpi_web
 
@@ -199,17 +200,233 @@ class KpiWebTest(unittest.TestCase):
     def test_camera_prototype_is_linked_from_shift(self):
         shift_response = self.client.get('/shift')
         camera_response = self.client.get('/camera-test')
+        shift_test_response = self.client.get('/shift-test?action=open')
         try:
             self.assertEqual(shift_response.status_code, 200)
-            self.assertIn('id="openCameraTest"', shift_response.get_data(as_text=True))
+            shift_html = shift_response.get_data(as_text=True)
+            self.assertIn('id="openCameraTest"', shift_html)
+            self.assertIn('id="shiftReportTest"', shift_html)
+            self.assertIn('/shift-test?action=open', shift_html)
+            self.assertIn('/shift-test?action=close', shift_html)
             self.assertEqual(camera_response.status_code, 200)
             camera_html = camera_response.get_data(as_text=True)
             self.assertIn('id="cameraStage"', camera_html)
             self.assertIn('id="sendCapture"', camera_html)
             self.assertIn('/static/camera_test.js', camera_html)
+            self.assertEqual(shift_test_response.status_code, 200)
+            shift_test_html = shift_test_response.get_data(as_text=True)
+            self.assertIn('id="checklistStage"', shift_test_html)
+            self.assertIn('id="questionStage"', shift_test_html)
+            self.assertIn('id="cameraStage"', shift_test_html)
+            self.assertIn('id="reviewStage"', shift_test_html)
+            self.assertIn('/static/shift_test.js', shift_test_html)
         finally:
             shift_response.close()
             camera_response.close()
+            shift_test_response.close()
+
+    def test_shift_test_selects_active_shift_then_nearest_shift(self):
+        shifts = [
+            {
+                'date': '2026-08-10', 'club': 'Первый', 'duration': 4,
+                'start': '08:00', 'end': '12:00',
+            },
+            {
+                'date': '2026-08-10', 'club': 'Второй', 'duration': 4,
+                'start': '12:30', 'end': '16:30',
+            },
+        ]
+        with patch.object(kpi_web, '_upcoming_shifts', return_value=shifts):
+            active = kpi_web._select_shift_report_test_shift(
+                '@tester',
+                now=datetime(2026, 8, 10, 13, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+            )
+            nearest = kpi_web._select_shift_report_test_shift(
+                '@tester',
+                now=datetime(2026, 8, 10, 12, 10, tzinfo=ZoneInfo('Europe/Moscow')),
+            )
+            pinned = kpi_web._select_shift_report_test_shift(
+                '@tester',
+                now=datetime(2026, 8, 10, 13, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+                requested_club='Первый',
+            )
+
+        self.assertEqual(active['club'], 'Второй')
+        self.assertEqual(nearest['club'], 'Второй')
+        self.assertEqual(pinned['club'], 'Первый')
+
+    def test_shift_test_scenario_uses_today_shift_and_editor_variant(self):
+        today = kpi_web._moscow_today().isoformat()
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Клуб в расписании',
+                'questions': {
+                    '✅ Открыть смену': [[
+                        {'text': 'Сколько наличных?', 'type': 'num', 'checklist': 'Включить оборудование'},
+                        {'text': 'Фото клуба', 'type': 'photo'},
+                        {'text': 'Фото оборудования', 'type': 'photo'},
+                    ]],
+                },
+            },
+        }
+        shifts = [{
+            'date': today, 'club': 'Клуб в расписании', 'duration': 12,
+            'start': '10:00', 'end': '22:00',
+        }]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
+            patch.object(kpi_web.random, 'randrange', return_value=0),
+        ):
+            response = self.client.get(
+                '/api/shift-test/scenario?action=open', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload['test_mode'])
+        self.assertEqual(payload['club'], 'Тестовый клуб')
+        self.assertEqual(payload['variant_label'], 'A')
+        self.assertEqual(payload['checklist'], ['Включить оборудование'])
+        self.assertEqual(
+            [question['type'] for question in payload['questions']],
+            ['num', 'photo', 'photo'],
+        )
+
+    def test_shift_test_is_blocked_when_today_shift_is_missing(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+        ):
+            response = self.client.get(
+                '/api/shift-test/scenario?action=close', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('На сегодня смена', response.get_json()['error'])
+
+    def test_shift_test_sends_summary_and_captioned_album_only_to_pavel(self):
+        today = kpi_web._moscow_today().isoformat()
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Тестовый клуб',
+                'questions': {
+                    '✅ Открыть смену': [[
+                        {
+                            'text': 'Сколько наличных?', 'type': 'num',
+                            'checklist': 'Проверить оборудование',
+                        },
+                        {'text': 'Фото клуба', 'type': 'photo'},
+                        {'text': 'Фото оборудования', 'type': 'photo'},
+                    ]],
+                },
+            },
+        }
+        shifts = [{
+            'date': today, 'club': 'Тестовый клуб', 'duration': 12,
+            'start': '10:00', 'end': '22:00',
+        }]
+        bot = Mock()
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(kpi_web, '_shift_report_test_sent_at', {}),
+        ):
+            scenario_response = self.client.get(
+                '/api/shift-test/scenario?action=open&variant=0',
+                headers=self.headers,
+            )
+            scenario = scenario_response.get_json()
+            incomplete_response = self.client.post(
+                '/api/shift-test/submit',
+                headers=self.headers,
+                data={
+                    'report': json.dumps({
+                        'action': 'open',
+                        'club': 'Тестовый клуб',
+                        'variant_index': 0,
+                        'version': scenario['version'],
+                        'answers': {'q1': '1000'},
+                        'photo_ids': ['q2', 'q3'],
+                    }),
+                },
+            )
+            response = self.client.post(
+                '/api/shift-test/submit',
+                headers=self.headers,
+                data={
+                    'report': json.dumps({
+                        'action': 'open',
+                        'club': 'Тестовый клуб',
+                        'variant_index': 0,
+                        'version': scenario['version'],
+                        'answers': {'q1': '1000'},
+                        'photo_ids': ['q2', 'q3'],
+                    }),
+                    'photos': [
+                        (BytesIO(b'jpeg-one'), 'q2.jpg', 'image/jpeg'),
+                        (BytesIO(b'jpeg-two'), 'q3.jpg', 'image/jpeg'),
+                    ],
+                },
+            )
+
+        self.assertEqual(incomplete_response.status_code, 400)
+        self.assertIn('Количество фотографий', incomplete_response.get_json()['error'])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['photos'], 2)
+        bot.send_message.assert_called_once()
+        self.assertEqual(bot.send_message.call_args.args[0], '592831529')
+        self.assertIn('ТЕСТ · ОТКРЫТИЕ СМЕНЫ', bot.send_message.call_args.args[1])
+        bot.send_media_group.assert_called_once()
+        self.assertEqual(bot.send_media_group.call_args.args[0], '592831529')
+        album = bot.send_media_group.call_args.kwargs['media']
+        self.assertEqual(len(album), 2)
+        self.assertIn('Фото клуба', album[0].caption)
+
+        script = self.client.get('/static/shift_test.js')
+        try:
+            self.assertIn(b'indexedDB.open', script.data)
+            self.assertIn(b'audio: false', script.data)
+            self.assertIn(b"form.append('photos'", script.data)
+        finally:
+            script.close()
+
+    def test_shift_test_sends_one_photo_without_invalid_one_item_album(self):
+        bot = Mock()
+        scenario = {
+            'action_label': 'Закрытие',
+            'club': 'Тестовый клуб',
+            'variant_label': 'A',
+            'shift': {
+                'date': '2026-08-10', 'start': '10:00', 'end': '22:00',
+            },
+            'questions': [{
+                'id': 'q1', 'position': 1, 'text': 'Фото клуба', 'type': 'photo',
+            }],
+        }
+        photos = [{
+            'content': b'jpeg',
+            'filename': 'q1.jpg',
+            'question': scenario['questions'][0],
+        }]
+        with (
+            kpi_web.app.test_request_context(),
+            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+        ):
+            kpi_web.g.kpi_user = user(0)
+            kpi_web._send_shift_report_test(scenario, {}, photos)
+
+        bot.send_photo.assert_called_once()
+        bot.send_media_group.assert_not_called()
+        self.assertIn('Фото клуба', bot.send_photo.call_args.kwargs['caption'])
 
     def test_camera_photo_is_sent_to_configured_private_chat(self):
         bot = Mock()

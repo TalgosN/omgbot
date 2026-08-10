@@ -201,7 +201,7 @@ class ClubConfigSyncTest(unittest.TestCase):
             VALIDATION_SHEET,
             SYSTEM_SHEET,
         })
-        self.assertEqual(count_config(compiled), (2, 4, 6))
+        self.assertEqual(count_config(compiled), (2, 4, 0))
 
     def test_questions_sheet_is_optional_and_does_not_replace_current_questions(self):
         current = build_config(*self.sheet_values())
@@ -226,7 +226,7 @@ class ClubConfigSyncTest(unittest.TestCase):
 
         self.assertNotIn(INSTRUCTIONS_SHEET, worksheets)
         self.assertNotIn(VALIDATION_SHEET, worksheets)
-        self.assertEqual(count_config(compiled), (2, 4, 6))
+        self.assertEqual(count_config(compiled), (2, 4, 0))
 
     def test_variant_count_column_is_optional(self):
         system, clubs, schedules, _questions = self.sheet_values()

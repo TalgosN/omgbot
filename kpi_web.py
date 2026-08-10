@@ -5,6 +5,7 @@ import html
 import io
 import json
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -65,6 +66,8 @@ from repair_catalog import (
     repair_payload,
 )
 from shift_config_store import (
+    ACTIONS as SHIFT_ACTIONS,
+    MAX_PHOTO_QUESTIONS,
     get_editor_config,
     list_versions,
     rollback_version,
@@ -104,6 +107,8 @@ _membership_bot = None
 _membership_bot_lock = threading.Lock()
 _camera_test_sent_at = {}
 _camera_test_lock = threading.Lock()
+_shift_report_test_sent_at = {}
+_shift_report_test_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 22 * 1024 * 1024
@@ -510,6 +515,148 @@ def _upcoming_shifts(login, limit=3):
     ]
 
 
+def _shift_clock_minutes(value):
+    match = re.match(r'^(\d{1,2}):(\d{2})', str(value or '').strip())
+    if not match:
+        return None
+    hour, minute = map(int, match.groups())
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
+def _select_shift_report_test_shift(login, now=None, requested_club=None):
+    current = now or datetime.now(ZoneInfo('Europe/Moscow'))
+    today = current.date().isoformat()
+    shifts = [
+        shift for shift in _upcoming_shifts(login, limit=50)
+        if shift.get('date') == today
+    ]
+    if requested_club:
+        normalized_request = str(requested_club).strip().casefold()
+        shifts = [
+            shift for shift in shifts
+            if str(shift.get('club') or '').strip().casefold() == normalized_request
+            or _shift_report_test_club(shift.get('club'))[0] == requested_club
+        ]
+    if not shifts:
+        return None
+
+    current_minutes = current.hour * 60 + current.minute
+
+    def score(shift):
+        start = _shift_clock_minutes(shift.get('start'))
+        end = _shift_clock_minutes(shift.get('end'))
+        if start is None:
+            return 2, 0, str(shift.get('club') or '').casefold()
+        if end is None:
+            duration = max(0, int(round(float(shift.get('duration') or 0) * 60)))
+            end = start + duration
+        if end < start:
+            end += 24 * 60
+        comparable_now = current_minutes
+        if end >= 24 * 60 and current_minutes < start:
+            comparable_now += 24 * 60
+        if start <= comparable_now <= end:
+            return 0, 0, str(shift.get('club') or '').casefold()
+        return 1, abs(comparable_now - start), str(shift.get('club') or '').casefold()
+
+    return min(shifts, key=score)
+
+
+def _shift_report_test_club(shift_club):
+    normalized = str(shift_club or '').strip().casefold()
+    for club_name, info in get_clubs().items():
+        aliases = {str(club_name).strip().casefold()}
+        aliases.add(str(info.get('shift_name') or '').strip().casefold())
+        if normalized in aliases:
+            return club_name, info
+    return None, None
+
+
+def _shift_report_test_scenario(
+    action, variant_index=None, now=None, requested_club=None,
+):
+    if action not in SHIFT_ACTIONS:
+        raise ValueError('Выберите открытие или закрытие')
+    shift = _select_shift_report_test_shift(
+        _actor_login(), now=now, requested_club=requested_club,
+    )
+    if not shift:
+        raise ValueError('На сегодня смена в OMG Shift не найдена')
+
+    club_name, club = _shift_report_test_club(shift.get('club'))
+    if not club:
+        raise ValueError('Для клуба из расписания не найден сценарий смены')
+    action_name = SHIFT_ACTIONS[action]
+    variants = club.get('questions', {}).get(action_name, [])
+    if not variants:
+        raise ValueError(f'Для клуба «{club_name}» не настроен этот сценарий')
+
+    if variant_index is None:
+        selected_index = random.randrange(len(variants))
+    else:
+        try:
+            selected_index = int(variant_index)
+        except (TypeError, ValueError) as error:
+            raise ValueError('Номер набора сценария задан неверно') from error
+        if selected_index < 0 or selected_index >= len(variants):
+            raise ValueError('Сохранённый набор сценария больше недоступен')
+
+    raw_questions = variants[selected_index]
+    questions = [
+        {
+            'id': f'q{index}',
+            'position': index,
+            'text': str(question.get('text') or '').strip(),
+            'type': str(question.get('type') or '').strip(),
+            'checklist': str(question.get('checklist') or '').strip(),
+        }
+        for index, question in enumerate(raw_questions, 1)
+    ]
+    if not questions or any(
+        not question['text'] or question['type'] not in {'text', 'num', 'photo'}
+        for question in questions
+    ):
+        raise ValueError('Сценарий смены настроен некорректно')
+    if sum(question['type'] == 'photo' for question in questions) > MAX_PHOTO_QUESTIONS:
+        raise ValueError('В сценарии больше десяти фото-вопросов')
+
+    checklist = [question['checklist'] for question in questions if question['checklist']]
+    version_payload = {
+        'club': club_name,
+        'action': action,
+        'variant_index': selected_index,
+        'checklist': checklist,
+        'questions': questions,
+    }
+    version = hashlib.sha256(json.dumps(
+        version_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')).hexdigest()[:16]
+    return {
+        'test_mode': True,
+        'action': action,
+        'action_label': 'Открытие' if action == 'open' else 'Закрытие',
+        'club': club_name,
+        'shift': shift,
+        'variant_index': selected_index,
+        'variant_label': chr(ord('A') + selected_index),
+        'version': version,
+        'checklist': checklist,
+        'questions': questions,
+        'user_login': _actor_login(),
+        'user_name': (
+            g.kpi_user.get('nick_name')
+            or g.kpi_user.get('first_name')
+            or g.kpi_user['login']
+        ),
+        'draft_ttl_hours': 18,
+    }
+
+
 def _shift_month_summary(login, month):
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -816,6 +963,158 @@ def _camera_test_upload():
         'mimetype': mimetype,
         'media_type': media_type,
     }
+
+
+def _shift_report_test_data(scenario, payload):
+    if not isinstance(payload, dict):
+        raise ValueError('Тестовый отчёт передан неверно')
+    if str(payload.get('version') or '') != scenario['version']:
+        raise ValueError('Сценарий смены изменился. Начните тест заново')
+
+    raw_answers = payload.get('answers')
+    if not isinstance(raw_answers, dict):
+        raise ValueError('Ответы на вопросы переданы неверно')
+    answers = {}
+    photo_questions = []
+    for question in scenario['questions']:
+        question_id = question['id']
+        if question['type'] == 'photo':
+            photo_questions.append(question)
+            continue
+        value = str(raw_answers.get(question_id) or '').strip()
+        if not value:
+            raise ValueError(f"Ответьте на вопрос «{question['text']}»")
+        if len(value) > 1000:
+            raise ValueError('Ответ должен быть не длиннее 1000 символов')
+        if question['type'] == 'num' and not value.isdecimal():
+            raise ValueError(f"Для вопроса «{question['text']}» нужно указать целое число")
+        answers[question_id] = value
+
+    raw_photo_ids = payload.get('photo_ids')
+    if not isinstance(raw_photo_ids, list):
+        raise ValueError('Список фотографий передан неверно')
+    expected_photo_ids = [question['id'] for question in photo_questions]
+    photo_ids = [str(value) for value in raw_photo_ids]
+    if photo_ids != expected_photo_ids:
+        raise ValueError('Нужно приложить по одной фотографии к каждому фото-вопросу')
+
+    uploads = request.files.getlist('photos')
+    if len(uploads) != len(photo_questions):
+        raise ValueError('Количество фотографий не совпадает со сценарием')
+    allowed_types = {'image/jpeg', 'image/png', 'image/webp'}
+    photos = []
+    total_size = 0
+    for upload, question in zip(uploads, photo_questions):
+        mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
+        if mimetype not in allowed_types:
+            raise ValueError('Фотографии должны быть в формате JPEG, PNG или WebP')
+        content = upload.read(3 * 1024 * 1024 + 1)
+        if not content:
+            raise ValueError('Получена пустая фотография')
+        if len(content) > 3 * 1024 * 1024:
+            raise ValueError('Каждая фотография должна быть не больше 3 МБ')
+        total_size += len(content)
+        if total_size > 20 * 1024 * 1024:
+            raise ValueError('Общий размер фотографий должен быть не больше 20 МБ')
+        extension = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}[mimetype]
+        photos.append({
+            'content': content,
+            'filename': f"{question['id']}.{extension}",
+            'question': question,
+        })
+    return answers, photos
+
+
+def _shift_report_test_messages(scenario, answers, photo_count):
+    user = g.kpi_user
+    name = user.get('nick_name') or user.get('first_name') or user.get('login')
+    login = str(user.get('login') or '—')
+    shift = scenario['shift']
+    time_label = '–'.join(
+        value for value in (shift.get('start'), shift.get('end')) if value
+    ) or 'время не указано'
+    heading = '\n'.join([
+        f"🧪 <b>ТЕСТ · {html.escape(scenario['action_label'].upper())} СМЕНЫ</b>",
+        '',
+        f"📍 <b>Клуб:</b> {html.escape(scenario['club'])}",
+        f"👤 <b>Сотрудник:</b> {html.escape(str(name))} · {html.escape(login)}",
+        f"📅 <b>Смена:</b> {html.escape(str(shift.get('date') or '—'))} · {html.escape(time_label)}",
+        f"🕒 <b>Отправлен:</b> {datetime.now(ZoneInfo('Europe/Moscow')).strftime('%d.%m.%Y %H:%M')}",
+        f"🧩 <b>Набор:</b> {html.escape(scenario['variant_label'])}",
+        f"📷 <b>Фотографий:</b> {photo_count}",
+        '',
+        '⚠️ Статус клуба, рабочая БД, Google Sheets и рабочие чаты не изменены.',
+    ])
+    blocks = [heading]
+    for question in scenario['questions']:
+        if question['type'] == 'photo':
+            continue
+        question_parts = [
+            question['text'][index:index + 400]
+            for index in range(0, len(question['text']), 400)
+        ]
+        answer = answers[question['id']]
+        answer_parts = [
+            answer[index:index + 500]
+            for index in range(0, len(answer), 500)
+        ]
+        blocks.append(
+            f"<b>{question['position']}. {html.escape(question_parts[0])}</b>"
+        )
+        blocks.extend(
+            f"<b>{html.escape(part)}</b>"
+            for part in question_parts[1:]
+        )
+        blocks.extend(
+            f"{'— ' if index == 0 else ''}{html.escape(part)}"
+            for index, part in enumerate(answer_parts)
+        )
+
+    messages = []
+    current = ''
+    for block in blocks:
+        candidate = f'{current}\n\n{block}' if current else block
+        if len(candidate) > 3800 and current:
+            messages.append(current)
+            current = f'📝 <b>Продолжение тестового отчёта</b>\n\n{block}'
+        else:
+            current = candidate
+    if current:
+        messages.append(current)
+    return messages
+
+
+def _send_shift_report_test(scenario, answers, photos):
+    bot = _notification_bot()
+    if not bot:
+        raise RuntimeError('Telegram-бот временно недоступен')
+    for message in _shift_report_test_messages(scenario, answers, len(photos)):
+        bot.send_message(
+            CAMERA_TEST_RECIPIENT_CHAT_ID,
+            message,
+            parse_mode='HTML',
+        )
+    if len(photos) == 1:
+        photo = photos[0]
+        media_file = io.BytesIO(photo['content'])
+        media_file.name = photo['filename']
+        bot.send_photo(
+            CAMERA_TEST_RECIPIENT_CHAT_ID,
+            media_file,
+            caption=f"1/1 · {photo['question']['text'][:900]}",
+        )
+    elif photos:
+        media = []
+        for index, photo in enumerate(photos, 1):
+            media_file = io.BytesIO(photo['content'])
+            media_file.name = photo['filename']
+            caption = (
+                f"{index}/{len(photos)} · "
+                f"{photo['question']['text'][:900]}"
+            )
+            media.append(telebot.types.InputMediaPhoto(media_file, caption=caption))
+        bot.send_media_group(CAMERA_TEST_RECIPIENT_CHAT_ID, media=media)
+    return bot
 
 
 def _problem_mentions(task_type, club):
@@ -1284,7 +1583,9 @@ def handle_value_error(error):
 
 @app.errorhandler(413)
 def handle_upload_too_large(_error):
-    return jsonify({'error': 'Файл слишком большой. Максимум видео — 20 МБ.'}), 413
+    return jsonify({
+        'error': 'Отправка слишком большая. Уменьшите размер фотографий или видео.'
+    }), 413
 
 
 @app.get('/')
@@ -1310,6 +1611,11 @@ def shift_config_index():
 @app.get('/shift')
 def shift_index():
     return send_from_directory(STATIC_DIR, 'shift.html')
+
+
+@app.get('/shift-test')
+def shift_test_index():
+    return send_from_directory(STATIC_DIR, 'shift_test.html')
 
 
 @app.get('/camera-test')
@@ -1463,6 +1769,62 @@ def api_shift():
             TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
         ),
         'employee_dashboard': dashboard,
+    })
+
+
+@app.get('/api/shift-test/scenario')
+@require_user
+def api_shift_test_scenario():
+    action = str(request.args.get('action') or '').strip()
+    variant = request.args.get('variant')
+    scenario = _shift_report_test_scenario(
+        action,
+        variant_index=variant if variant not in (None, '') else None,
+        requested_club=str(request.args.get('club') or '').strip() or None,
+    )
+    return jsonify(scenario)
+
+
+@app.post('/api/shift-test/submit')
+@require_user
+def api_shift_test_submit():
+    if not CAMERA_TEST_RECIPIENT_CHAT_ID:
+        raise ValueError('Получатель тестового отчёта не настроен')
+    try:
+        payload = json.loads(request.form.get('report') or '{}')
+    except json.JSONDecodeError as error:
+        raise ValueError('Тестовый отчёт передан неверно') from error
+    action = str(payload.get('action') or '').strip()
+    if payload.get('variant_index') is None:
+        raise ValueError('В тестовом отчёте отсутствует набор сценария')
+    scenario = _shift_report_test_scenario(
+        action,
+        variant_index=payload.get('variant_index'),
+        requested_club=str(payload.get('club') or '').strip() or None,
+    )
+    answers, photos = _shift_report_test_data(scenario, payload)
+
+    actor = f'{_actor_login()}:{action}'
+    now = time.monotonic()
+    with _shift_report_test_lock:
+        previous = _shift_report_test_sent_at.get(actor, 0)
+        if now - previous < CAMERA_TEST_COOLDOWN_SECONDS:
+            return jsonify({
+                'error': 'Подождите несколько секунд перед повторной отправкой.'
+            }), 429
+    try:
+        _send_shift_report_test(scenario, answers, photos)
+    except Exception as error:
+        print(f'Ошибка отправки тестового отчёта смены: {error}')
+        return jsonify({
+            'error': 'Не удалось отправить тестовый отчёт Павлу через Telegram.'
+        }), 502
+    with _shift_report_test_lock:
+        _shift_report_test_sent_at[actor] = now
+    return jsonify({
+        'sent': True,
+        'recipient': 'Павел',
+        'photos': len(photos),
     })
 
 
