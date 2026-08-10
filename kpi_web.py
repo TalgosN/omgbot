@@ -874,7 +874,7 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                     CHATS['repair_extra'], f"@RobinKruzo1\n\n{short}",
                     parse_mode='HTML',
                 )
-        elif event in {'solution', 'returned'}:
+        elif event in {'solution', 'returned', 'completed'}:
             full, short = progress_task_notification(
                 event,
                 task_type,
@@ -888,7 +888,7 @@ def _send_problem_notification(event, task, message='', photo=None, video=None):
                     parse_mode='HTML',
                 )
             if CHATS.get('main_group'):
-                prefix = f'{mentions}\n\n' if event == 'returned' else ''
+                prefix = f'{mentions}\n\n' if event in {'returned', 'completed'} else ''
                 bot.send_message(
                     CHATS['main_group'], f'{prefix}{short}', parse_mode='HTML',
                 )
@@ -2051,6 +2051,7 @@ def api_problem_confirm(task_id):
     )
     if not task:
         return jsonify({'error': 'Статус проблемы уже изменился.'}), 409
+    _send_problem_notification('completed', task)
     return jsonify({'status': 'Выполнено'})
 
 

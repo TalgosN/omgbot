@@ -798,6 +798,26 @@ class KpiWebTest(unittest.TestCase):
         self.assertTrue(bot.send_video.call_args.kwargs['supports_streaming'])
         self.assertEqual(bot.send_video.call_args.args[1].name, 'problem.mp4')
 
+    def test_problem_confirmation_sends_completed_notification(self):
+        task = {
+            'ID': 1,
+            'type': 'Ремонт',
+            'club': 'Марьино',
+            'title': 'Не работает шлем',
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_change_problem_status', return_value=task),
+            patch.object(kpi_web, '_send_problem_notification') as notify,
+        ):
+            response = self.client.post(
+                '/api/problems/1/confirm', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        notify.assert_called_once_with('completed', task)
+
     def test_problem_video_is_streamed_from_telegram(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'tasks.db'

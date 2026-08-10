@@ -458,7 +458,13 @@ def dotask(message, task_id, current_status, bot):
         if message.text == '✅ Подтвердить решение':
             today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
             conn = sqlite3.connect('db/omgbot.sql')
+            conn.row_factory = sqlite3.Row
             cur = conn.cursor()
+            cur.execute(
+                "SELECT title, type, club FROM tasks WHERE id = ? AND status = 'На проверке'",
+                (task_id,),
+            )
+            task = cur.fetchone()
             cur.execute(
                 "UPDATE tasks SET status = 'Выполнено', dtfb = ? WHERE id = ? AND status = 'На проверке'",
                 (today, task_id),
@@ -471,6 +477,33 @@ def dotask(message, task_id, current_status, bot):
             conn.close()
             if changed:
                 bot.send_message(message.chat.id, "✅ Спасибо! Проблема окончательно закрыта и перенесена в архив.", reply_markup=types.ReplyKeyboardRemove())
+                msg_full, notification_short = progress_task_notification(
+                    'completed', task['type'], task['club'], task['title'], '',
+                )
+                clubs = get_clubs()
+                club_tag = clubs[task['club']]['tag']
+                mentions = club_tag
+                if task['type'] == REPAIR_TASK_TYPE:
+                    extra = extra_tags[task['type']] if club_tag != '@RobinKruzo1' else ''
+                    mentions = f"{extra} {club_tag}".strip()
+                elif task['type'] == BOT_TASK_TYPE:
+                    mentions = extra_tags[task['type']]
+                bot.send_message(
+                    CHATS['reports'],
+                    f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot",
+                    parse_mode='HTML',
+                )
+                bot.send_message(
+                    CHATS['main_group'],
+                    f"{mentions}\n\n{notification_short}" if mentions else notification_short,
+                    parse_mode='HTML',
+                )
+                if task['type'] == REPAIR_TASK_TYPE:
+                    bot.send_message(
+                        CHATS['repair_extra'],
+                        f"@RobinKruzo1\n\n{notification_short}",
+                        parse_mode='HTML',
+                    )
             else:
                 bot.send_message(message.chat.id, "⚠️ Статус задачи уже изменился.", reply_markup=types.ReplyKeyboardRemove())
             show_review_tasks(message, bot)
@@ -654,7 +687,7 @@ def return_task_to_work(message, task_id, bot):
     show_review_tasks(message, bot)
 
 
-def auto_close_review_tasks(now=None):
+def auto_close_review_tasks(now=None, bot=None):
     """Закрывает задачи, которые 14 дней находятся на проверке."""
     now = now or datetime.now(pytz.timezone('Europe/Moscow'))
     today = now.date()
@@ -673,7 +706,7 @@ def auto_close_review_tasks(now=None):
                 (today_iso,),
             )
             tasks = conn.execute(
-                """SELECT id, feedback FROM tasks
+                """SELECT id, type, club, title, feedback FROM tasks
                    WHERE status='На проверке' AND date(dtfb) <= date(?)""",
                 (deadline_iso,),
             ).fetchall()
@@ -694,6 +727,25 @@ def auto_close_review_tasks(now=None):
 
     if tasks:
         print(f"Автозакрытие задач: {len(tasks)}")
+        if bot:
+            for task in tasks:
+                msg_full, notification_short = progress_task_notification(
+                    'completed', task['type'], task['club'], task['title'], '',
+                )
+                bot.send_message(
+                    CHATS['reports'],
+                    f"#задачи\n\n{msg_full}\n\n@OMGVR_Admin_Bot",
+                    parse_mode='HTML',
+                )
+                bot.send_message(
+                    CHATS['main_group'], notification_short, parse_mode='HTML',
+                )
+                if task['type'] == REPAIR_TASK_TYPE:
+                    bot.send_message(
+                        CHATS['repair_extra'],
+                        f"@RobinKruzo1\n\n{notification_short}",
+                        parse_mode='HTML',
+                    )
     return len(tasks)
 
 

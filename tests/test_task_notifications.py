@@ -19,6 +19,10 @@ class TaskNotificationsTest(unittest.TestCase):
 
         self.assertIn('Новое общее обращение', full)
         self.assertIn('Клуб &lt;1&gt;', full)
+        self.assertNotIn('Клуб:', full)
+        self.assertNotIn('Тема:', full)
+        self.assertIn('📍 <b>Клуб &lt;1&gt;</b>', short)
+        self.assertIn('💬 <b>Вопрос &amp; идея</b>', short)
         self.assertIn('&lt;b&gt;Описание&lt;/b&gt;', full)
         self.assertNotIn('проблема-', full.lower())
         self.assertIn('Новое общее обращение', short)
@@ -44,6 +48,15 @@ class TaskNotificationsTest(unittest.TestCase):
         self.assertEqual(confirmation, 'Готово, заявка на ремонт добавлена!')
         self.assertIn('Заявка на ремонт возвращена в работу', returned_full)
         self.assertIn('Заявка на ремонт возвращена в работу', returned_short)
+        self.assertIn('📍 <b>Марьино</b>', short)
+        self.assertIn('🔧 <b>Не работает шлем</b>', short)
+
+        completed_full, completed_short = progress_task_notification(
+            'completed', REPAIR_TASK_TYPE, 'Марьино', 'Не работает шлем', '',
+        )
+        self.assertEqual(completed_full, completed_short)
+        self.assertIn('Заявка на ремонт выполнена', completed_full)
+        self.assertNotIn('Причина возврата', completed_full)
 
 
 if __name__ == '__main__':

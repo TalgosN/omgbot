@@ -158,8 +158,8 @@ def schedule_func(bot): # Не забудь передать bot!
     schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
 
     from taskboard import auto_close_review_tasks, send_shift_review_reminders
-    auto_close_review_tasks()
-    schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks)
+    auto_close_review_tasks(bot=bot)
+    schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks, bot=bot)
     schedule.every().day.at("09:20:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
 
     from backup import run_scheduled_backup
