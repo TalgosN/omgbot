@@ -118,6 +118,27 @@ class KpiWebTest(unittest.TestCase):
             kpi_html = response.get_data(as_text=True)
             self.assertNotIn('class="home-link"', kpi_html)
             self.assertIn('id="kpiUserName"', kpi_html)
+            self.assertLess(
+                kpi_html.index('id="dateDisplay"'),
+                kpi_html.index('id="managerFilters"'),
+            )
+            self.assertLess(
+                kpi_html.index('id="managerFilters"'),
+                kpi_html.index('id="summary"'),
+            )
+            self.assertLess(
+                kpi_html.index('class="sort-controls"'),
+                kpi_html.index('id="searchInput"'),
+            )
+            self.assertLess(
+                kpi_html.index('class="settings-card custom-goals-settings"'),
+                kpi_html.index('id="settingsMetrics"'),
+            )
+            self.assertNotIn(
+                'Цели версионируются с выбранного месяца', kpi_html,
+            )
+            self.assertIn('id="analyticsMonthDisplay"', kpi_html)
+            self.assertIn('id="settingsMonthDisplay"', kpi_html)
         finally:
             response.close()
 
@@ -128,6 +149,16 @@ class KpiWebTest(unittest.TestCase):
                 taskboard_html.index('id="newProblem"'),
                 taskboard_html.index('id="repairCatalog"'),
             )
+            self.assertIn('id="boardViewTabs"', taskboard_html)
+            self.assertIn('id="analyticsView"', taskboard_html)
+            self.assertLess(
+                taskboard_html.index('id="analyticsSummary"'),
+                taskboard_html.index('id="analyticsTypes"'),
+            )
+            self.assertLess(
+                taskboard_html.index('id="analyticsTypes"'),
+                taskboard_html.index('id="analyticsClubs"'),
+            )
         finally:
             response.close()
 
@@ -136,8 +167,19 @@ class KpiWebTest(unittest.TestCase):
             app_script = response.get_data(as_text=True)
             self.assertIn('owner-settings-button', app_script)
             self.assertIn("state.me.role_name", app_script)
+            self.assertIn('omg-kpi-manager-filters', app_script)
         finally:
             response.close()
+
+    def test_employee_role_cannot_see_manager_controls(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+        ):
+            response = self.client.get('/api/me', headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()['can_manage'])
 
     def test_home_places_compact_shift_module_before_dashboard(self):
         response = self.client.get('/')
@@ -461,6 +503,44 @@ class KpiWebTest(unittest.TestCase):
             'Ремонт',
             'Улучшение бота',
         ])
+        self.assertFalse(response.get_json()['can_view_analytics'])
+
+    def test_problem_analytics_are_available_from_technician_role(self):
+        payload = {
+            'period': {'mode': 'month', 'value': '2026-08', 'label': '08.2026'},
+            'summary': {'created': 0},
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(1)),
+            patch.object(kpi_web, 'build_task_analytics', return_value=payload) as build,
+        ):
+            response = self.client.get(
+                '/api/problems/analytics?mode=month&month=2026-08',
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), payload)
+        build.assert_called_once_with(
+            kpi_web.DB_PATH,
+            mode='month',
+            month='2026-08',
+            year=None,
+        )
+
+    def test_problem_analytics_are_hidden_from_employee_role(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'build_task_analytics') as build,
+        ):
+            response = self.client.get(
+                '/api/problems/analytics', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 403)
+        build.assert_not_called()
 
     def test_mini_app_creates_anonymous_problem_in_shared_tasks_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -525,6 +605,9 @@ class KpiWebTest(unittest.TestCase):
             repair_event = conn.execute(
                 'SELECT event_type FROM repair_events WHERE task_id=1'
             ).fetchone()
+            task_event = conn.execute(
+                'SELECT event_type FROM task_events WHERE task_id=1'
+            ).fetchone()
             conn.close()
 
         self.assertEqual(response.status_code, 201)
@@ -538,6 +621,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertNotIn('author', columns)
         self.assertEqual(repair_link, (1, 'VR-шлем', '2 зона'))
         self.assertEqual(repair_event, ('created',))
+        self.assertEqual(task_event, ('created',))
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(
             detail_response.get_json()['repair']['history'][0]['task_id'], 1,
@@ -779,6 +863,9 @@ class KpiWebTest(unittest.TestCase):
             row = conn.execute(
                 'SELECT status, dtfb, feedback FROM tasks WHERE ID=1'
             ).fetchone()
+            events = conn.execute(
+                'SELECT event_type FROM task_events WHERE task_id=1 ORDER BY id'
+            ).fetchall()
             conn.close()
 
         self.assertEqual(solution.status_code, 200)
@@ -787,6 +874,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertIsNone(row[1])
         self.assertIn('Переподключил питание', row[2])
         self.assertIn('Снова выключился', row[2])
+        self.assertEqual(events, [('solution',), ('returned',)])
 
     def test_all_active_users_can_read_every_employee_kpi(self):
         with (

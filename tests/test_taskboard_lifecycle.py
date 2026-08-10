@@ -82,12 +82,16 @@ class TaskboardLifecycleTest(unittest.TestCase):
 
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute('SELECT id, status, dtfb, feedback FROM tasks ORDER BY id').fetchall()
+        events = conn.execute(
+            "SELECT task_id, event_type FROM task_events ORDER BY task_id"
+        ).fetchall()
         conn.close()
         self.assertEqual(closed, 1)
         self.assertEqual(rows[0][1:3], ('Выполнено', '2026-07-15'))
         self.assertIn('автоматически закрыта', rows[0][3])
         self.assertEqual(rows[1][1], 'На проверке')
         self.assertEqual(rows[2][1:3], ('На проверке', '2026-07-15'))
+        self.assertEqual(events, [(1, 'confirmed')])
 
     def test_reminders_go_only_to_today_shift_employees_by_club(self):
         conn = sqlite3.connect(self.db_path)

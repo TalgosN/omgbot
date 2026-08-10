@@ -11,6 +11,7 @@ from task_notifications import (
     created_task_notification,
     progress_task_notification,
 )
+from task_analytics import record_task_event
 
 TASK_DB_PATH = 'db/omgbot.sql'
 TASK_REVIEW_DAYS = 14
@@ -227,6 +228,7 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type, club, title, desc,status) VALUES (?,?,?,?,?,?)""", data_tuple)
+        record_task_event(conn, cur.lastrowid, 'created')
         conn.commit()
         cur.close()
         conn.close()
@@ -246,6 +248,7 @@ def send_task(message,task_type,title, descrip,club_task,bot):
         cur = conn.cursor() 
         data_tuple=(today,task_type,club_task,title, photo_add,descrip,"В работе")
         cur.execute(""" INSERT INTO tasks (dtrep,type,club, title, photo, desc,status) VALUES (?,?,?,?,?,?,?)""", data_tuple)
+        record_task_event(conn, cur.lastrowid, 'created')
         conn.commit()
         cur.close()
         conn.close()
@@ -461,6 +464,8 @@ def dotask(message, task_id, current_status, bot):
                 (today, task_id),
             )
             changed = cur.rowcount
+            if changed:
+                record_task_event(conn, task_id, 'confirmed')
             conn.commit()
             cur.close()
             conn.close()
@@ -538,6 +543,8 @@ def change_task(message, task_id, answer, bot):
             (new_feedback, review_since, task_id),
         )
         changed = cur.rowcount
+        if changed:
+            record_task_event(conn, task_id, 'solution', event_at=now)
         conn.commit()
         cur.close()
         conn.close()
@@ -604,6 +611,8 @@ def return_task_to_work(message, task_id, bot):
         (new_feedback, task_id),
     )
     changed = cur.rowcount
+    if changed:
+        record_task_event(conn, task_id, 'returned')
     conn.commit()
     cur.close()
     conn.close()
@@ -676,6 +685,9 @@ def auto_close_review_tasks(now=None):
                 conn.execute(
                     "UPDATE tasks SET status='Выполнено', dtfb=?, feedback=? WHERE id=?",
                     (today_iso, feedback, task['id']),
+                )
+                record_task_event(
+                    conn, task['id'], 'confirmed', event_at=now,
                 )
     finally:
         conn.close()

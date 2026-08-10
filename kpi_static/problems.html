@@ -25,17 +25,70 @@
       <p>Сообщите о проблеме, предложите улучшение или проверьте решение. Автор обращения не сохраняется.</p>
     </section>
 
-    <nav id="problemTabs" class="problem-tabs">
-      <button class="active" type="button" data-status="work">В работе <b id="workCount">0</b></button>
-      <button type="button" data-status="review">На проверке <b id="reviewCount">0</b></button>
-      <button type="button" data-status="done">Выполнено</button>
+    <nav id="boardViewTabs" class="board-view-tabs hidden" aria-label="Разделы Taskboard">
+      <button class="active" type="button" data-board-view="tasks">Заявки</button>
+      <button type="button" data-board-view="analytics">Аналитика</button>
     </nav>
 
-    <section class="problem-filters">
-      <select id="clubFilter"><option value="">Все клубы</option></select>
-      <select id="typeFilter"><option value="">Все типы</option></select>
+    <section id="tasksView">
+      <nav id="problemTabs" class="problem-tabs">
+        <button class="active" type="button" data-status="work">В работе <b id="workCount">0</b></button>
+        <button type="button" data-status="review">На проверке <b id="reviewCount">0</b></button>
+        <button type="button" data-status="done">Выполнено</button>
+      </nav>
+
+      <section class="problem-filters">
+        <select id="clubFilter"><option value="">Все клубы</option></select>
+        <select id="typeFilter"><option value="">Все типы</option></select>
+      </section>
+      <section id="problemList" class="problem-list"><div class="empty-card">Загрузка…</div></section>
     </section>
-    <section id="problemList" class="problem-list"><div class="empty-card">Загрузка…</div></section>
+
+    <section id="analyticsView" class="task-analytics hidden">
+      <header class="analytics-heading">
+        <div><p class="eyebrow">Сводка Taskboard</p><h2>Аналитика заявок</h2></div>
+        <small id="analyticsPeriodLabel"></small>
+      </header>
+
+      <section class="analytics-period">
+        <div id="analyticsPeriodTabs" class="analytics-period-tabs">
+          <button class="active" type="button" data-period="month">Месяц</button>
+          <button type="button" data-period="year">Год</button>
+          <button type="button" data-period="all">Всё время</button>
+        </div>
+        <div class="analytics-picker">
+          <input id="analyticsMonth" type="month" aria-label="Месяц аналитики">
+          <select id="analyticsYear" class="hidden" aria-label="Год аналитики"></select>
+        </div>
+      </section>
+
+      <section id="analyticsSummary" class="analytics-summary-grid">
+        <div class="analytics-loading"></div><div class="analytics-loading"></div>
+      </section>
+
+      <section class="analytics-card">
+        <div class="analytics-card-head"><h3>Статусы</h3><small>Текущее состояние выбранных заявок</small></div>
+        <div id="analyticsStatusBar" class="analytics-status-bar"></div>
+        <div id="analyticsStatusLegend" class="analytics-status-legend"></div>
+      </section>
+
+      <button id="oldestProblem" class="oldest-problem hidden" type="button"></button>
+
+      <section id="analyticsTrendCard" class="analytics-card hidden">
+        <div class="analytics-card-head"><h3>Динамика за год</h3><small>Создано / выполнено</small></div>
+        <div id="analyticsTrend" class="analytics-trend"></div>
+      </section>
+
+      <section class="analytics-card">
+        <div class="analytics-card-head"><h3>По типам</h3><small>Количество и доля</small></div>
+        <div id="analyticsTypes" class="analytics-breakdown"></div>
+      </section>
+
+      <section class="analytics-card">
+        <div class="analytics-card-head"><h3>По клубам</h3><small>Сначала самые загруженные</small></div>
+        <div id="analyticsClubs" class="analytics-breakdown"></div>
+      </section>
+    </section>
   </main>
 
   <dialog id="createDialog" class="problem-dialog">

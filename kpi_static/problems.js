@@ -1,6 +1,6 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
-const state = { me: null, meta: null, status: 'work', tasks: [], selected: null, action: null, repairCatalog: null, migration: null, mappingTask: null };
+const state = { me: null, meta: null, status: 'work', tasks: [], selected: null, action: null, repairCatalog: null, migration: null, mappingTask: null, boardView: 'tasks', analyticsMode: 'month', analytics: null };
 tg?.ready();
 tg?.expand();
 if (tg) {
@@ -145,6 +145,98 @@ function renderList() {
   `).join('') : '<div class="empty-card">В этом разделе задач нет</div>';
 }
 
+function localMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function percentLabel(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function durationLabel(seconds, precision) {
+  if (seconds == null) return '—';
+  if (precision !== 'exact') return `≈ ${(Number(seconds) / 86400).toFixed(1)} дн.`;
+  const totalMinutes = Math.round(Number(seconds) / 60);
+  if (totalMinutes < 60) return `${totalMinutes} мин.`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return `${hours} ч${minutes ? ` ${minutes} мин.` : ''}`;
+  const days = Math.floor(hours / 24);
+  return `${days} дн. ${hours % 24} ч`;
+}
+
+function renderAnalyticsBreakdown(selector, rows) {
+  const container = $(selector);
+  container.innerHTML = rows.length ? rows.map((item) => `
+    <article class="analytics-breakdown-row">
+      <div class="analytics-breakdown-head"><strong>${escapeHtml(item.label)}</strong><b>${item.count}</b></div>
+      <div class="analytics-breakdown-track"><i style="width:${Math.max(Number(item.share || 0) * 100, item.count ? 2 : 0)}%"></i></div>
+      <small>${percentLabel(item.share)} от всех · ${item.open} открыто · среднее ${durationLabel(item.average_seconds, item.precision)}</small>
+    </article>
+  `).join('') : '<div class="empty-card">За выбранный период заявок нет</div>';
+}
+
+function renderProblemAnalytics(data) {
+  state.analytics = data;
+  $('#analyticsPeriodLabel').textContent = data.period.label;
+  const summary = data.summary;
+  $('#analyticsSummary').innerHTML = `
+    <article><span>Создано</span><strong>${summary.created}</strong><small>за выбранный период</small></article>
+    <article><span>Выполнено</span><strong>${percentLabel(summary.completion_rate)}</strong><small>${summary.completed} заявок</small></article>
+    <article><span>Среднее решение</span><strong>${durationLabel(summary.average_seconds, summary.precision)}</strong><small>медиана ${durationLabel(summary.median_seconds, summary.precision)}</small></article>
+    <article><span>Осталось открыто</span><strong>${summary.open}</strong><small>в работе или на проверке</small></article>
+  `;
+  $('#analyticsStatusBar').innerHTML = data.statuses.map((item) => (
+    `<i class="status-${item.key}" style="width:${Number(item.share || 0) * 100}%" title="${escapeHtml(item.label)}: ${item.count}"></i>`
+  )).join('');
+  $('#analyticsStatusLegend').innerHTML = data.statuses.map((item) => `
+    <div><i class="status-${item.key}"></i><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></div>
+  `).join('');
+  const oldest = $('#oldestProblem');
+  oldest.classList.toggle('hidden', !data.oldest_open);
+  if (data.oldest_open) {
+    oldest.dataset.taskId = data.oldest_open.id;
+    oldest.innerHTML = `<span>Самая старая открытая · ${data.oldest_open.age_days} дн.</span><strong>${escapeHtml(data.oldest_open.title)}</strong><small>${escapeHtml(data.oldest_open.club)} · открыть заявку →</small>`;
+  }
+  const trendCard = $('#analyticsTrendCard');
+  trendCard.classList.toggle('hidden', !data.trend.length);
+  if (data.trend.length) {
+    const maxValue = Math.max(1, ...data.trend.map((item) => item.created));
+    const monthLabels = ['Я', 'Ф', 'М', 'А', 'М', 'И', 'И', 'А', 'С', 'О', 'Н', 'Д'];
+    $('#analyticsTrend').innerHTML = data.trend.map((item, index) => `
+      <div class="trend-month" title="${item.created} создано · ${item.completed} выполнено">
+        <div><i style="height:${item.created ? Math.max(item.created / maxValue * 100, 7) : 0}%"></i><b style="height:${item.completed ? Math.max(item.completed / maxValue * 100, 7) : 0}%"></b></div>
+        <span>${monthLabels[index]}</span>
+      </div>
+    `).join('');
+  }
+  renderAnalyticsBreakdown('#analyticsTypes', data.types);
+  renderAnalyticsBreakdown('#analyticsClubs', data.clubs);
+}
+
+async function loadProblemAnalytics() {
+  $('#analyticsSummary').innerHTML = '<div class="analytics-loading"></div><div class="analytics-loading"></div>';
+  const params = new URLSearchParams({ mode: state.analyticsMode });
+  if (state.analyticsMode === 'month') params.set('month', $('#analyticsMonth').value);
+  if (state.analyticsMode === 'year') params.set('year', $('#analyticsYear').value);
+  try {
+    renderProblemAnalytics(await api(`/api/problems/analytics?${params}`));
+  } catch (error) {
+    $('#analyticsSummary').innerHTML = `<div class="empty-card analytics-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function setBoardView(view) {
+  state.boardView = view;
+  $('#tasksView').classList.toggle('hidden', view !== 'tasks');
+  $('#analyticsView').classList.toggle('hidden', view !== 'analytics');
+  document.querySelectorAll('#boardViewTabs button').forEach(
+    (button) => button.classList.toggle('active', button.dataset.boardView === view),
+  );
+  if (view === 'analytics') await loadProblemAnalytics();
+}
+
 async function loadTasks() {
   $('#problemList').innerHTML = '<div class="empty-card">Загрузка…</div>';
   try {
@@ -232,6 +324,27 @@ $('#problemTabs').addEventListener('click', (event) => {
   document.querySelectorAll('#problemTabs button').forEach((item) => item.classList.toggle('active', item === button));
   loadTasks();
 });
+$('#boardViewTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-board-view]');
+  if (button) setBoardView(button.dataset.boardView);
+});
+$('#analyticsPeriodTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-period]');
+  if (!button) return;
+  state.analyticsMode = button.dataset.period;
+  document.querySelectorAll('#analyticsPeriodTabs button').forEach(
+    (item) => item.classList.toggle('active', item === button),
+  );
+  $('#analyticsMonth').classList.toggle('hidden', state.analyticsMode !== 'month');
+  $('#analyticsYear').classList.toggle('hidden', state.analyticsMode !== 'year');
+  loadProblemAnalytics();
+});
+$('#analyticsMonth').addEventListener('change', loadProblemAnalytics);
+$('#analyticsYear').addEventListener('change', loadProblemAnalytics);
+$('#oldestProblem').addEventListener('click', () => {
+  const taskId = Number($('#oldestProblem').dataset.taskId);
+  if (taskId) openTask(taskId);
+});
 $('#clubFilter').addEventListener('change', renderList);
 $('#typeFilter').addEventListener('change', renderList);
 $('#problemList').addEventListener('click', (event) => {
@@ -262,7 +375,8 @@ $('#createForm').addEventListener('submit', async (event) => {
     $('#createDialog').close();
     state.status = 'work';
     document.querySelectorAll('#problemTabs button').forEach((item) => item.classList.toggle('active', item.dataset.status === 'work'));
-    await loadTasks();
+    if (state.boardView === 'analytics') await loadProblemAnalytics();
+    else await loadTasks();
     toast('Проблема добавлена анонимно');
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
@@ -280,7 +394,8 @@ $('#detailDialog').addEventListener('click', async (event) => {
     try {
       await api(`/api/problems/${state.selected.id}/confirm`, { method: 'POST' });
       $('#detailDialog').close();
-      await loadTasks();
+      if (state.boardView === 'analytics') await loadProblemAnalytics();
+      else await loadTasks();
       toast('Решение подтверждено');
     } catch (error) { toast(error.message, true); }
     return;
@@ -358,7 +473,8 @@ $('#messageForm').addEventListener('submit', async (event) => {
     });
     $('#messageDialog').close();
     $('#detailDialog').close();
-    await loadTasks();
+    if (state.boardView === 'analytics') await loadProblemAnalytics();
+    else await loadTasks();
     toast(action === 'solution' ? 'Решение отправлено на проверку' : 'Проблема возвращена в работу');
   } catch (error) { toast(error.message, true); }
 });
@@ -368,6 +484,12 @@ async function init() {
     [state.me, state.meta] = await Promise.all([api('/api/me'), api('/api/problems-meta')]);
     renderFilters();
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
+    $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);
+    $('#analyticsMonth').value = localMonth();
+    const currentYear = new Date().getFullYear();
+    $('#analyticsYear').innerHTML = Array.from(
+      { length: currentYear - 2023 }, (_, index) => currentYear - index,
+    ).map((year) => `<option value="${year}">${year}</option>`).join('');
     await loadTasks();
     if (new URLSearchParams(window.location.search).get('new') === '1') {
       $('#createDialog').showModal();

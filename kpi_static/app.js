@@ -7,6 +7,14 @@ function localIsoDate(value = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function storedManagerFiltersCollapsed() {
+  try {
+    return localStorage.getItem('omg-kpi-manager-filters') !== 'expanded';
+  } catch (_error) {
+    return true;
+  }
+}
+
 const state = {
   me: null,
   day: localIsoDate(),
@@ -21,6 +29,7 @@ const state = {
   analyticsEmployees: new Set(),
   settings: null,
   sort: 'rating',
+  managerFiltersCollapsed: storedManagerFiltersCollapsed(),
   filters: {
     club: '',
     zone: '',
@@ -123,6 +132,16 @@ function monthLabel(month) {
   const [year, monthNumber] = month.split('-').map(Number);
   return new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' })
     .format(new Date(year, monthNumber - 1, 1));
+}
+
+function visibleMonthLabel(month) {
+  if (!month) return 'Выберите месяц';
+  const label = monthLabel(month).replace(/\s*г\.$/, '');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function syncMonthDisplay(inputSelector, displaySelector) {
+  $(displaySelector).textContent = visibleMonthLabel($(inputSelector).value);
 }
 
 function showToast(message, error = false) {
@@ -447,6 +466,11 @@ function renderManagerFilters() {
     return;
   }
   panel.hidden = false;
+  panel.classList.toggle('collapsed', state.managerFiltersCollapsed);
+  $('#managerFilterContent').hidden = state.managerFiltersCollapsed;
+  $('#managerFiltersToggle').setAttribute(
+    'aria-expanded', String(!state.managerFiltersCollapsed),
+  );
   const clubs = [...new Set(
     state.employees.flatMap((employee) => employee.clubs || []),
   )].sort((a, b) => a.localeCompare(b, 'ru'));
@@ -461,6 +485,13 @@ function renderManagerFilters() {
   const attentionCount = state.employees.filter((item) => item.needs_attention).length;
   $('#attentionCount').textContent = attentionCount;
   $('#attentionToggle').classList.toggle('active', state.filters.attention);
+  const activeFilterCount = [
+    state.filters.club,
+    state.filters.zone,
+    state.filters.attention,
+  ].filter(Boolean).length;
+  $('#managerFiltersCount').textContent = activeFilterCount
+    ? `Выбрано: ${activeFilterCount}` : 'Фильтры';
   $('#ratingTitle').textContent = state.filters.attention
     ? 'Требует внимания'
     : 'Рейтинг команды';
@@ -1171,6 +1202,7 @@ async function initialize() {
   $('#datePicker').value = state.day;
   $('#dateDisplay').textContent = numericDayLabel(state.day);
   $('#analyticsMonth').value = state.month;
+  syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
   updateChartOptions();
   try {
     state.me = await api('/api/me');
@@ -1181,6 +1213,7 @@ async function initialize() {
       $('#settingsTab').hidden = false;
       document.querySelector('.view-tabs').classList.add('owner-tabs');
       $('#settingsMonth').value = state.month;
+      syncMonthDisplay('#settingsMonth', '#settingsMonthDisplay');
     }
     await loadData();
   } catch (error) {
@@ -1197,6 +1230,7 @@ function moveDay(offset) {
   $('#datePicker').value = state.day;
   $('#dateDisplay').textContent = numericDayLabel(state.day);
   $('#analyticsMonth').value = state.month;
+  syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
   state.analytics = null;
   loadData();
 }
@@ -1209,6 +1243,7 @@ $('#datePicker').addEventListener('change', (event) => {
   state.month = state.day.slice(0, 7);
   $('#dateDisplay').textContent = numericDayLabel(state.day);
   $('#analyticsMonth').value = state.month;
+  syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
   state.analytics = null;
   loadData();
 });
@@ -1222,7 +1257,21 @@ $('#managerFilters').addEventListener('change', (event) => {
   const key = mapping[event.target.id];
   if (!key) return;
   state.filters[key] = event.target.value;
+  renderManagerFilters();
   renderEmployees();
+});
+
+$('#managerFiltersToggle').addEventListener('click', () => {
+  state.managerFiltersCollapsed = !state.managerFiltersCollapsed;
+  try {
+    localStorage.setItem(
+      'omg-kpi-manager-filters',
+      state.managerFiltersCollapsed ? 'collapsed' : 'expanded',
+    );
+  } catch (_error) {
+    // Private browsing may block localStorage.
+  }
+  renderManagerFilters();
 });
 
 $('#attentionToggle').addEventListener('click', () => {
@@ -1291,7 +1340,9 @@ $('#freshness').addEventListener('click', (event) => {
 
 $('#analyticsMode').addEventListener('change', () => loadAnalytics());
 $('#analyticsMonth').addEventListener('change', (event) => {
-  if (event.target.value) loadAnalytics();
+  if (!event.target.value) return;
+  syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
+  loadAnalytics();
 });
 $('#analyticsScope').addEventListener('change', updateChartOptions);
 $('#analyticsChart').addEventListener('change', renderAnalytics);
@@ -1299,6 +1350,7 @@ $('#analyticsMetric').addEventListener('change', renderAnalytics);
 $('#analyticsWeighted').addEventListener('change', renderAnalytics);
 $('#settingsMonth').addEventListener('change', (event) => {
   if (!event.target.value) return;
+  syncMonthDisplay('#settingsMonth', '#settingsMonthDisplay');
   state.settings = null;
   loadSettings();
 });

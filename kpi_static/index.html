@@ -50,47 +50,44 @@
     </section>
 
     <section id="ratingView" hidden>
-
-      <section id="summary" class="summary-grid" aria-live="polite"></section>
-
       <section id="managerFilters" class="manager-filters" hidden>
         <div class="manager-filter-heading">
           <div>
             <p class="eyebrow">Менеджерский режим</p>
             <h2 id="ratingTitle">Рейтинг команды</h2>
           </div>
+          <button id="managerFiltersToggle" class="manager-filters-toggle" type="button" aria-expanded="false">
+            <span id="managerFiltersCount"></span>
+            <b aria-hidden="true">⌄</b>
+          </button>
         </div>
-        <div class="filter-grid">
-          <label class="control-field">
-            <span>Клуб</span>
-            <select id="clubFilter">
-              <option value="">Все клубы</option>
-            </select>
-          </label>
-          <label class="control-field">
-            <span>Зона</span>
-            <select id="zoneFilter">
-              <option value="">Все зоны</option>
-              <option value="🟢">Зелёная</option>
-              <option value="🟡">Жёлтая</option>
-              <option value="🔴">Красная</option>
-              <option value="⚪">Без рейтинга</option>
-            </select>
-          </label>
+        <div id="managerFilterContent" class="manager-filter-content">
+          <div class="filter-grid">
+            <label class="control-field">
+              <span>Клуб</span>
+              <select id="clubFilter">
+                <option value="">Все клубы</option>
+              </select>
+            </label>
+            <label class="control-field">
+              <span>Зона</span>
+              <select id="zoneFilter">
+                <option value="">Все зоны</option>
+                <option value="🟢">Зелёная</option>
+                <option value="🟡">Жёлтая</option>
+                <option value="🔴">Красная</option>
+                <option value="⚪">Без рейтинга</option>
+              </select>
+            </label>
+          </div>
+          <button id="resetFilters" class="reset-filters" type="button">Сбросить фильтры</button>
+          <button id="attentionToggle" class="attention-toggle" type="button">
+            Требует внимания <strong id="attentionCount">0</strong>
+          </button>
         </div>
-        <button id="resetFilters" class="reset-filters" type="button">Сбросить фильтры</button>
-        <button id="attentionToggle" class="attention-toggle" type="button">
-          Требует внимания <strong id="attentionCount">0</strong>
-        </button>
       </section>
 
-      <section class="toolbar">
-        <label class="search">
-          <span>⌕</span>
-          <input id="searchInput" type="search" placeholder="Найти сотрудника">
-        </label>
-        <span id="resultCount" class="result-count"></span>
-      </section>
+      <section id="summary" class="summary-grid" aria-live="polite"></section>
 
       <section class="sort-controls" aria-label="Сортировка рейтинга">
         <span>Сортировка</span>
@@ -99,6 +96,14 @@
           <button class="sort-button" type="button" data-sort="shifts">Смены</button>
           <button class="sort-button" type="button" data-sort="name">По имени</button>
         </div>
+      </section>
+
+      <section class="toolbar">
+        <label class="search">
+          <span>⌕</span>
+          <input id="searchInput" type="search" placeholder="Найти сотрудника">
+        </label>
+        <span id="resultCount" class="result-count"></span>
       </section>
 
       <section id="employeeList" class="employee-list" aria-live="polite">
@@ -117,8 +122,12 @@
             <option value="monthly">По месяцам за год</option>
           </select>
         </label>
-        <label class="control-field">
+        <label class="control-field month-picker">
           <span>Месяц</span>
+          <span class="month-picker-value">
+            <strong id="analyticsMonthDisplay">Август 2026</strong>
+            <b aria-hidden="true">⌄</b>
+          </span>
           <input id="analyticsMonth" type="month">
         </label>
         <label class="control-field">
@@ -177,19 +186,40 @@
     <section id="settingsView" class="settings-view" hidden>
       <form id="settingsForm">
         <section class="settings-heading">
-          <div>
+          <div class="settings-title">
             <p class="eyebrow">Только для владельцев</p>
             <h2>Настройки KPI</h2>
           </div>
-          <label class="control-field settings-month">
+          <p class="settings-note">
+            Новая запись не меняет настройки предыдущих месяцев.
+          </p>
+          <label class="control-field settings-month month-picker">
             <span>Действуют с месяца</span>
+            <span class="month-picker-value">
+              <strong id="settingsMonthDisplay">Август 2026</strong>
+              <b aria-hidden="true">⌄</b>
+            </span>
             <input id="settingsMonth" type="month" required>
           </label>
         </section>
 
-        <p class="settings-note">
-          Новая запись действует с выбранного месяца и не меняет настройки предыдущих месяцев.
-        </p>
+        <section class="settings-card custom-goals-settings">
+          <div class="settings-section-title">
+            <div>
+              <p class="eyebrow">Локальные KPI-хештеги</p>
+              <h3>Дополнительные цели</h3>
+            </div>
+          </div>
+          <div class="hashtag-format-note">
+            <strong>Формат сообщения</strong>
+            <code>#хештег число комментарий</code>
+            <small>Например: #повторы 2 два гостя вернулись повторно</small>
+          </div>
+          <div id="customGoals" class="custom-goals-list"></div>
+          <button id="addCustomGoal" class="secondary-button settings-save" type="button">
+            + Добавить цель
+          </button>
+        </section>
 
         <section class="settings-card">
           <div class="settings-section-title">
@@ -202,25 +232,6 @@
           <div id="settingsMetrics" class="settings-grid">
             <div class="loading-card"></div>
           </div>
-        </section>
-
-        <section class="settings-card custom-goals-settings">
-          <div class="settings-section-title">
-            <div>
-              <p class="eyebrow">Локальные KPI-хештеги</p>
-              <h3>Дополнительные цели</h3>
-            </div>
-            <small>Цели версионируются с выбранного месяца</small>
-          </div>
-          <div class="hashtag-format-note">
-            <strong>Формат сообщения</strong>
-            <code>#хештег число комментарий</code>
-            <small>Например: #повторы 2 два гостя вернулись повторно</small>
-          </div>
-          <div id="customGoals" class="custom-goals-list"></div>
-          <button id="addCustomGoal" class="secondary-button settings-save" type="button">
-            + Добавить цель
-          </button>
         </section>
 
         <section class="settings-card">
@@ -281,61 +292,84 @@
         </div>
         <button type="button" class="icon-button close-dialog" aria-label="Закрыть">×</button>
       </div>
-      <label class="field">
-        <span>Название</span>
-        <input id="goalName" maxlength="80" required placeholder="Повторные визиты">
-      </label>
-      <label class="field">
-        <span>Хештег</span>
-        <input id="goalHashtag" maxlength="64" required placeholder="#повторы">
-        <small>В сообщении: #хештег число комментарий</small>
-      </label>
-      <label class="field">
-        <span>Для кого</span>
-        <select id="goalAudience" required>
-          <option value="all">Все сотрудники</option>
-          <option value="physical">Сотрудники физических клубов</option>
-          <option value="callcenter">Сотрудники КЦ</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>Тип расчёта</span>
-        <select id="goalType" required>
-          <option value="per_unit">Фиксированный % за единицу</option>
-          <option value="monthly_target">% от месячной цели</option>
-          <option value="per_shift_target">Цель от количества смен</option>
-          <option value="threshold">Бонус за достижение порога</option>
-        </select>
-      </label>
-      <p id="goalTypeHint" class="settings-note"></p>
-      <label class="field">
-        <span>Единица измерения</span>
-        <input id="goalUnit" maxlength="30" required placeholder="шт.">
-      </label>
-      <label id="goalValueRow" class="field">
-        <span id="goalValueLabel">Значение</span>
-        <input id="goalValue" type="number" min="0.001" step="0.001" required>
-      </label>
-      <label class="field">
-        <span id="goalContributionLabel">Вклад в KPI, процентных пунктов</span>
-        <input id="goalContribution" type="number" min="0.01" step="0.01" required>
-      </label>
-      <label id="goalMaxRow" class="field">
-        <span>Максимальный вклад, процентных пунктов — необязательно</span>
-        <input id="goalMaxContribution" type="number" min="0.01" step="0.01">
-      </label>
-      <label class="field">
-        <span>Минимум профильных смен — необязательно</span>
-        <input id="goalMinShifts" type="number" min="0.001" step="0.001">
-      </label>
-      <label class="checkbox-line">
-        <input id="goalIntegerOnly" type="checkbox" checked>
-        <span>Принимать только целое количество</span>
-      </label>
-      <label id="goalOverfillRow" class="checkbox-line">
-        <input id="goalOverfill" type="checkbox">
-        <span>Разрешить перевыполнение выше указанного вклада</span>
-      </label>
+      <section class="goal-form-section">
+        <h3>Основное</h3>
+        <label class="field">
+          <span>Название</span>
+          <input id="goalName" maxlength="80" required placeholder="Повторные визиты">
+        </label>
+        <label class="field">
+          <span>Хештег</span>
+          <input id="goalHashtag" maxlength="64" required placeholder="#повторы">
+          <small>В сообщении: #хештег число комментарий</small>
+        </label>
+        <label class="field">
+          <span>Для кого</span>
+          <select id="goalAudience" required>
+            <option value="all">Все сотрудники</option>
+            <option value="physical">Сотрудники физических клубов</option>
+            <option value="callcenter">Сотрудники КЦ</option>
+          </select>
+        </label>
+      </section>
+      <section class="goal-form-section">
+        <h3>Расчёт</h3>
+        <label class="field">
+          <span>Тип расчёта</span>
+          <select id="goalType" required>
+            <option value="per_unit">Фиксированный % за единицу</option>
+            <option value="monthly_target">% от месячной цели</option>
+            <option value="per_shift_target">Цель от количества смен</option>
+            <option value="threshold">Бонус за достижение порога</option>
+          </select>
+        </label>
+        <p id="goalTypeHint" class="settings-note"></p>
+        <label class="field">
+          <span>Единица измерения</span>
+          <input id="goalUnit" maxlength="30" required placeholder="шт.">
+        </label>
+        <label id="goalValueRow" class="field">
+          <span id="goalValueLabel">Значение</span>
+          <input id="goalValue" type="number" min="0.001" step="0.001" required>
+        </label>
+        <label class="field">
+          <span id="goalContributionLabel">Вклад в KPI, процентных пунктов</span>
+          <input id="goalContribution" type="number" min="0.01" step="0.01" required>
+        </label>
+      </section>
+      <section class="goal-form-section">
+        <h3>Ограничения</h3>
+        <label id="goalMaxRow" class="field">
+          <span>Максимальный вклад, п.п.</span>
+          <input id="goalMaxContribution" type="number" min="0.01" step="0.01">
+          <small>Необязательно</small>
+        </label>
+        <label class="field">
+          <span>Минимум профильных смен</span>
+          <input id="goalMinShifts" type="number" min="0.001" step="0.001">
+          <small>Необязательно</small>
+        </label>
+        <label class="goal-toggle">
+          <span>
+            <strong>Только целое количество</strong>
+            <small>Например: 1, 2 или 3 — без дробных значений</small>
+          </span>
+          <span class="toggle-switch">
+            <input id="goalIntegerOnly" type="checkbox" checked>
+            <i aria-hidden="true"></i>
+          </span>
+        </label>
+        <label id="goalOverfillRow" class="goal-toggle">
+          <span>
+            <strong>Разрешить перевыполнение</strong>
+            <small>KPI сможет превысить заданный вклад цели</small>
+          </span>
+          <span class="toggle-switch">
+            <input id="goalOverfill" type="checkbox">
+            <i aria-hidden="true"></i>
+          </span>
+        </label>
+      </section>
       <div class="dialog-actions">
         <button id="disableCustomGoal" class="danger-button" type="button" hidden>Отключить</button>
         <button id="saveCustomGoal" class="primary-button" type="submit">Сохранить цель</button>

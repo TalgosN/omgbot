@@ -77,6 +77,7 @@ from task_notifications import (
     created_task_notification,
     progress_task_notification,
 )
+from task_analytics import build_task_analytics, record_task_event
 
 
 DB_PATH = 'db/omgbot.sql'
@@ -292,6 +293,18 @@ def require_manager(handler):
     def wrapped(*args, **kwargs):
         if int(g.kpi_user['status']) < ROLE_MANAGER:
             return jsonify({'error': 'Действие доступно менеджерам и руководству.'}), 403
+        return handler(*args, **kwargs)
+    return wrapped
+
+
+def require_technician(handler):
+    @wraps(handler)
+    @require_user
+    def wrapped(*args, **kwargs):
+        if int(g.kpi_user['status']) < ROLE_TECHNICIAN:
+            return jsonify({
+                'error': 'Аналитика доступна ремонтникам, менеджерам и руководству.',
+            }), 403
         return handler(*args, **kwargs)
     return wrapped
 
@@ -850,7 +863,7 @@ def _delete_problem_after_failed_video(task_id, db_path=DB_PATH):
             }
             for table in (
                 'repair_case_locations', 'repair_events', 'repair_cases',
-                'task_videos',
+                'task_videos', 'task_events',
             ):
                 if table in tables:
                     conn.execute(f'DELETE FROM {table} WHERE task_id=?', (task_id,))
@@ -1436,9 +1449,22 @@ def api_problems_meta():
             BOT_TASK_TYPE,
         ],
         'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
+        'can_view_analytics': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
         'repair_clubs': list(ZONE_COUNTS),
     })
+
+
+@app.get('/api/problems/analytics')
+@require_technician
+def api_problem_analytics():
+    mode = str(request.args.get('mode') or 'month').strip().lower()
+    return jsonify(build_task_analytics(
+        DB_PATH,
+        mode=mode,
+        month=request.args.get('month'),
+        year=request.args.get('year'),
+    ))
 
 
 @app.get('/api/repairs/catalog')
@@ -1747,6 +1773,7 @@ def api_create_problem():
                 (_moscow_today().isoformat(), task_type, club, title, photo, description),
             )
             task_id = cursor.lastrowid
+            record_task_event(conn, task_id, 'created')
             if task_type == REPAIR_TASK_TYPE:
                 title = create_repair_case(
                     conn, task_id, club, item_id, detail_id, location_ids,
@@ -1828,6 +1855,11 @@ def _change_problem_status(task_id, expected_status, new_status, entry=None):
             add_repair_event(
                 conn, task_id, event_types.get(new_status, 'status_changed'),
                 _plain_task_feedback(entry) if entry else None,
+            )
+            record_task_event(
+                conn,
+                task_id,
+                event_types.get(new_status, 'solution'),
             )
             return dict(task)
     finally:
