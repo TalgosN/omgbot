@@ -110,26 +110,30 @@ button, input, select, textarea { font: inherit; }
 .club-card > summary { display:block; padding:13px; cursor:pointer; list-style:none; }
 .club-card > summary::-webkit-details-marker { display:none; }
 .club-head { display:flex; align-items:center; justify-content:space-between; min-width:0; gap:9px; }
-.club-head h3 { min-width:0; margin:0; font-size:20px; line-height:1.15; }
+.club-head h3 { min-width:0; margin:0; font-size:22px; line-height:1.15; }
 .club-overview { margin-top:13px; }
+.club-shift-summary { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:8px; }
 .club-shift-summary span, .club-shift-summary strong { display:block; }
-.club-shift-summary > span { color:var(--muted); font-size:12px; font-weight:750; }
-.club-shift-summary strong.shift-people-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; overflow:visible; font-size:14px; white-space:normal; }
-.shift-person { display:inline-flex; min-height:34px; padding:0 11px; align-items:center; gap:4px; border:1px solid rgba(112,70,217,.16); border-radius:11px; color:var(--purple-dark); text-decoration:none; background:var(--lavender); font-size:13px; font-weight:750; }
+.club-shift-summary > span { color:var(--muted); font-size:11px; font-weight:800; white-space:nowrap; }
+.club-shift-summary strong.shift-people-list { display:flex; min-width:0; flex-wrap:nowrap; gap:5px; margin:0; overflow-x:auto; font-size:12px; white-space:nowrap; scrollbar-width:none; }
+.club-shift-summary strong.shift-people-list::-webkit-scrollbar { display:none; }
+.shift-person { display:inline-flex; min-height:30px; padding:0 9px; flex:none; align-items:center; gap:3px; border:1px solid rgba(112,70,217,.2); border-radius:10px; color:var(--purple-dark); text-decoration:none; background:var(--lavender); font-size:11px; font-weight:800; }
 .shift-person i { font-size:10px; font-style:normal; opacity:.65; }
 .shift-person:active { opacity:.65; transform:scale(.98); }
 .shift-person.static { color:var(--ink); }
 .shift-person-empty { color:var(--muted); font-size:13px; font-weight:650; }
 .club-live-statuses { display:flex; flex:none; align-items:center; justify-content:flex-end; gap:4px; }
-.club-status { padding:4px 7px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
+.club-status { padding:5px 8px; border-radius:999px; font-size:10px; font-weight:800; white-space:nowrap; }
 .club-status.open { color: var(--success); background: rgba(35,155,112,.1); }
 .club-status.closed { color: var(--danger); background: rgba(214,75,113,.1); }
-.club-booking-status { padding:4px 7px; border-radius:999px; font-size:9px; font-weight:800; white-space:nowrap; }
+.club-booking-status { padding:5px 8px; border-radius:999px; font-size:10px; font-weight:800; white-space:nowrap; }
 .club-booking-status.active { color:#946000; background:rgba(255,193,7,.17); }
 .club-booking-status.empty { color:#37836a; background:rgba(68,170,132,.08); }
 .club-booking-status.loading { color:var(--muted); background:rgba(117,111,141,.08); }
 .club-meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin-top:12px; }
-.club-meta div { padding:8px 9px; border-radius:12px; background:rgba(112,70,217,.055); }
+.club-meta > div,.club-meta > a { padding:8px 9px; border-radius:12px; background:rgba(112,70,217,.055); }
+.club-problems-link { border:1px solid rgba(112,70,217,.13); color:inherit; text-decoration:none; }
+.club-problems-link:active { background:rgba(112,70,217,.12); transform:scale(.985); }
 .club-meta span, .club-meta strong { display: block; }
 .club-meta span { color:var(--muted); font-size:9px; font-weight:650; }
 .club-meta strong { margin-top:3px; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
@@ -150,6 +154,6 @@ button, input, select, textarea { font: inherit; }
   .module-card { padding-left:14px; padding-right:52px; }
   .module-open { font-size:8px; }
   .club-head { gap:6px; }
-  .club-head h3 { font-size:18px; }
-  .club-status,.club-booking-status { padding-inline:5px; font-size:8px; }
+  .club-head h3 { font-size:20px; }
+  .club-status,.club-booking-status { padding-inline:6px; font-size:9px; }
 }

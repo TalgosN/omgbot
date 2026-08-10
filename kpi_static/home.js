@@ -239,7 +239,7 @@ function renderClubs(data, bookingsData = null) {
           </div>
           <div class="club-meta">
             <div><span>Брони</span><strong>${bookingsData ? bookingCountLabel(group.count) : '—'}</strong></div>
-            <div><span>Проблемы</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></div>
+            <a class="club-problems-link" href="/problems?club=${encodeURIComponent(club.club)}"><span>Проблемы ↗</span><strong>${club.problems.work} · 👀 ${club.problems.review}</strong></a>
           </div>
           <div class="club-expand">${bookingsData ? (group.count ? 'Показать брони' : 'Броней на сегодня нет') : 'Брони загружаются…'} <span>›</span></div>
         </summary>
@@ -271,6 +271,7 @@ async function load() {
 load();
 setInterval(loadBookings, 60 * 1000);
 document.addEventListener('click', (event) => {
+  if (event.target.closest('.club-problems-link')) event.stopPropagation();
   const link = event.target.closest('[data-telegram-username]');
   if (!link) return;
   event.preventDefault();

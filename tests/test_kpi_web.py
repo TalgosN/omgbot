@@ -575,6 +575,8 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'class="club-shift-summary"', script.data)
             self.assertIn(b'class="club-live-statuses"', script.data)
             self.assertIn(b'class="shift-person"', script.data)
+            self.assertIn(b'class="club-problems-link"', script.data)
+            self.assertIn(b'/problems?club=', script.data)
             self.assertIn(b'data-telegram-username', script.data)
             self.assertIn(b'tg.openTelegramLink(url)', script.data)
             self.assertLess(
@@ -600,6 +602,8 @@ class KpiWebTest(unittest.TestCase):
         try:
             self.assertIn(b'class="media-badge photo"', problem_script.data)
             self.assertIn(b'class="media-badge video"', problem_script.data)
+            self.assertIn(b"state.meta.clubs.includes(club)", problem_script.data)
+            self.assertIn(b"' repair'", problem_script.data)
             self.assertNotIn('▧'.encode(), problem_script.data)
             self.assertNotIn('▶'.encode(), problem_script.data)
         finally:
