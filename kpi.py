@@ -18,6 +18,7 @@ from collections import Counter
 from kpi_calculator import (
     calculate_monthly_kpi,
     compare_with_sheet,
+    get_active_custom_goal_by_hashtag,
     import_sheet_penalty,
     initialize_kpi_calculation_schema,
     initialize_shift_time_schema,
@@ -460,6 +461,61 @@ def _finish_hashtag_event(event_id, status, response, error=None):
         conn.close()
 
 
+def _post_remote_hashtag(hashtag, username, value_text, comment, event_date):
+    headers = {
+        "Authorization": f"Bearer {SHIFTON_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "telegram": f"@{username}",
+        "hashtag": hashtag,
+        "value": value_text,
+        "comment": comment,
+        "date": event_date,
+    }
+    try:
+        response = requests.post(
+            f"{SHIFTON_API_URL}/api/bot/hashtag",
+            json=payload,
+            headers=headers,
+            timeout=5,
+        )
+        result = response.json()
+    except Exception as error:
+        return (
+            KPI_ERROR,
+            "Не удалось передать хештег в OMG Shift. Попробуйте позже.",
+            {"error": str(error)},
+            "request_failed",
+        )
+
+    if not isinstance(result, dict):
+        return (
+            KPI_ERROR,
+            "OMG Shift вернул некорректный ответ.",
+            {"error": "invalid_response"},
+            "invalid_response",
+        )
+    if result.get("ok"):
+        return KPI_REMOTE_SUCCESS, "", result, None
+
+    error = result.get("error", "unknown_error")
+    if error == "hashtag_not_configured":
+        return KPI_IGNORED, "", result, error
+    messages = {
+        "employee_not_found": f"Сотрудник с тегом @{username} не найден в OMG Shift.",
+        "shift_not_found": f"На сегодня не найдена смена для @{username}.",
+        "multiple_shifts_found": f"У @{username} найдено несколько смен за день, нужна ручная проверка.",
+        "value_required": f"После {hashtag} необходимо указать положительное число.",
+    }
+    return (
+        KPI_ERROR,
+        messages.get(error, f"OMG Shift не обработал {hashtag}: {error}."),
+        result,
+        error,
+    )
+
+
 def do_remote_hashtag(hashtag, message, text_args, hashtag_index=0):
     """Передаёт начисление в OMG Shift и сохраняет подтверждённый результат."""
     username = getattr(message.from_user, 'username', None)
@@ -495,50 +551,17 @@ def do_remote_hashtag(hashtag, message, text_args, hashtag_index=0):
             return KPI_IGNORED, "", ""
         return KPI_ERROR, "Это сообщение уже обрабатывалось, но начисление не было подтверждено.", ""
 
-    headers = {
-        "Authorization": f"Bearer {SHIFTON_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "telegram": f"@{username}",
-        "hashtag": hashtag,
-        "value": value_text,
-        "comment": comment,
-        "date": today,
-    }
-    try:
-        response = requests.post(
-            f"{SHIFTON_API_URL}/api/bot/hashtag",
-            json=payload,
-            headers=headers,
-            timeout=5,
-        )
-        result = response.json()
-    except Exception as error:
-        _finish_hashtag_event(event_id, 'failed', {"error": str(error)}, "request_failed")
-        return KPI_ERROR, "Не удалось передать хештег в OMG Shift. Попробуйте позже.", ""
-
-    if not isinstance(result, dict):
-        _finish_hashtag_event(event_id, 'failed', {"error": "invalid_response"}, "invalid_response")
-        return KPI_ERROR, "OMG Shift вернул некорректный ответ.", ""
-
-    if result.get("ok"):
+    status, message_text, result, error = _post_remote_hashtag(
+        hashtag, username, value_text, comment, today,
+    )
+    if status == KPI_REMOTE_SUCCESS:
         _finish_hashtag_event(event_id, 'applied', result)
         return KPI_REMOTE_SUCCESS, "", ""
-
-    error = result.get("error", "unknown_error")
-    status = 'ignored' if error == "hashtag_not_configured" else 'failed'
-    _finish_hashtag_event(event_id, status, result, error)
-    if error == "hashtag_not_configured":
+    stored_status = 'ignored' if status == KPI_IGNORED else 'failed'
+    _finish_hashtag_event(event_id, stored_status, result, error)
+    if status == KPI_IGNORED:
         return KPI_IGNORED, "", ""
-
-    messages = {
-        "employee_not_found": f"Сотрудник с тегом @{username} не найден в OMG Shift.",
-        "shift_not_found": f"На сегодня не найдена смена для @{username}.",
-        "multiple_shifts_found": f"У @{username} найдено несколько смен за день, нужна ручная проверка.",
-        "value_required": f"После {hashtag} необходимо указать положительное число.",
-    }
-    return KPI_ERROR, messages.get(error, f"OMG Shift не обработал {hashtag}: {error}."), ""
+    return KPI_ERROR, message_text, ""
 
 # ==========================================
 # 3. МОДУЛЬНЫЕ ОБРАБОТЧИКИ ХЕШТЕГОВ
@@ -765,7 +788,117 @@ def _existing_hashtag_status(message, hashtag_index):
         conn.close()
 
 
+def _save_local_custom_goal_event(
+    message, goal, value, comment, event_date, hashtag_index,
+):
+    ensure_hashtag_events_table()
+    chat_id, message_id = _message_identity(message)
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            existing = None
+            if chat_id is not None and message_id is not None:
+                existing = conn.execute(
+                    '''SELECT id, status FROM hashtag_events
+                       WHERE chat_id=? AND message_id=? AND hashtag_index=?''',
+                    (chat_id, message_id, hashtag_index),
+                ).fetchone()
+            if existing:
+                return existing[0], False
+            cursor = conn.execute(
+                '''
+                INSERT INTO hashtag_events (
+                    telegram, hashtag, value, value_unit, comment, event_date,
+                    status, source, chat_id, message_id, hashtag_index,
+                    applied_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'applied', 'local_kpi_goal',
+                          ?, ?, ?, datetime('now'))
+                ''',
+                (
+                    f"@{message.from_user.username}", goal['hashtag'], value,
+                    goal['unit_label'], comment, event_date, chat_id,
+                    message_id, hashtag_index,
+                ),
+            )
+            return cursor.lastrowid, True
+    finally:
+        conn.close()
+
+
+def _record_custom_goal_remote_result(event_id, result, error=None):
+    conn = sqlite3.connect('db/omgbot.sql')
+    try:
+        with conn:
+            conn.execute(
+                '''UPDATE hashtag_events
+                   SET api_error=?, api_response=? WHERE id=?''',
+                (error, json.dumps(result, ensure_ascii=False), event_id),
+            )
+    finally:
+        conn.close()
+
+
+def do_local_custom_goal_hashtag(
+    goal, message, text_args, hashtag_index=0,
+):
+    username = getattr(message.from_user, 'username', None)
+    if not username:
+        return KPI_ERROR, "Не вижу Telegram username отправителя.", ""
+    value_text, comment = _extract_remote_value(text_args)
+    if not value_text or not comment:
+        return (
+            KPI_INVALID,
+            f"Формат: {goal['hashtag']} число комментарий",
+            f"```Например\n{goal['hashtag']} 1 описание результата```",
+        )
+    value = float(value_text)
+    if value <= 0 or (goal['integer_only'] and not value.is_integer()):
+        requirement = "целое положительное" if goal['integer_only'] else "положительное"
+        return KPI_INVALID, f"Укажите {requirement} число и комментарий.", ""
+
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    event_id, created = _save_local_custom_goal_event(
+        message, goal, value, comment, today, hashtag_index,
+    )
+    if not created:
+        return KPI_SUCCESS, "", ""
+
+    try:
+        remote_rule = _get_hashtag_rule(goal['hashtag'])
+    except Exception as error:
+        _record_custom_goal_remote_result(
+            event_id, {"error": str(error)}, "rules_request_failed",
+        )
+        return (
+            KPI_SAVED_ERROR,
+            "KPI сохранён локально, но не удалось проверить отправку в OMG Shift.",
+            "",
+        )
+    if not remote_rule:
+        return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
+
+    status, message_text, result, error = _post_remote_hashtag(
+        goal['hashtag'], username, value_text, comment, today,
+    )
+    _record_custom_goal_remote_result(event_id, result, error)
+    if status in (KPI_REMOTE_SUCCESS, KPI_IGNORED):
+        return KPI_SUCCESS, random.choice(TEXTS['aff']), ""
+    return (
+        KPI_SAVED_ERROR,
+        f"KPI сохранён локально, но OMG Shift не принял запись. {message_text}",
+        "",
+    )
+
+
 def _hash_handle_one(message, hashtag, text_args, hashtag_index=0):
+    moscow_today = datetime.now(pytz.timezone('Europe/Moscow')).date()
+    custom_goal = get_active_custom_goal_by_hashtag(
+        hashtag, period_month=moscow_today,
+    )
+    if custom_goal:
+        return do_local_custom_goal_hashtag(
+            custom_goal, message, text_args, hashtag_index,
+        )
     if hashtag in kpi_dict:
         if hashtag != '#штраф' and _existing_hashtag_status(message, hashtag_index):
             local_result = (KPI_SUCCESS, '', '')

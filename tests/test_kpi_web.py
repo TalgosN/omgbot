@@ -1103,6 +1103,46 @@ class KpiWebTest(unittest.TestCase):
             '@tester',
         )
 
+    def test_owner_can_save_custom_goal(self):
+        settings = {
+            'period_month': '2026-08-01', 'metrics': [], 'clubs': [],
+            'custom_goals': [],
+        }
+        payload = {
+            'month': '2026-08', 'name': 'Повторы', 'hashtag': '#повторы',
+            'calculation_type': 'per_unit', 'audience': 'physical',
+            'unit_label': 'шт.', 'value': 1, 'contribution_pct': 0.1,
+            'min_profile_shifts': None,
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(
+                kpi_web, 'save_custom_goal', return_value='goal-1',
+            ) as save_goal,
+            patch.object(kpi_web, 'get_kpi_settings', return_value=settings),
+        ):
+            response = self.client.post(
+                '/api/kpi/goals', headers=self.headers, json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['saved_goal_key'], 'goal-1')
+        expected = dict(payload)
+        expected.pop('month')
+        save_goal.assert_called_once_with('2026-08-01', expected, '@tester')
+
+    def test_manager_cannot_save_custom_goal(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+        ):
+            response = self.client.post(
+                '/api/kpi/goals', headers=self.headers,
+                json={'month': '2026-08'},
+            )
+        self.assertEqual(response.status_code, 403)
+
     def test_month_close_preview_only_warns_about_detected_problems(self):
         rows = [
             {

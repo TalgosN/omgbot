@@ -1,7 +1,9 @@
 import calendar
 import json
 import math
+import re
 import sqlite3
+import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
@@ -28,6 +30,27 @@ DEFAULT_CLUB_WEIGHTS = {
     'Прокшино': (0.75, 2.0),
     'Марьино': (0.9, 2.2),
     'Коллцентр': (0.0, 0.0),
+}
+
+CUSTOM_GOAL_TYPES = {
+    'per_unit', 'monthly_target', 'per_shift_target', 'threshold',
+}
+CUSTOM_GOAL_AUDIENCES = {'all', 'physical', 'callcenter'}
+CUSTOM_GOAL_TYPE_LABELS = {
+    'per_unit': 'Процент за единицу',
+    'monthly_target': 'Фиксированная цель месяца',
+    'per_shift_target': 'Цель на профильную смену',
+    'threshold': 'Бонус за достижение порога',
+}
+CUSTOM_GOAL_AUDIENCE_LABELS = {
+    'all': 'Все сотрудники',
+    'physical': 'Физические клубы',
+    'callcenter': 'Колл-центр',
+}
+CUSTOM_HASHTAG_RE = re.compile(r'^#[^\W_][\w-]{1,63}$', re.UNICODE)
+PHYSICAL_KPI_CLUBS = set(DEFAULT_CLUB_WEIGHTS) - {'Коллцентр'}
+RESERVED_LOCAL_KPI_HASHTAGS = {
+    '#абик', '#инициатива', '#отзывы', '#продление', '#серт', '#штраф',
 }
 
 
@@ -197,6 +220,29 @@ def initialize_kpi_calculation_schema(db_path=DB_PATH):
                     snapshot_json TEXT,
                     snapshot_created_at DATETIME
                 );
+
+                CREATE TABLE IF NOT EXISTS kpi_custom_goals (
+                    goal_key TEXT NOT NULL,
+                    effective_month DATE NOT NULL,
+                    name TEXT NOT NULL,
+                    hashtag TEXT NOT NULL,
+                    calculation_type TEXT NOT NULL,
+                    audience TEXT NOT NULL,
+                    unit_label TEXT NOT NULL,
+                    value REAL NOT NULL,
+                    contribution_pct REAL NOT NULL,
+                    max_contribution_pct REAL,
+                    min_profile_shifts REAL,
+                    allow_overfulfillment INTEGER NOT NULL DEFAULT 0,
+                    integer_only INTEGER NOT NULL DEFAULT 1,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    updated_by TEXT,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (goal_key, effective_month)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_kpi_custom_goals_month
+                    ON kpi_custom_goals(effective_month, goal_key);
                 '''
             )
             month_status_columns = {
@@ -613,6 +659,236 @@ def _settings_for_month(conn, table, month, value_columns):
     return {row[0]: tuple(float(value) for value in row[1:]) for row in rows}
 
 
+def _custom_goals_for_month(conn, month, include_inactive=False):
+    rows = conn.execute(
+        '''
+        SELECT goal.goal_key, goal.name, lower(goal.hashtag),
+               goal.calculation_type, goal.audience, goal.unit_label,
+               goal.value, goal.contribution_pct, goal.max_contribution_pct,
+               goal.min_profile_shifts, goal.allow_overfulfillment,
+               goal.integer_only, goal.active, goal.effective_month,
+               goal.updated_by, goal.updated_at
+        FROM kpi_custom_goals goal
+        JOIN (
+            SELECT goal_key, MAX(effective_month) AS effective_month
+            FROM kpi_custom_goals
+            WHERE date(effective_month) <= date(?)
+            GROUP BY goal_key
+        ) latest
+          ON latest.goal_key=goal.goal_key
+         AND latest.effective_month=goal.effective_month
+        ORDER BY goal.active DESC, lower(goal.name), goal.goal_key
+        ''',
+        (month.isoformat(),),
+    ).fetchall()
+    result = []
+    for row in rows:
+        if not include_inactive and not row[12]:
+            continue
+        result.append({
+            'goal_key': row[0],
+            'name': row[1],
+            'hashtag': row[2],
+            'calculation_type': row[3],
+            'calculation_type_label': CUSTOM_GOAL_TYPE_LABELS.get(row[3], row[3]),
+            'audience': row[4],
+            'audience_label': CUSTOM_GOAL_AUDIENCE_LABELS.get(row[4], row[4]),
+            'unit_label': row[5],
+            'value': float(row[6]),
+            'contribution_pct': float(row[7]),
+            'max_contribution_pct': (
+                float(row[8]) if row[8] is not None else None
+            ),
+            'min_profile_shifts': (
+                float(row[9]) if row[9] is not None else None
+            ),
+            'allow_overfulfillment': bool(row[10]),
+            'integer_only': bool(row[11]),
+            'active': bool(row[12]),
+            'effective_month': row[13],
+            'updated_by': row[14],
+            'updated_at': row[15],
+        })
+    return result
+
+
+def get_active_custom_goal_by_hashtag(
+    hashtag,
+    period_month=None,
+    db_path=DB_PATH,
+):
+    normalized = str(hashtag or '').strip().lower()
+    if not CUSTOM_HASHTAG_RE.fullmatch(normalized):
+        return None
+    month = _month_start(period_month or date.today())
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        return next(
+            (
+                goal for goal in _custom_goals_for_month(conn, month)
+                if goal['hashtag'] == normalized
+            ),
+            None,
+        )
+    finally:
+        conn.close()
+
+
+def save_custom_goal(period_month, payload, updated_by, db_path=DB_PATH):
+    month = _month_start(period_month)
+    name = str(payload.get('name') or '').strip()
+    hashtag = str(payload.get('hashtag') or '').strip().lower()
+    calculation_type = str(payload.get('calculation_type') or '').strip()
+    audience = str(payload.get('audience') or '').strip()
+    unit_label = str(payload.get('unit_label') or '').strip()
+    goal_key = str(payload.get('goal_key') or '').strip() or uuid.uuid4().hex
+
+    if not name or len(name) > 80:
+        raise ValueError('Название цели должно быть не длиннее 80 символов')
+    if not CUSTOM_HASHTAG_RE.fullmatch(hashtag):
+        raise ValueError('Хештег должен начинаться с # и не содержать пробелов')
+    if hashtag in RESERVED_LOCAL_KPI_HASHTAGS:
+        raise ValueError('Этот хештег уже используется встроенным показателем KPI')
+    if calculation_type not in CUSTOM_GOAL_TYPES:
+        raise ValueError('Выберите поддерживаемый тип расчёта')
+    if audience not in CUSTOM_GOAL_AUDIENCES:
+        raise ValueError('Выберите аудиторию цели')
+    if not unit_label or len(unit_label) > 30:
+        raise ValueError('Укажите единицу измерения не длиннее 30 символов')
+
+    try:
+        value = float(payload.get('value'))
+        contribution_pct = float(payload.get('contribution_pct'))
+        raw_max = payload.get('max_contribution_pct')
+        max_contribution_pct = (
+            float(raw_max) if raw_max not in (None, '') else None
+        )
+        raw_minimum = payload.get('min_profile_shifts')
+        min_profile_shifts = (
+            float(raw_minimum) if raw_minimum not in (None, '') else None
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError('Параметры цели должны быть числами') from error
+    numeric_values = (value, contribution_pct)
+    if any(not math.isfinite(item) or item <= 0 for item in numeric_values):
+        raise ValueError('Норма и вклад цели должны быть больше нуля')
+    if max_contribution_pct is not None and (
+        not math.isfinite(max_contribution_pct) or max_contribution_pct <= 0
+    ):
+        raise ValueError('Максимальный вклад должен быть больше нуля')
+    if min_profile_shifts is not None and (
+        not math.isfinite(min_profile_shifts) or min_profile_shifts <= 0
+    ):
+        raise ValueError('Минимум профильных смен должен быть больше нуля')
+
+    allow_overfulfillment = bool(payload.get('allow_overfulfillment'))
+    integer_only = bool(payload.get('integer_only', True))
+    if calculation_type not in {'monthly_target', 'per_shift_target'}:
+        allow_overfulfillment = False
+    if calculation_type != 'per_unit':
+        max_contribution_pct = None
+
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        duplicate = conn.execute(
+            '''SELECT goal_key FROM kpi_custom_goals
+               WHERE lower(hashtag)=? AND goal_key<>? LIMIT 1''',
+            (hashtag, goal_key),
+        ).fetchone()
+        if duplicate:
+            raise ValueError('Этот хештег уже используется другой KPI-целью')
+        existing_key = conn.execute(
+            'SELECT 1 FROM kpi_custom_goals WHERE goal_key=? LIMIT 1',
+            (goal_key,),
+        ).fetchone()
+        if payload.get('goal_key') and not existing_key:
+            raise ValueError('Редактируемая KPI-цель не найдена')
+        with conn:
+            conn.execute(
+                '''
+                INSERT INTO kpi_custom_goals (
+                    goal_key, effective_month, name, hashtag,
+                    calculation_type, audience, unit_label, value,
+                    contribution_pct, max_contribution_pct,
+                    min_profile_shifts, allow_overfulfillment,
+                    integer_only, active, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(goal_key, effective_month) DO UPDATE SET
+                    name=excluded.name,
+                    hashtag=excluded.hashtag,
+                    calculation_type=excluded.calculation_type,
+                    audience=excluded.audience,
+                    unit_label=excluded.unit_label,
+                    value=excluded.value,
+                    contribution_pct=excluded.contribution_pct,
+                    max_contribution_pct=excluded.max_contribution_pct,
+                    min_profile_shifts=excluded.min_profile_shifts,
+                    allow_overfulfillment=excluded.allow_overfulfillment,
+                    integer_only=excluded.integer_only,
+                    active=1,
+                    updated_by=excluded.updated_by,
+                    updated_at=CURRENT_TIMESTAMP
+                ''',
+                (
+                    goal_key, month.isoformat(), name, hashtag,
+                    calculation_type, audience, unit_label, value,
+                    contribution_pct, max_contribution_pct,
+                    min_profile_shifts, int(allow_overfulfillment),
+                    int(integer_only), updated_by,
+                ),
+            )
+    finally:
+        conn.close()
+    return goal_key
+
+
+def disable_custom_goal(goal_key, period_month, updated_by, db_path=DB_PATH):
+    month = _month_start(period_month)
+    initialize_kpi_calculation_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        current = next(
+            (
+                goal for goal in _custom_goals_for_month(
+                    conn, month, include_inactive=True,
+                )
+                if goal['goal_key'] == goal_key
+            ),
+            None,
+        )
+        if not current:
+            raise ValueError('KPI-цель не найдена')
+        with conn:
+            conn.execute(
+                '''
+                INSERT INTO kpi_custom_goals (
+                    goal_key, effective_month, name, hashtag,
+                    calculation_type, audience, unit_label, value,
+                    contribution_pct, max_contribution_pct,
+                    min_profile_shifts, allow_overfulfillment,
+                    integer_only, active, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(goal_key, effective_month) DO UPDATE SET
+                    active=0, updated_by=excluded.updated_by,
+                    updated_at=CURRENT_TIMESTAMP
+                ''',
+                (
+                    goal_key, month.isoformat(), current['name'],
+                    current['hashtag'], current['calculation_type'],
+                    current['audience'], current['unit_label'],
+                    current['value'], current['contribution_pct'],
+                    current['max_contribution_pct'],
+                    current['min_profile_shifts'],
+                    int(current['allow_overfulfillment']),
+                    int(current['integer_only']), updated_by,
+                ),
+            )
+    finally:
+        conn.close()
+
+
 def get_kpi_settings(period_month, db_path=DB_PATH):
     month = _month_start(period_month)
     initialize_kpi_calculation_schema(db_path)
@@ -651,6 +927,9 @@ def get_kpi_settings(period_month, db_path=DB_PATH):
             ''',
             (month.isoformat(),),
         ).fetchall()
+        custom_goals = _custom_goals_for_month(
+            conn, month, include_inactive=True,
+        )
     finally:
         conn.close()
 
@@ -682,6 +961,7 @@ def get_kpi_settings(period_month, db_path=DB_PATH):
             for club in DEFAULT_CLUB_WEIGHTS
             if club in clubs_by_name
         ],
+        'custom_goals': custom_goals,
     }
 
 
@@ -808,6 +1088,30 @@ def _metric_facts(conn, start, end):
     return facts
 
 
+def _custom_goal_facts(conn, start, end, goals):
+    if not goals or not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hashtag_events'"
+    ).fetchone():
+        return {}
+    hashtags = sorted({goal['hashtag'] for goal in goals})
+    placeholders = ','.join('?' for _ in hashtags)
+    rows = conn.execute(
+        f'''
+        SELECT lower(telegram), lower(hashtag), SUM(COALESCE(value, 0))
+        FROM hashtag_events
+        WHERE status='applied'
+          AND date(event_date) BETWEEN date(?) AND date(?)
+          AND lower(hashtag) IN ({placeholders})
+        GROUP BY lower(telegram), lower(hashtag)
+        ''',
+        (start.isoformat(), end.isoformat(), *hashtags),
+    ).fetchall()
+    result = {}
+    for login, hashtag, value in rows:
+        result.setdefault(login, {})[hashtag] = float(value or 0)
+    return result
+
+
 def _birthday_facts(conn, start, end):
     table_exists = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='birthday'"
@@ -845,10 +1149,20 @@ def _shift_totals(conn, start, end, weights):
         (start.isoformat(), end.isoformat()),
     ).fetchall()
     ordinary = {}
+    profile = {}
     grouped = {}
     for login, club, raw_date, duration in rows:
         duration = float(duration or 0)
-        ordinary[login] = ordinary.get(login, 0.0) + round(duration / 6.0, 3)
+        shift_units = round(duration / 6.0, 3)
+        ordinary[login] = ordinary.get(login, 0.0) + shift_units
+        scopes = profile.setdefault(login, {
+            'all': 0.0, 'physical': 0.0, 'callcenter': 0.0,
+        })
+        scopes['all'] += shift_units
+        if club == 'Коллцентр':
+            scopes['callcenter'] += shift_units
+        elif club in PHYSICAL_KPI_CLUBS:
+            scopes['physical'] += shift_units
         shift_date = datetime.strptime(raw_date, '%Y-%m-%d').date()
         weekend = shift_date.weekday() >= 5
         key = (login, club, weekend)
@@ -860,7 +1174,7 @@ def _shift_totals(conn, start, end, weights):
         weight = weekend_weight if weekend else weekday_weight
         rounded_shifts = _sheet_round(duration / 6.0)
         weighted[login] = weighted.get(login, 0.0) + rounded_shifts * weight
-    return ordinary, weighted
+    return ordinary, weighted, profile
 
 
 def _penalties(conn, month):
@@ -894,6 +1208,65 @@ def _streams(conn, month):
     }
 
 
+def _custom_goal_results(login, goals, facts, profile_shifts):
+    employee_facts = facts.get(login, {})
+    scopes = profile_shifts.get(login, {})
+    total_shifts = float(scopes.get('all', 0) or 0)
+    result = []
+    for goal in goals:
+        profile = float(scopes.get(goal['audience'], 0) or 0)
+        if profile <= 0:
+            continue
+        minimum = goal.get('min_profile_shifts')
+        if minimum is not None and profile < float(minimum):
+            continue
+        share = 1.0 if goal['audience'] == 'all' else (
+            profile / total_shifts if total_shifts else 0.0
+        )
+        fact = float(employee_facts.get(goal['hashtag'], 0) or 0)
+        calculation_type = goal['calculation_type']
+        target = None
+        ratio = None
+        base_contribution = 0.0
+
+        if calculation_type == 'per_unit':
+            base_contribution = fact * goal['contribution_pct']
+            maximum = goal.get('max_contribution_pct')
+            if maximum is not None:
+                base_contribution = min(base_contribution, maximum)
+        elif calculation_type == 'monthly_target':
+            target = goal['value']
+            ratio = fact / target if target else 0.0
+            if not goal['allow_overfulfillment']:
+                ratio = min(ratio, 1.0)
+            base_contribution = ratio * goal['contribution_pct']
+        elif calculation_type == 'per_shift_target':
+            target = profile * goal['value']
+            ratio = fact / target if target else 0.0
+            if not goal['allow_overfulfillment']:
+                ratio = min(ratio, 1.0)
+            base_contribution = ratio * goal['contribution_pct']
+        elif calculation_type == 'threshold':
+            target = goal['value']
+            ratio = min(fact / target, 1.0) if target else 0.0
+            base_contribution = (
+                goal['contribution_pct'] if fact >= target else 0.0
+            )
+
+        contribution = base_contribution * share
+        result.append({
+            **goal,
+            'fact': fact,
+            'target': target,
+            'ratio': ratio,
+            'profile_shifts': profile,
+            'shift_share': share,
+            'base_contribution_pct': base_contribution,
+            'actual_contribution_pct': contribution,
+        })
+    return result
+
+
 def _build_kpi_rows(
     month,
     employees,
@@ -904,7 +1277,13 @@ def _build_kpi_rows(
     weighted_shifts,
     penalties,
     streams,
+    custom_goals=None,
+    custom_facts=None,
+    profile_shifts=None,
 ):
+    custom_goals = custom_goals or []
+    custom_facts = custom_facts or {}
+    profile_shifts = profile_shifts or {}
     result = []
     for login, nickname in employees:
         employee_facts = facts.get(login, {})
@@ -951,10 +1330,17 @@ def _build_kpi_rows(
         row['penalty_impact'] = penalty['impact']
         row['stream'] = bool(stream_bonus)
         row['stream_bonus'] = stream_bonus
+        row['custom_goals'] = _custom_goal_results(
+            login, custom_goals, custom_facts, profile_shifts,
+        )
+        row['custom_goals_pct'] = sum(
+            goal['actual_contribution_pct'] for goal in row['custom_goals']
+        )
         row['total_pct'] = (
             primary
             + secondary
             + row['initiatives_pct']
+            + row['custom_goals_pct']
             - penalty['impact']
             + stream_bonus
         )
@@ -1026,8 +1412,10 @@ def calculate_monthly_kpi(
             ('weekday_weight', 'weekend_weight'),
         )
         facts = _metric_facts(conn, month, end)
+        custom_goals = _custom_goals_for_month(conn, month)
+        custom_facts = _custom_goal_facts(conn, month, end, custom_goals)
         birthdays = _birthday_facts(conn, month, end)
-        ordinary_shifts, weighted_shifts = _shift_totals(
+        ordinary_shifts, weighted_shifts, profile_shifts = _shift_totals(
             conn,
             month,
             end,
@@ -1048,6 +1436,9 @@ def calculate_monthly_kpi(
         weighted_shifts,
         penalties,
         streams,
+        custom_goals,
+        custom_facts,
+        profile_shifts,
     )
 
 
@@ -1092,6 +1483,26 @@ def calculate_daily_kpi_series(
             ''',
             (month.isoformat(), end.isoformat()),
         ).fetchall()
+        custom_goals = _custom_goals_for_month(conn, month)
+        custom_rows = []
+        if custom_goals and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hashtag_events'"
+        ).fetchone():
+            hashtags = sorted({goal['hashtag'] for goal in custom_goals})
+            placeholders = ','.join('?' for _ in hashtags)
+            custom_rows = conn.execute(
+                f'''
+                SELECT date(event_date), lower(telegram), lower(hashtag),
+                       SUM(COALESCE(value, 0))
+                FROM hashtag_events
+                WHERE status='applied'
+                  AND date(event_date) BETWEEN date(?) AND date(?)
+                  AND lower(hashtag) IN ({placeholders})
+                GROUP BY date(event_date), lower(telegram), lower(hashtag)
+                ORDER BY date(event_date)
+                ''',
+                (month.isoformat(), end.isoformat(), *hashtags),
+            ).fetchall()
         birthday_rows = []
         if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='birthday'"
@@ -1140,10 +1551,15 @@ def calculate_daily_kpi_series(
     shifts_by_day = defaultdict(list)
     for raw_day, login, club, duration in shift_rows:
         shifts_by_day[raw_day].append((login, club, float(duration or 0)))
+    custom_by_day = defaultdict(list)
+    for raw_day, login, hashtag, value in custom_rows:
+        custom_by_day[raw_day].append((login, hashtag, float(value or 0)))
 
     facts = {}
     birthdays = {}
     ordinary_shifts = {}
+    profile_shifts = {}
+    custom_facts = {}
     grouped_shift_duration = {}
     series = []
     current = month
@@ -1155,13 +1571,23 @@ def calculate_daily_kpi_series(
         for login, value in birthdays_by_day[raw_day]:
             birthdays[login] = birthdays.get(login, 0.0) + value
         for login, club, duration in shifts_by_day[raw_day]:
-            ordinary_shifts[login] = (
-                ordinary_shifts.get(login, 0.0) + round(duration / 6.0, 3)
+            shift_units = round(duration / 6.0, 3)
+            ordinary_shifts[login] = ordinary_shifts.get(login, 0.0) + shift_units
+            scopes = profile_shifts.setdefault(
+                login, {'all': 0.0, 'physical': 0.0, 'callcenter': 0.0},
             )
+            scopes['all'] += shift_units
+            if club == 'Коллцентр':
+                scopes['callcenter'] += shift_units
+            elif club in PHYSICAL_KPI_CLUBS:
+                scopes['physical'] += shift_units
             key = (login, club, current.weekday() >= 5)
             grouped_shift_duration[key] = (
                 grouped_shift_duration.get(key, 0.0) + duration
             )
+        for login, hashtag, value in custom_by_day[raw_day]:
+            employee_facts = custom_facts.setdefault(login, {})
+            employee_facts[hashtag] = employee_facts.get(hashtag, 0.0) + value
 
         weighted_shifts = {}
         for (login, club, weekend), duration in grouped_shift_duration.items():
@@ -1186,6 +1612,9 @@ def calculate_daily_kpi_series(
                 weighted_shifts,
                 penalties,
                 streams,
+                custom_goals,
+                custom_facts,
+                profile_shifts,
             ),
         })
         current += timedelta(days=1)

@@ -20,11 +20,10 @@ const state = {
   analytics: null,
   analyticsEmployees: new Set(),
   settings: null,
+  sort: 'rating',
   filters: {
     club: '',
-    role: '',
     zone: '',
-    condition: '',
     attention: false,
   },
 };
@@ -48,6 +47,28 @@ const settingsMetricUnits = {
   'Абонементы': 'на одну смену',
   'Инициативы': '% к итоговому KPI за одну инициативу',
 };
+const customGoalTypeHints = {
+  per_unit: {
+    hint: 'Каждая записанная единица сразу добавляет указанный вклад. Например: 2 × 5 п.п. = 10 п.п.',
+    value: 'Служебная норма (обычно 1)',
+    contribution: 'Вклад за одну единицу, процентных пунктов',
+  },
+  monthly_target: {
+    hint: 'Вклад растёт пропорционально выполнению месячной цели. Например: 5 из 10 при вкладе 20 п.п. = 10 п.п.',
+    value: 'Месячная цель',
+    contribution: 'Вклад при выполнении цели, процентных пунктов',
+  },
+  per_shift_target: {
+    hint: 'Цель равна норме × профильные смены. Итоговый вклад пропорционален выполнению этой цели.',
+    value: 'Норма на одну профильную смену',
+    contribution: 'Вклад при выполнении цели, процентных пунктов',
+  },
+  threshold: {
+    hint: 'Указанный вклад начисляется целиком только после достижения порога.',
+    value: 'Порог количества',
+    contribution: 'Бонус за достижение, процентных пунктов',
+  },
+};
 
 const $ = (selector) => document.querySelector(selector);
 const employeeList = $('#employeeList');
@@ -55,6 +76,7 @@ const employeeDialog = $('#employeeDialog');
 const penaltyDialog = $('#penaltyDialog');
 const entriesDialog = $('#entriesDialog');
 const monthCloseDialog = $('#monthCloseDialog');
+const customGoalDialog = $('#customGoalDialog');
 
 tg?.ready();
 tg?.expand();
@@ -428,27 +450,14 @@ function renderManagerFilters() {
   const clubs = [...new Set(
     state.employees.flatMap((employee) => employee.clubs || []),
   )].sort((a, b) => a.localeCompare(b, 'ru'));
-  const roles = [...new Map(
-    state.employees
-      .filter((employee) => employee.role != null)
-      .map((employee) => [String(employee.role), employee.role_name]),
-  ).entries()];
   $('#clubFilter').innerHTML = [
     '<option value="">Все клубы</option>',
     ...clubs.map((club) => (
       `<option value="${escapeHtml(club)}">${escapeHtml(club)}</option>`
     )),
   ].join('');
-  $('#roleFilter').innerHTML = [
-    '<option value="">Все роли</option>',
-    ...roles.map(([role, label]) => (
-      `<option value="${role}">${escapeHtml(label)}</option>`
-    )),
-  ].join('');
   $('#clubFilter').value = state.filters.club;
-  $('#roleFilter').value = state.filters.role;
   $('#zoneFilter').value = state.filters.zone;
-  $('#stateFilter').value = state.filters.condition;
   const attentionCount = state.employees.filter((item) => item.needs_attention).length;
   $('#attentionCount').textContent = attentionCount;
   $('#attentionToggle').classList.toggle('active', state.filters.attention);
@@ -466,24 +475,15 @@ function renderEmployees() {
       || (
         (!state.filters.attention || item.needs_attention)
         && (!state.filters.club || (item.clubs || []).includes(state.filters.club))
-        && (
-          !state.filters.role
-          || String(item.role) === state.filters.role
-        )
         && (!state.filters.zone || item.zone === state.filters.zone)
-        && (
-          !state.filters.condition
-          || (
-            state.filters.condition === 'no_shifts'
-              ? Number(item.shifts || 0) <= 0
-              : (item.attention_reasons || []).some(
-                (reason) => reason.key === state.filters.condition,
-              )
-          )
-        )
       )
     ))
     .sort((a, b) => {
+      if (state.sort === 'name') return a.nickname.localeCompare(b.nickname, 'ru');
+      if (state.sort === 'shifts') {
+        const shiftDifference = Number(b.shifts || 0) - Number(a.shifts || 0);
+        if (shiftDifference) return shiftDifference;
+      }
       if (a.rank == null && b.rank == null) return a.nickname.localeCompare(b.nickname, 'ru');
       if (a.rank == null) return 1;
       if (b.rank == null) return -1;
@@ -561,10 +561,18 @@ function hashtagChips(employee, clickable = false) {
 }
 
 function metric(label, key, fact, ratio, explanation = null) {
-  const details = explanation
-    ? `Норма: ${explanation.target == null ? `${percent(explanation.bonus_per_item)} за инициативу` : number(explanation.target)}
-       · вклад ${signedPercent(explanation.contribution_pct)}`
-    : 'Показать записи';
+  let details = 'Показать записи';
+  if (explanation?.calculation_type) {
+    const rule = explanation.calculation_type === 'per_unit'
+      ? `${percent(explanation.bonus_per_item)} за единицу`
+      : `цель ${number(explanation.target)}`;
+    const profile = explanation.shift_share < 1
+      ? ` · доля смен ${percent(explanation.shift_share)}` : '';
+    details = `${rule}${profile} · вклад ${signedPercent(explanation.contribution_pct)}`;
+  } else if (explanation) {
+    details = `Норма: ${explanation.target == null ? `${percent(explanation.bonus_per_item)} за инициативу` : number(explanation.target)}
+       · вклад ${signedPercent(explanation.contribution_pct)}`;
+  }
   return `
     <button class="metric-row" type="button" data-metric="${key}">
       <span>${label}<small>${details}</small></span>
@@ -609,6 +617,13 @@ function renderDialog(employee) {
     ${metric('Сертификаты', 'certificates', employee.certificates, employee.certificates_pct, explanation.certificates)}
     ${metric('Абонементы', 'subscriptions', employee.subscriptions, employee.subscriptions_pct, explanation.subscriptions)}
     ${metric('Инициативы', 'initiatives', employee.initiatives, employee.initiatives_pct, explanation.initiatives)}
+    ${(employee.custom_goals || []).map((goal) => metric(
+      goal.name,
+      `hashtag:${goal.hashtag}`,
+      goal.fact,
+      goal.ratio == null ? goal.actual_contribution_pct : goal.ratio,
+      explanation[`hashtag:${goal.hashtag}`],
+    )).join('')}
     ${(employee.extra_hashtags || []).length ? `
       <h3 class="section-title">Другие активности</h3>
       ${hashtagChips(employee, true)}
@@ -1087,6 +1102,53 @@ function renderSettings() {
       </label>
     </article>
   `).join('');
+
+  const goals = state.settings.custom_goals || [];
+  $('#customGoals').innerHTML = goals.length ? goals.map((goal) => `
+    <button class="custom-goal-card" type="button" data-goal-key="${escapeHtml(goal.goal_key)}">
+      <span>
+        <strong>${escapeHtml(goal.name)}</strong>
+        <small>${escapeHtml(goal.hashtag)} · ${escapeHtml(goal.audience_label)}</small>
+      </span>
+      <span class="custom-goal-meta">
+        ${goal.active ? '' : '<i>Отключена</i>'}
+        <small>${escapeHtml(goal.calculation_type_label)}</small>
+        <b>→</b>
+      </span>
+    </button>
+  `).join('') : '<div class="empty compact">Дополнительных целей пока нет</div>';
+}
+
+function updateCustomGoalType() {
+  const type = $('#goalType').value;
+  const config = customGoalTypeHints[type];
+  $('#goalTypeHint').textContent = config.hint;
+  $('#goalValueLabel').textContent = config.value;
+  $('#goalValueRow').hidden = type === 'per_unit';
+  $('#goalContributionLabel').textContent = config.contribution;
+  $('#goalMaxRow').hidden = type !== 'per_unit';
+  $('#goalOverfillRow').hidden = !['monthly_target', 'per_shift_target'].includes(type);
+}
+
+function openCustomGoal(goal = null) {
+  $('#customGoalForm').reset();
+  $('#goalKey').value = goal?.goal_key || '';
+  $('#customGoalTitle').textContent = goal ? 'Редактирование KPI-цели' : 'Новая KPI-цель';
+  $('#goalName').value = goal?.name || '';
+  $('#goalHashtag').value = goal?.hashtag || '';
+  $('#goalAudience').value = goal?.audience || 'all';
+  $('#goalType').value = goal?.calculation_type || 'per_unit';
+  $('#goalUnit').value = goal?.unit_label || 'шт.';
+  $('#goalValue').value = goal?.value ?? 1;
+  $('#goalContribution').value = goal ? goal.contribution_pct * 100 : 10;
+  $('#goalMaxContribution').value = goal?.max_contribution_pct == null
+    ? '' : goal.max_contribution_pct * 100;
+  $('#goalMinShifts').value = goal?.min_profile_shifts ?? '';
+  $('#goalIntegerOnly').checked = goal?.integer_only ?? true;
+  $('#goalOverfill').checked = goal?.allow_overfulfillment ?? false;
+  $('#disableCustomGoal').hidden = !goal || !goal.active;
+  updateCustomGoalType();
+  customGoalDialog.showModal();
 }
 
 async function loadSettings() {
@@ -1155,9 +1217,7 @@ $('#searchInput').addEventListener('input', renderEmployees);
 $('#managerFilters').addEventListener('change', (event) => {
   const mapping = {
     clubFilter: 'club',
-    roleFilter: 'role',
     zoneFilter: 'zone',
-    stateFilter: 'condition',
   };
   const key = mapping[event.target.id];
   if (!key) return;
@@ -1174,13 +1234,21 @@ $('#attentionToggle').addEventListener('click', () => {
 $('#resetFilters').addEventListener('click', () => {
   state.filters = {
     club: '',
-    role: '',
     zone: '',
-    condition: '',
     attention: false,
   };
   $('#searchInput').value = '';
   renderManagerFilters();
+  renderEmployees();
+});
+
+document.querySelector('.sort-controls').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-sort]');
+  if (!button) return;
+  state.sort = button.dataset.sort;
+  document.querySelectorAll('.sort-button').forEach(
+    (item) => item.classList.toggle('active', item === button),
+  );
   renderEmployees();
 });
 
@@ -1274,6 +1342,72 @@ $('#settingsForm').addEventListener('submit', async (event) => {
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = 'Сохранить настройки';
+  }
+});
+$('#addCustomGoal').addEventListener('click', () => openCustomGoal());
+$('#customGoals').addEventListener('click', (event) => {
+  const card = event.target.closest('[data-goal-key]');
+  if (!card) return;
+  const goal = (state.settings?.custom_goals || []).find(
+    (item) => item.goal_key === card.dataset.goalKey,
+  );
+  if (goal) openCustomGoal(goal);
+});
+$('#goalType').addEventListener('change', updateCustomGoalType);
+$('#customGoalForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const saveButton = $('#saveCustomGoal');
+  saveButton.disabled = true;
+  try {
+    const maxContribution = $('#goalMaxContribution').valueAsNumber;
+    const minShifts = $('#goalMinShifts').valueAsNumber;
+    state.settings = await api('/api/kpi/goals', {
+      method: 'POST',
+      body: JSON.stringify({
+        month: $('#settingsMonth').value,
+        goal_key: $('#goalKey').value || undefined,
+        name: $('#goalName').value,
+        hashtag: $('#goalHashtag').value,
+        audience: $('#goalAudience').value,
+        calculation_type: $('#goalType').value,
+        unit_label: $('#goalUnit').value,
+        value: $('#goalValue').valueAsNumber,
+        contribution_pct: $('#goalContribution').valueAsNumber / 100,
+        max_contribution_pct: Number.isFinite(maxContribution)
+          ? maxContribution / 100 : null,
+        min_profile_shifts: Number.isFinite(minShifts) ? minShifts : null,
+        integer_only: $('#goalIntegerOnly').checked,
+        allow_overfulfillment: $('#goalOverfill').checked,
+      }),
+    });
+    analyticsCache.clear();
+    state.analytics = null;
+    renderSettings();
+    customGoalDialog.close();
+    showToast('KPI-цель сохранена');
+    await loadData();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    saveButton.disabled = false;
+  }
+});
+$('#disableCustomGoal').addEventListener('click', async () => {
+  const goalKey = $('#goalKey').value;
+  if (!goalKey || !window.confirm('Отключить цель с выбранного месяца?')) return;
+  try {
+    state.settings = await api(`/api/kpi/goals/${encodeURIComponent(goalKey)}/disable`, {
+      method: 'POST',
+      body: JSON.stringify({ month: $('#settingsMonth').value }),
+    });
+    analyticsCache.clear();
+    state.analytics = null;
+    renderSettings();
+    customGoalDialog.close();
+    showToast('KPI-цель отключена');
+    await loadData();
+  } catch (error) {
+    showToast(error.message, true);
   }
 });
 $('#employeeChips').addEventListener('click', (event) => {

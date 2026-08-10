@@ -32,6 +32,7 @@ from kpi_calculator import (
     calculate_daily_kpi_series,
     calculate_monthly_kpi,
     cancel_penalty,
+    disable_custom_goal,
     get_hashtag_entries,
     get_hashtag_summaries,
     get_month_status,
@@ -42,6 +43,7 @@ from kpi_calculator import (
     initialize_shift_time_schema,
     list_penalties,
     save_kpi_settings,
+    save_custom_goal,
     set_month_status,
     set_monthly_stream,
 )
@@ -842,6 +844,39 @@ def _employee_explanation(row):
         'contribution_pct': initiative_ratio,
     })
 
+    for goal in row.get('custom_goals', []):
+        fact = float(goal.get('fact', 0) or 0)
+        target = goal.get('target')
+        target = float(target) if target is not None else None
+        metrics.append({
+            'key': f"hashtag:{goal['hashtag']}",
+            'label': goal['name'],
+            'fact': fact,
+            'plan_per_shift': (
+                float(goal['value'])
+                if goal['calculation_type'] == 'per_shift_target'
+                else None
+            ),
+            'bonus_per_item': (
+                float(goal['contribution_pct'])
+                if goal['calculation_type'] == 'per_unit'
+                else None
+            ),
+            'target': target,
+            'needed': max(target - fact, 0) if target is not None else 0,
+            'ratio': goal.get('ratio'),
+            'weight': float(goal.get('shift_share', 1) or 0),
+            'contribution_pct': float(
+                goal.get('actual_contribution_pct', 0) or 0
+            ),
+            'profile_shifts': float(goal.get('profile_shifts', 0) or 0),
+            'shift_share': float(goal.get('shift_share', 1) or 0),
+            'calculation_type': goal['calculation_type'],
+            'calculation_type_label': goal['calculation_type_label'],
+            'audience_label': goal['audience_label'],
+            'unit_label': goal['unit_label'],
+        })
+
     metric_contribution = sum(
         metric['contribution_pct']
         for metric in metrics
@@ -894,6 +929,10 @@ def _attention_reasons(row):
             'initiatives',
         )
     )
+    metric_total += sum(
+        float(goal.get('fact', 0) or 0)
+        for goal in row.get('custom_goals', [])
+    )
     if float(row.get('shifts', 0) or 0) > 0 and metric_total == 0:
         reasons.append({
             'key': 'no_kpi',
@@ -923,6 +962,8 @@ def _snapshot_employee(row):
         'subscriptions_pct',
         'initiatives',
         'initiatives_pct',
+        'custom_goals',
+        'custom_goals_pct',
         'penalties',
         'penalty_impact',
         'stream',
@@ -975,6 +1016,10 @@ def _month_close_preview(month):
                 'subscriptions',
                 'initiatives',
             )
+        )
+        metric_total += sum(
+            float(goal.get('fact', 0) or 0)
+            for goal in row.get('custom_goals', [])
         )
         if metric_total == 0:
             no_kpi.append(row)
@@ -1761,7 +1806,13 @@ def api_kpi():
         }))
         row['attention_reasons'] = _attention_reasons(row)
         row['needs_attention'] = bool(row['attention_reasons'])
-        row['extra_hashtags'] = hashtag_summaries.get(row['login'], [])
+        goal_hashtags = {
+            goal['hashtag'] for goal in row.get('custom_goals', [])
+        }
+        row['extra_hashtags'] = [
+            item for item in hashtag_summaries.get(row['login'], [])
+            if item.get('hashtag') not in goal_hashtags
+        ]
         row['explanation'] = _employee_explanation(row)
     active_login_set = set(active_logins)
     penalties = [
@@ -1789,10 +1840,16 @@ def api_kpi():
             current_employee = personal_rows[0]
             current_employee['kpi_change'] = None
             current_employee['rank_change'] = None
-            current_employee['extra_hashtags'] = hashtag_summaries.get(
-                current_employee['login'],
-                [],
-            )
+            goal_hashtags = {
+                goal['hashtag']
+                for goal in current_employee.get('custom_goals', [])
+            }
+            current_employee['extra_hashtags'] = [
+                item for item in hashtag_summaries.get(
+                    current_employee['login'], []
+                )
+                if item.get('hashtag') not in goal_hashtags
+            ]
             current_employee['explanation'] = _employee_explanation(
                 current_employee
             )
@@ -2007,6 +2064,30 @@ def api_save_kpi_settings():
     )
     _clear_analytics_cache()
     return jsonify(settings)
+
+
+@app.post('/api/kpi/goals')
+@require_owner
+def api_save_custom_goal():
+    payload = request.get_json(silent=True) or {}
+    month = _validate_month(payload.get('month'))
+    goal_payload = dict(payload)
+    goal_payload.pop('month', None)
+    goal_key = save_custom_goal(month, goal_payload, _actor_login())
+    _clear_analytics_cache()
+    settings = get_kpi_settings(month)
+    settings['saved_goal_key'] = goal_key
+    return jsonify(settings)
+
+
+@app.post('/api/kpi/goals/<goal_key>/disable')
+@require_owner
+def api_disable_custom_goal(goal_key):
+    payload = request.get_json(silent=True) or {}
+    month = _validate_month(payload.get('month'))
+    disable_custom_goal(goal_key, month, _actor_login())
+    _clear_analytics_cache()
+    return jsonify(get_kpi_settings(month))
 
 
 @app.post('/api/penalties')

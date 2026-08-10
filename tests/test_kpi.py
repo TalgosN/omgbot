@@ -80,6 +80,41 @@ class KpiTest(unittest.TestCase):
         read_forms.assert_called_once_with()
         write_data.assert_not_called()
 
+    def test_custom_goal_is_saved_locally_and_forwarded_independently(self):
+        goal = {
+            'hashtag': '#повторы', 'unit_label': 'шт.', 'integer_only': True,
+        }
+        message = self.message('#повторы 2 постоянные гости')
+        with patch.object(
+            self.kpi, '_save_local_custom_goal_event', return_value=(17, True),
+        ) as local_save, patch.object(
+            self.kpi, '_get_hashtag_rule', return_value={'hashtag': '#повторы'},
+        ), patch.object(
+            self.kpi, '_post_remote_hashtag',
+            return_value=(self.kpi.KPI_REMOTE_SUCCESS, '', {'ok': True}, None),
+        ) as remote_post, patch.object(
+            self.kpi, '_record_custom_goal_remote_result',
+        ) as record_remote:
+            result = self.kpi.do_local_custom_goal_hashtag(
+                goal, message, '2 постоянные гости', 0,
+            )
+
+        self.assertEqual(result[0], self.kpi.KPI_SUCCESS)
+        local_save.assert_called_once()
+        remote_post.assert_called_once_with(
+            '#повторы', 'employee', '2', 'постоянные гости', unittest.mock.ANY,
+        )
+        record_remote.assert_called_once_with(17, {'ok': True}, None)
+
+    def test_custom_goal_requires_number_and_comment(self):
+        goal = {
+            'hashtag': '#повторы', 'unit_label': 'шт.', 'integer_only': True,
+        }
+        result = self.kpi.do_local_custom_goal_hashtag(
+            goal, self.message('#повторы 2'), '2', 0,
+        )
+        self.assertEqual(result[0], self.kpi.KPI_INVALID)
+
     def test_write_data_extends_sheet_before_clearing_unused_columns(self):
         events = []
         worksheet = unittest.mock.Mock(rows=607)

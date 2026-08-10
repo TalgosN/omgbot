@@ -593,6 +593,81 @@ class KpiCalculatorTest(unittest.TestCase):
             [('@employee', '2026-06-01', 'Старый штраф', 'legacy-db:7')],
         )
 
+    def test_custom_goals_use_profile_shift_share(self):
+        physical_club = next(iter(kpi_calculator.PHYSICAL_KPI_CLUBS))
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO users VALUES (1, '@employee', 'Test', 'User', 'Tester', 0)"
+        )
+        conn.executemany(
+            "INSERT INTO shifts VALUES ('User', 'Test', ?, ?, ?, 'test', '@employee')",
+            [
+                ('2026-07-05', physical_club, 18),
+                ('2026-07-06', 'Коллцентр', 6),
+            ],
+        )
+        conn.execute(
+            '''CREATE TABLE hashtag_events (
+                   telegram TEXT, hashtag TEXT, value REAL,
+                   event_date TEXT, status TEXT
+               )'''
+        )
+        conn.executemany(
+            "INSERT INTO hashtag_events VALUES ('@employee', ?, ?, '2026-07-06', 'applied')",
+            [('#клубцель', 3), ('#кццель', 1)],
+        )
+        conn.commit()
+        conn.close()
+
+        kpi_calculator.save_custom_goal('2026-07', {
+            'name': 'Цель клуба', 'hashtag': '#клубцель',
+            'calculation_type': 'per_shift_target', 'audience': 'physical',
+            'unit_label': 'шт.', 'value': 1, 'contribution_pct': 0.2,
+        }, '@owner', db_path=self.db_path)
+        kpi_calculator.save_custom_goal('2026-07', {
+            'name': 'Цель КЦ', 'hashtag': '#кццель',
+            'calculation_type': 'monthly_target', 'audience': 'callcenter',
+            'unit_label': 'шт.', 'value': 2, 'contribution_pct': 0.2,
+        }, '@owner', db_path=self.db_path)
+
+        row = kpi_calculator.calculate_monthly_kpi(
+            '2026-07', db_path=self.db_path, employee_logins=['@employee'],
+        )[0]
+        daily_row = kpi_calculator.calculate_daily_kpi_series(
+            '2026-07', '2026-07-06', db_path=self.db_path,
+            employee_logins=['@employee'],
+        )[-1]['employees'][0]
+        self.assertAlmostEqual(row['custom_goals_pct'], 0.175)
+        self.assertAlmostEqual(daily_row['custom_goals_pct'], 0.175)
+        by_hashtag = {goal['hashtag']: goal for goal in row['custom_goals']}
+        self.assertAlmostEqual(by_hashtag['#клубцель']['shift_share'], 0.75)
+        self.assertAlmostEqual(by_hashtag['#клубцель']['actual_contribution_pct'], 0.15)
+        self.assertAlmostEqual(by_hashtag['#кццель']['shift_share'], 0.25)
+        self.assertAlmostEqual(by_hashtag['#кццель']['actual_contribution_pct'], 0.025)
+
+    def test_custom_goal_versions_and_reserved_hashtags(self):
+        goal_key = kpi_calculator.save_custom_goal('2026-07', {
+            'name': 'Повторы', 'hashtag': '#повторы',
+            'calculation_type': 'per_unit', 'audience': 'all',
+            'unit_label': 'шт.', 'value': 1, 'contribution_pct': 0.05,
+        }, '@owner', db_path=self.db_path)
+        kpi_calculator.save_custom_goal('2026-08', {
+            'goal_key': goal_key, 'name': 'Повторы', 'hashtag': '#повторы',
+            'calculation_type': 'per_unit', 'audience': 'all',
+            'unit_label': 'шт.', 'value': 1, 'contribution_pct': 0.1,
+        }, '@owner', db_path=self.db_path)
+
+        july = kpi_calculator.get_kpi_settings('2026-07', self.db_path)
+        august = kpi_calculator.get_kpi_settings('2026-08', self.db_path)
+        self.assertEqual(july['custom_goals'][0]['contribution_pct'], 0.05)
+        self.assertEqual(august['custom_goals'][0]['contribution_pct'], 0.1)
+        with self.assertRaisesRegex(ValueError, 'встроенным показателем'):
+            kpi_calculator.save_custom_goal('2026-08', {
+                'name': 'Конфликт', 'hashtag': '#серт',
+                'calculation_type': 'per_unit', 'audience': 'all',
+                'unit_label': 'шт.', 'value': 1, 'contribution_pct': 0.1,
+            }, '@owner', db_path=self.db_path)
+
 
 if __name__ == '__main__':
     unittest.main()
