@@ -200,14 +200,14 @@ class KpiWebTest(unittest.TestCase):
     def test_camera_prototype_is_linked_from_shift(self):
         shift_response = self.client.get('/shift')
         camera_response = self.client.get('/camera-test')
-        shift_test_response = self.client.get('/shift-test?action=open')
+        shift_test_response = self.client.get('/shift-report?action=open')
         try:
             self.assertEqual(shift_response.status_code, 200)
             shift_html = shift_response.get_data(as_text=True)
             self.assertIn('id="openCameraTest"', shift_html)
             self.assertIn('id="shiftReportTest"', shift_html)
-            self.assertIn('/shift-test?action=open', shift_html)
-            self.assertIn('/shift-test?action=close', shift_html)
+            self.assertIn('/shift-report?action=open', shift_html)
+            self.assertIn('/shift-report?action=close', shift_html)
             self.assertEqual(camera_response.status_code, 200)
             camera_html = camera_response.get_data(as_text=True)
             self.assertIn('id="cameraStage"', camera_html)
@@ -216,11 +216,14 @@ class KpiWebTest(unittest.TestCase):
             self.assertEqual(shift_test_response.status_code, 200)
             shift_test_html = shift_test_response.get_data(as_text=True)
             self.assertIn('id="ownerClubStage"', shift_test_html)
+            self.assertIn('id="earlyCloseDialog"', shift_test_html)
             self.assertIn('id="checklistStage"', shift_test_html)
             self.assertIn('id="questionStage"', shift_test_html)
             self.assertIn('id="cameraStage"', shift_test_html)
             self.assertIn('id="reviewStage"', shift_test_html)
             self.assertIn('/static/shift_test.js', shift_test_html)
+            self.assertNotIn('Без рабочих изменений', shift_test_html)
+            self.assertNotIn('Отправить Павлу', shift_test_html)
         finally:
             shift_response.close()
             camera_response.close()
@@ -287,7 +290,7 @@ class KpiWebTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertTrue(payload['test_mode'])
+        self.assertTrue(payload['production_mode'])
         self.assertEqual(payload['club'], 'Тестовый клуб')
         self.assertEqual(payload['variant_label'], 'A')
         self.assertEqual(payload['checklist'], ['Включить оборудование'])
@@ -374,7 +377,87 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('На сегодня смена', response.get_json()['error'])
 
-    def test_shift_test_sends_summary_and_captioned_album_only_to_pavel(self):
+    def test_shift_report_requires_confirmation_before_early_close(self):
+        today = kpi_web._moscow_today().isoformat()
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Тестовый клуб',
+                'questions': {
+                    '🚫 Закрыть смену': [[
+                        {'text': 'Фото клуба', 'type': 'photo'},
+                    ]],
+                },
+            },
+        }
+        shifts = [{
+            'date': today, 'club': 'Тестовый клуб', 'duration': 12,
+            'start': '10:00', 'end': '22:00',
+        }]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'early-close.sqlite3'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                'CREATE TABLE clubs (club TEXT PRIMARY KEY, status TEXT)'
+            )
+            conn.execute(
+                "INSERT INTO clubs VALUES ('Тестовый клуб', 'Открыт')"
+            )
+            conn.commit()
+            conn.close()
+            bot = Mock()
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'get_clubs', return_value=clubs),
+                patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
+                patch.object(kpi_web, '_shift_report_is_early_close', return_value=True),
+                patch.object(kpi_web, '_notification_bot', return_value=bot),
+                patch.object(kpi_web, 'refresh_club_status_dashboard', return_value=True),
+                patch.dict(kpi_web.CHATS, {
+                    'reports': '-100-reports',
+                    'main_group': '-100-main',
+                }),
+            ):
+                scenario = self.client.get(
+                    '/api/shift-test/scenario?action=close&variant=0',
+                    headers=self.headers,
+                ).get_json()
+                payload = {
+                    'run_id': '2026-08-10:close:early-run',
+                    'action': 'close',
+                    'club': 'Тестовый клуб',
+                    'variant_index': 0,
+                    'version': scenario['version'],
+                }
+                blocked = self.client.post(
+                    '/api/shift-test/start', headers=self.headers, json=payload,
+                )
+                conn = sqlite3.connect(db_path)
+                status_before = conn.execute(
+                    "SELECT status FROM clubs WHERE club='Тестовый клуб'"
+                ).fetchone()[0]
+                conn.close()
+                confirmed = self.client.post(
+                    '/api/shift-test/start',
+                    headers=self.headers,
+                    json={**payload, 'early_confirmed': True},
+                )
+                conn = sqlite3.connect(db_path)
+                status_after = conn.execute(
+                    "SELECT status FROM clubs WHERE club='Тестовый клуб'"
+                ).fetchone()[0]
+                conn.close()
+
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(
+            blocked.get_json()['code'], 'early_close_confirmation_required'
+        )
+        self.assertEqual(status_before, 'Открыт')
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(status_after, 'Закрыт')
+
+    def test_shift_report_updates_working_records_and_sends_album(self):
         today = kpi_web._moscow_today().isoformat()
         clubs = {
             'Тестовый клуб': {
@@ -396,66 +479,121 @@ class KpiWebTest(unittest.TestCase):
             'start': '10:00', 'end': '22:00',
         }]
         bot = Mock()
-        with (
-            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
-            patch.object(kpi_web, 'CAMERA_TEST_RECIPIENT_CHAT_ID', '592831529'),
-            patch.object(kpi_web, 'get_user', return_value=user(0)),
-            patch.object(kpi_web, 'get_clubs', return_value=clubs),
-            patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
-            patch.object(kpi_web, '_notification_bot', return_value=bot),
-            patch.object(kpi_web, '_shift_report_test_sent_at', {}),
-        ):
-            scenario_response = self.client.get(
-                '/api/shift-test/scenario?action=open&variant=0',
-                headers=self.headers,
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'shift-report.sqlite3'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''CREATE TABLE clubs (club TEXT PRIMARY KEY, status TEXT);
+                   INSERT INTO clubs VALUES ('Тестовый клуб', 'Закрыт');
+                   CREATE TABLE activity (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, login TEXT, club TEXT, action TEXT
+                   );
+                   CREATE TABLE nal (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       drep TEXT, club TEXT, amount INTEGER
+                   );'''
             )
-            scenario = scenario_response.get_json()
-            incomplete_response = self.client.post(
-                '/api/shift-test/submit',
-                headers=self.headers,
-                data={
-                    'report': json.dumps({
+            conn.commit()
+            conn.close()
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'get_clubs', return_value=clubs),
+                patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
+                patch.object(kpi_web, '_notification_bot', return_value=bot),
+                patch.object(kpi_web, 'refresh_club_status_dashboard', return_value=True),
+                patch.object(kpi_web, 'update_table_open') as update_sheet,
+                patch.object(kpi_web, '_shift_report_test_sent_at', {}),
+                patch.dict(kpi_web.CHATS, {
+                    'reports': '-100-reports',
+                    'main_group': '-100-main',
+                }),
+            ):
+                scenario_response = self.client.get(
+                    '/api/shift-test/scenario?action=open&variant=0',
+                    headers=self.headers,
+                )
+                scenario = scenario_response.get_json()
+                run_id = '2026-08-10:open:test-run'
+                start_response = self.client.post(
+                    '/api/shift-test/start',
+                    headers=self.headers,
+                    json={
+                        'run_id': run_id,
                         'action': 'open',
                         'club': 'Тестовый клуб',
                         'variant_index': 0,
                         'version': scenario['version'],
-                        'answers': {'q1': '1000'},
-                        'photo_ids': ['q2', 'q3'],
-                    }),
-                },
-            )
-            response = self.client.post(
-                '/api/shift-test/submit',
-                headers=self.headers,
-                data={
-                    'report': json.dumps({
-                        'action': 'open',
-                        'club': 'Тестовый клуб',
-                        'variant_index': 0,
-                        'version': scenario['version'],
-                        'answers': {'q1': '1000'},
-                        'photo_ids': ['q2', 'q3'],
-                    }),
-                    'photos': [
-                        (BytesIO(b'jpeg-one'), 'q2.jpg', 'image/jpeg'),
-                        (BytesIO(b'jpeg-two'), 'q3.jpg', 'image/jpeg'),
-                    ],
-                },
-            )
+                    },
+                )
+                incomplete_response = self.client.post(
+                    '/api/shift-test/submit',
+                    headers=self.headers,
+                    data={
+                        'report': json.dumps({
+                            'run_id': run_id,
+                            'action': 'open',
+                            'club': 'Тестовый клуб',
+                            'variant_index': 0,
+                            'version': scenario['version'],
+                            'answers': {'q1': '1000'},
+                            'photo_ids': ['q2', 'q3'],
+                        }),
+                    },
+                )
+                response = self.client.post(
+                    '/api/shift-test/submit',
+                    headers=self.headers,
+                    data={
+                        'report': json.dumps({
+                            'run_id': run_id,
+                            'action': 'open',
+                            'club': 'Тестовый клуб',
+                            'variant_index': 0,
+                            'version': scenario['version'],
+                            'answers': {'q1': '1000'},
+                            'photo_ids': ['q2', 'q3'],
+                        }),
+                        'photos': [
+                            (BytesIO(b'jpeg-one'), 'q2.jpg', 'image/jpeg'),
+                            (BytesIO(b'jpeg-two'), 'q3.jpg', 'image/jpeg'),
+                        ],
+                    },
+                )
+                conn = sqlite3.connect(db_path)
+                status = conn.execute(
+                    "SELECT status FROM clubs WHERE club='Тестовый клуб'"
+                ).fetchone()[0]
+                activity = conn.execute(
+                    'SELECT login, club, action FROM activity'
+                ).fetchone()
+                cash = conn.execute(
+                    'SELECT club, amount FROM nal'
+                ).fetchone()
+                conn.close()
 
+        self.assertEqual(start_response.status_code, 200)
         self.assertEqual(incomplete_response.status_code, 400)
         self.assertIn('Количество фотографий', incomplete_response.get_json()['error'])
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['photos'], 2)
-        bot.send_message.assert_not_called()
+        self.assertEqual(status, 'Открыт')
+        self.assertEqual(activity, ('@tester', 'Тестовый клуб', '✅ Открыть смену'))
+        self.assertEqual(cash, ('Тестовый клуб', 1000))
+        update_sheet.assert_called_once()
         bot.send_media_group.assert_called_once()
-        self.assertEqual(bot.send_media_group.call_args.args[0], '592831529')
+        self.assertEqual(bot.send_media_group.call_args.args[0], '-100-reports')
         album = bot.send_media_group.call_args.kwargs['media']
         self.assertEqual(len(album), 2)
         self.assertIsNone(album[0].caption)
         self.assertIn('🌅 <b>Открытие смены</b>', album[1].caption)
         self.assertNotIn('Набор:', album[1].caption)
         self.assertNotIn('Фотографий:', album[1].caption)
+        sent_chats = [call.args[0] for call in bot.send_message.call_args_list]
+        self.assertIn('-100-reports', sent_chats)
+        self.assertIn('-100-main', sent_chats)
 
         script = self.client.get('/static/shift_test.js')
         try:

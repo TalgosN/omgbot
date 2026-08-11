@@ -625,6 +625,40 @@ def command_shift(message):
     _run_private_menu_command(message, lambda: func_today(message, bot))
 
 
+@bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('shift_flow:'))
+def shift_flow_callback(call):
+    if not require_role(call, bot, ROLE_EMPLOYEE):
+        return
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    message = call.message
+    message.from_user = call.from_user
+    try:
+        bot.edit_message_reply_markup(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+    from openclose import check_club, func_today
+    if call.data == 'shift_flow:cancel':
+        func_today(message, bot)
+        return
+    actions = {
+        'shift_flow:open:legacy': '✅ Открыть смену',
+        'shift_flow:close:legacy': '🚫 Закрыть смену',
+    }
+    action = actions.get(call.data)
+    if not action:
+        bot.send_message(message.chat.id, 'Не удалось определить способ открытия смены.')
+        func_today(message, bot)
+        return
+    check_club(message, action, bot)
+
+
 @bot.message_handler(commands=['schedule'])
 def command_schedule(message):
     from rasp import rasp

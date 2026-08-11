@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#031b22">
-  <title>Тест смены · OMG VR</title>
+  <title>Открытие и закрытие · OMG VR</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
@@ -16,12 +16,12 @@
   <main class="test-shell">
     <header class="test-header">
       <a href="/shift">‹ OMG Shift</a>
-      <span>β-тест</span>
+      <span>Рабочий режим</span>
     </header>
 
     <section class="test-intro">
-      <p class="eyebrow">Без рабочих изменений</p>
-      <h1 id="pageTitle">ТЕСТ СМЕНЫ</h1>
+      <p class="eyebrow">OMG Shift</p>
+      <h1 id="pageTitle">РАБОЧАЯ СМЕНА</h1>
       <p id="pageDescription">Загружаем сценарий из OMG Shift…</p>
     </section>
 
@@ -30,7 +30,7 @@
     </section>
 
     <section id="errorCard" class="state-card error-card" hidden>
-      <span>Не удалось начать тест</span>
+      <span>Не удалось продолжить</span>
       <h2 id="errorTitle"></h2>
       <p id="errorText"></p>
       <a href="/shift">Вернуться в OMG Shift</a>
@@ -40,7 +40,7 @@
       <div class="stage-heading">
         <p class="eyebrow">Режим владельца</p>
         <h2>Выберите клуб</h2>
-        <p>Сегодня у вас нет смены. Для безопасного теста укажите клуб вручную — рабочие данные не изменятся.</p>
+        <p>Сегодня у вас нет смены. Выберите клуб, статус которого нужно изменить.</p>
       </div>
       <div id="ownerClubList" class="owner-club-list"></div>
     </section>
@@ -89,21 +89,20 @@
       <div class="stage-heading">
         <p class="eyebrow">Перед отправкой</p>
         <h2>Проверьте отчёт</h2>
-        <p><span data-club></span> · результат получит только Павел.</p>
+        <p><span data-club></span> · отчёт будет отправлен в рабочие чаты.</p>
       </div>
       <div id="answerReview" class="answer-review"></div>
       <div id="photoReview" class="photo-review"></div>
-      <p class="test-notice">Это тест: статус клуба, рабочая БД, Google Sheets и рабочие чаты не изменятся.</p>
       <div class="review-actions">
         <button id="editAnswers" type="button">Исправить ответы</button>
-        <button id="sendReport" class="primary-button" type="button">Отправить Павлу</button>
+        <button id="sendReport" class="primary-button" type="button">Завершить отчёт</button>
       </div>
     </section>
 
     <section id="successStage" class="state-card success-card" hidden>
-      <span>✓ Отправлено</span>
-      <h2>Тестовый отчёт у Павла</h2>
-      <p>Рабочие данные и статус клуба не изменялись. Черновик удалён с этого устройства.</p>
+      <span>✓ Готово</span>
+      <h2>Отчёт о смене принят</h2>
+      <p>Рабочие записи и рассылки обновлены. Черновик удалён с этого устройства.</p>
       <a href="/shift">Вернуться в OMG Shift</a>
     </section>
   </main>
@@ -126,11 +125,21 @@
 
   <dialog id="resumeDialog" class="resume-dialog">
     <p class="eyebrow">Найден черновик</p>
-    <h2>Продолжить тест?</h2>
+    <h2>Продолжить отчёт?</h2>
     <p id="resumeDescription"></p>
     <div>
       <button id="discardDraft" type="button">Начать заново</button>
       <button id="resumeDraft" class="primary-button" type="button">Продолжить</button>
+    </div>
+  </dialog>
+
+  <dialog id="earlyCloseDialog" class="resume-dialog">
+    <p class="eyebrow">Раннее закрытие</p>
+    <h2>Клуб закрывается раньше</h2>
+    <p>После подтверждения статус клуба изменится на «Закрыт», а в рабочий чат уйдёт предупреждение.</p>
+    <div>
+      <button id="cancelEarlyClose" type="button">Отмена</button>
+      <button id="confirmEarlyClose" class="primary-button" type="button">Да, закрыть</button>
     </div>
   </dialog>
 

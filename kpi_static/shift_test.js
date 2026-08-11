@@ -1,8 +1,8 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const DRAFT_SCHEMA = 1;
-const DRAFT_PREFIX = 'omg-shift-test-draft-v1:';
+const DRAFT_SCHEMA = 2;
+const DRAFT_PREFIX = 'omg-shift-report-draft-v2:';
 const PHOTO_DATABASE = 'omg-shift-test';
 const PHOTO_STORE = 'photos';
 const MAX_PHOTO_BYTES = 1.8 * 1024 * 1024;
@@ -46,7 +46,11 @@ async function api(path, options = {}) {
     },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Не удалось выполнить запрос');
+  if (!response.ok) {
+    const error = new Error(payload.error || 'Не удалось выполнить запрос');
+    error.code = payload.code || '';
+    throw error;
+  }
   return payload;
 }
 
@@ -158,8 +162,8 @@ function setStage(stageId) {
 
 function renderOwnerClubSelection(selection) {
   const closing = selection.action === 'close';
-  $('#pageTitle').textContent = closing ? 'ТЕСТ ЗАКРЫТИЯ' : 'ТЕСТ ОТКРЫТИЯ';
-  $('#pageDescription').textContent = 'Смена на сегодня не найдена · выберите клуб для теста';
+  $('#pageTitle').textContent = closing ? 'ЗАКРЫТИЕ СМЕНЫ' : 'ОТКРЫТИЕ СМЕНЫ';
+  $('#pageDescription').textContent = 'Смена на сегодня не найдена · выберите клуб';
   const clubList = $('#ownerClubList');
   clubList.replaceChildren();
   selection.clubs.forEach((clubName) => {
@@ -188,7 +192,7 @@ function renderOwnerClubSelection(selection) {
 
 function setPageCopy() {
   const closing = runtime.scenario.action === 'close';
-  $('#pageTitle').textContent = closing ? 'ТЕСТ ЗАКРЫТИЯ' : 'ТЕСТ ОТКРЫТИЯ';
+  $('#pageTitle').textContent = closing ? 'ЗАКРЫТИЕ СМЕНЫ' : 'ОТКРЫТИЕ СМЕНЫ';
   $('#pageDescription').textContent = `${runtime.scenario.club} · ${formatDate(runtime.scenario.shift.date)} · набор ${runtime.scenario.variant_label}`;
   $$('[data-club]').forEach((element) => { element.textContent = runtime.scenario.club; });
   $('#variantLabel').textContent = `Набор ${runtime.scenario.variant_label}`;
@@ -507,9 +511,12 @@ function renderSavedStage() {
 function createDraft() {
   const scenario = runtime.scenario;
   const createdAt = new Date().toISOString();
+  const entropy = crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   runtime.draft = {
     schema: DRAFT_SCHEMA,
-    id: `${scenario.user_login}|${scenario.shift.date}|${scenario.action}|${scenario.variant_index}`,
+    id: `${scenario.shift.date}:${scenario.action}:${entropy}`,
     action: scenario.action,
     user_login: scenario.user_login,
     date: scenario.shift.date,
@@ -521,6 +528,7 @@ function createDraft() {
     photo_index: 0,
     answers: {},
     photo_ids: [],
+    started_at: null,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -569,8 +577,52 @@ function showError(error) {
   $('#errorTitle').textContent = error.message || 'Неизвестная ошибка';
   $('#errorText').textContent = runtime.action === 'open' || runtime.action === 'close'
     ? 'Проверьте сегодняшнее расписание или настройки сценария.'
-    : 'Откройте тест кнопкой из модуля OMG Shift.';
+    : 'Откройте нужное действие кнопкой из модуля OMG Shift.';
   setStage('errorCard');
+}
+
+function continueAfterStart() {
+  runtime.draft.text_index = 0;
+  if (textQuestions().length) renderQuestion();
+  else startPhotoPhase();
+}
+
+async function beginShift(earlyConfirmed = false) {
+  if (runtime.draft.started_at) {
+    continueAfterStart();
+    return;
+  }
+  const button = $('#startQuestions');
+  button.disabled = true;
+  button.textContent = 'Начинаем…';
+  try {
+    const result = await api('/api/shift-test/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        run_id: runtime.draft.id,
+        action: runtime.scenario.action,
+        club: runtime.scenario.club,
+        variant_index: runtime.scenario.variant_index,
+        version: runtime.scenario.version,
+        early_confirmed: earlyConfirmed,
+      }),
+    });
+    runtime.draft.started_at = result.started_at;
+    runtime.draft.early_close = Boolean(result.early_close);
+    saveDraft();
+    $('#earlyCloseDialog').close();
+    continueAfterStart();
+  } catch (error) {
+    if (error.code === 'early_close_confirmation_required') {
+      $('#earlyCloseDialog').showModal();
+    } else {
+      toast(error.message, true);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Всё понятно — начать';
+  }
 }
 
 async function submitReport() {
@@ -584,6 +636,7 @@ async function submitReport() {
       club: runtime.scenario.club,
       variant_index: runtime.scenario.variant_index,
       version: runtime.scenario.version,
+      run_id: runtime.draft.id,
       answers: runtime.draft.answers,
       photo_ids: runtime.draft.photo_ids,
     }));
@@ -601,15 +654,15 @@ async function submitReport() {
   } catch (error) {
     toast(error.message, true);
     button.disabled = false;
-    button.textContent = 'Отправить Павлу';
+    button.textContent = 'Завершить отчёт';
   }
 }
 
-$('#startQuestions').addEventListener('click', () => {
-  runtime.draft.text_index = 0;
-  if (textQuestions().length) renderQuestion();
-  else startPhotoPhase();
+$('#startQuestions').addEventListener('click', () => beginShift());
+$('#cancelEarlyClose').addEventListener('click', () => {
+  $('#earlyCloseDialog').close();
 });
+$('#confirmEarlyClose').addEventListener('click', () => beginShift(true));
 
 $('#questionForm').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -745,6 +798,7 @@ async function initialize() {
   const answered = Object.keys(runtime.draft.answers).length;
   const photos = runtime.draft.photo_ids.length;
   $('#resumeDescription').textContent = `${runtime.scenario.club}: ответов ${answered}, фотографий ${photos}. Черновик хранится только на этом устройстве.`;
+  $('#discardDraft').hidden = Boolean(runtime.draft.started_at);
   $('#resumeDialog').showModal();
 }
 

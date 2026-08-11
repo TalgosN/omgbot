@@ -144,7 +144,7 @@ def func_today_2 (message,bot):
         return
     a = message.text
     if a== '✅ Открыть смену' or a == '🚫 Закрыть смену':
-        check_club(message,a,bot)
+        choose_shift_flow(message, a, bot)
 
     elif a == '🚩 Репорт':
 
@@ -162,6 +162,37 @@ def func_today_2 (message,bot):
         markup.add(*funclist_today)
         bot.send_message(message.chat.id, 'О, так ты на смене? Что хочешь сделать?', reply_markup=markup)
         bot.register_next_step_handler(message, func_today_2,bot)
+
+
+def choose_shift_flow(message, action, bot):
+    if not require_role(message, bot, ROLE_EMPLOYEE):
+        return
+    from menu import _webapp_url
+
+    action_code = 'open' if action == '✅ Открыть смену' else 'close'
+    webapp_url = _webapp_url(f'shift-report?action={action_code}')
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if webapp_url:
+        markup.add(types.InlineKeyboardButton(
+            '📱 По-новому — в приложении',
+            web_app=types.WebAppInfo(webapp_url),
+        ))
+    markup.add(types.InlineKeyboardButton(
+        '⌨️ По-старинке — в боте',
+        callback_data=f'shift_flow:{action_code}:legacy',
+    ))
+    markup.add(types.InlineKeyboardButton(
+        '⬅️ Отмена',
+        callback_data='shift_flow:cancel',
+    ))
+    text = (
+        'Как хотите выполнить открытие смены?'
+        if action_code == 'open'
+        else 'Как хотите выполнить закрытие смены?'
+    )
+    if not webapp_url:
+        text += '\n\nMini App пока не подключён к HTTPS-адресу.'
+    bot.send_message(message.chat.id, text, reply_markup=markup)
         
 def do_report(message,bot):
     user = require_role(message, bot, ROLE_EMPLOYEE)

@@ -81,7 +81,7 @@ async function loadShift() {
   if (!response.ok) throw new Error(payload.error || 'Не удалось открыть OMG Shift');
   document.querySelector('#shiftUserName').textContent = `Команда OMG VR · ${payload.user_name}`;
   document.querySelector('#shiftRole').textContent = payload.role_name;
-  shiftReportTest.hidden = false;
+  shiftReportTest.hidden = !payload.shift_report_available;
   if (!payload.external_url) throw new Error('Адрес OMG Shift не настроен');
 
   externalLink.href = payload.external_url;

@@ -24,6 +24,7 @@ services:
     volumes:
       - ./db:/app/db
       - ./data:/app/data
+      - ./key:/app/key:ro
     expose:
       - "8080"
     healthcheck:
