@@ -452,13 +452,10 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(bot.send_media_group.call_args.args[0], '592831529')
         album = bot.send_media_group.call_args.kwargs['media']
         self.assertEqual(len(album), 2)
-        self.assertIn('🌅 <b>Открытие смены</b>', album[0].caption)
-        self.assertIn('Фото по порядку:', album[0].caption)
-        self.assertIn('Фото клуба', album[0].caption)
-        self.assertIsNone(album[1].caption)
-        self.assertTrue(album[0].show_caption_above_media)
-        self.assertNotIn('Набор:', album[0].caption)
-        self.assertNotIn('Фотографий:', album[0].caption)
+        self.assertIsNone(album[0].caption)
+        self.assertIn('🌅 <b>Открытие смены</b>', album[1].caption)
+        self.assertNotIn('Набор:', album[1].caption)
+        self.assertNotIn('Фотографий:', album[1].caption)
 
         script = self.client.get('/static/shift_test.js')
         try:
@@ -501,7 +498,6 @@ class KpiWebTest(unittest.TestCase):
             '🌙 <b>Закрытие смены</b>',
             bot.send_photo.call_args.kwargs['caption'],
         )
-        self.assertIn('Фото клуба', bot.send_photo.call_args.kwargs['caption'])
 
     def test_shift_test_falls_back_when_unified_photo_send_fails(self):
         bot = Mock()

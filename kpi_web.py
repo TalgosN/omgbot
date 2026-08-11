@@ -1110,7 +1110,7 @@ def _shift_report_test_messages(scenario, answers):
     current = ''
     for block in blocks:
         candidate = f'{current}\n\n{block}' if current else block
-        if len(candidate) > 3800 and current:
+        if len(candidate) > 900 and current:
             messages.append(current)
             current = f'📝 <b>Продолжение тестового отчёта</b>\n\n{block}'
         else:
@@ -1120,20 +1120,15 @@ def _shift_report_test_messages(scenario, answers):
     return messages
 
 
-def _shift_report_test_caption(report, photos):
-    photo_labels = '\n'.join(
-        f"{index}. {html.escape(photo['question']['text'][:300])}"
-        for index, photo in enumerate(photos, 1)
-    )
-    return f'{report}\n\n📸 <b>Фото по порядку:</b>\n{photo_labels}'
-
-
-def _send_shift_report_test_photos(bot, photos, report_caption=None):
+def _send_shift_report_test_photos(bot, photos, report_captions=None):
     total = len(photos)
 
     def caption(index, photo):
-        if report_caption:
-            return report_caption if index == 1 else None
+        if report_captions is not None:
+            caption_index = 0 if total == 1 else index - 2
+            if 0 <= caption_index < len(report_captions):
+                return report_captions[caption_index]
+            return None
         photo_label = (
             f"📸 <b>{index}/{total}</b> · "
             f"{html.escape(photo['question']['text'][:900])}"
@@ -1149,7 +1144,6 @@ def _send_shift_report_test_photos(bot, photos, report_caption=None):
             media_file,
             caption=caption(1, photo),
             parse_mode='HTML',
-            show_caption_above_media=bool(report_caption),
         )
         return
 
@@ -1157,11 +1151,11 @@ def _send_shift_report_test_photos(bot, photos, report_caption=None):
     for index, photo in enumerate(photos, 1):
         media_file = io.BytesIO(photo['content'])
         media_file.name = photo['filename']
+        item_caption = caption(index, photo)
         media.append(telebot.types.InputMediaPhoto(
             media_file,
-            caption=caption(index, photo),
-            parse_mode='HTML',
-            show_caption_above_media=bool(report_caption and index == 1),
+            caption=item_caption,
+            parse_mode='HTML' if item_caption else None,
         ))
     bot.send_media_group(CAMERA_TEST_RECIPIENT_CHAT_ID, media=media)
 
@@ -1171,14 +1165,13 @@ def _send_shift_report_test(scenario, answers, photos):
     if not bot:
         raise RuntimeError('Telegram-бот временно недоступен')
     messages = _shift_report_test_messages(scenario, answers)
-    if photos and len(messages) == 1:
-        unified_caption = _shift_report_test_caption(messages[0], photos)
-        if len(unified_caption) <= 1024:
-            try:
-                _send_shift_report_test_photos(bot, photos, unified_caption)
-                return bot
-            except Exception as error:
-                print(f'Единая отправка тестового отчёта не удалась: {error}')
+    caption_slots = 1 if len(photos) == 1 else max(0, len(photos) - 1)
+    if photos and len(messages) <= caption_slots:
+        try:
+            _send_shift_report_test_photos(bot, photos, messages)
+            return bot
+        except Exception as error:
+            print(f'Единая отправка тестового отчёта не удалась: {error}')
 
     for message in messages:
         bot.send_message(
