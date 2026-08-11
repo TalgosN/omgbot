@@ -1120,16 +1120,24 @@ def _shift_report_test_messages(scenario, answers):
     return messages
 
 
+def _shift_report_test_caption(report, photos):
+    photo_labels = '\n'.join(
+        f"{index}. {html.escape(photo['question']['text'][:300])}"
+        for index, photo in enumerate(photos, 1)
+    )
+    return f'{report}\n\n📸 <b>Фото по порядку:</b>\n{photo_labels}'
+
+
 def _send_shift_report_test_photos(bot, photos, report_caption=None):
     total = len(photos)
 
     def caption(index, photo):
+        if report_caption:
+            return report_caption if index == 1 else None
         photo_label = (
             f"📸 <b>{index}/{total}</b> · "
             f"{html.escape(photo['question']['text'][:900])}"
         )
-        if report_caption and index == 1:
-            return f'{report_caption}\n\n{photo_label}'
         return photo_label
 
     if total == 1:
@@ -1141,6 +1149,7 @@ def _send_shift_report_test_photos(bot, photos, report_caption=None):
             media_file,
             caption=caption(1, photo),
             parse_mode='HTML',
+            show_caption_above_media=bool(report_caption),
         )
         return
 
@@ -1152,6 +1161,7 @@ def _send_shift_report_test_photos(bot, photos, report_caption=None):
             media_file,
             caption=caption(index, photo),
             parse_mode='HTML',
+            show_caption_above_media=bool(report_caption and index == 1),
         ))
     bot.send_media_group(CAMERA_TEST_RECIPIENT_CHAT_ID, media=media)
 
@@ -1162,14 +1172,10 @@ def _send_shift_report_test(scenario, answers, photos):
         raise RuntimeError('Telegram-бот временно недоступен')
     messages = _shift_report_test_messages(scenario, answers)
     if photos and len(messages) == 1:
-        first_photo_label = (
-            f"📸 <b>1/{len(photos)}</b> · "
-            f"{html.escape(photos[0]['question']['text'][:900])}"
-        )
-        unified_caption = f'{messages[0]}\n\n{first_photo_label}'
+        unified_caption = _shift_report_test_caption(messages[0], photos)
         if len(unified_caption) <= 1024:
             try:
-                _send_shift_report_test_photos(bot, photos, messages[0])
+                _send_shift_report_test_photos(bot, photos, unified_caption)
                 return bot
             except Exception as error:
                 print(f'Единая отправка тестового отчёта не удалась: {error}')

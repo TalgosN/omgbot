@@ -453,7 +453,10 @@ class KpiWebTest(unittest.TestCase):
         album = bot.send_media_group.call_args.kwargs['media']
         self.assertEqual(len(album), 2)
         self.assertIn('🌅 <b>Открытие смены</b>', album[0].caption)
+        self.assertIn('Фото по порядку:', album[0].caption)
         self.assertIn('Фото клуба', album[0].caption)
+        self.assertIsNone(album[1].caption)
+        self.assertTrue(album[0].show_caption_above_media)
         self.assertNotIn('Набор:', album[0].caption)
         self.assertNotIn('Фотографий:', album[0].caption)
 
