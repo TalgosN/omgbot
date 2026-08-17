@@ -11,18 +11,13 @@ const state = {
   problemRecordingTimer: null, problemRecordingTimeout: null,
   problemRecordingStartedAt: 0, problemPointerActive: false,
   problemHoldTriggered: false, problemDiscardRecording: false,
+  problemCameraReturnToForm: false,
 };
 tg?.ready();
 tg?.expand();
 if (tg) {
   tg.setHeaderColor('#100524');
   tg.setBackgroundColor('#09031d');
-}
-
-function telegramInitData() {
-  if (tg?.initData) return tg.initData;
-  try { return window.sessionStorage.getItem('omgTelegramInitData') || ''; }
-  catch (_error) { return ''; }
 }
 
 function escapeHtml(value) {
@@ -41,7 +36,7 @@ function dateTimeLabel(value) {
   return `${dateLabel(date)}${time ? ` · ${time.slice(0, 5)}` : ''}`;
 }
 async function api(path, options = {}) {
-  const headers = { 'X-Telegram-Init-Data': telegramInitData(), ...(options.headers || {}) };
+  const headers = { 'X-Telegram-Init-Data': tg?.initData || '', ...(options.headers || {}) };
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
@@ -116,7 +111,7 @@ function clearProblemRecordingTimers() {
   state.problemRecordingTimeout = null;
 }
 
-function closeProblemCamera() {
+function closeProblemCamera(restoreForm = true) {
   clearTimeout(state.problemPressTimer);
   state.problemPointerActive = false;
   if (state.problemRecorder?.state === 'recording') {
@@ -129,6 +124,11 @@ function closeProblemCamera() {
   $('#problemCameraStage').hidden = true;
   $('#problemRecordingBadge').hidden = true;
   $('#problemShutter').classList.remove('holding');
+  const returnToForm = state.problemCameraReturnToForm;
+  state.problemCameraReturnToForm = false;
+  if (restoreForm && returnToForm && !$('#createDialog').open) {
+    $('#createDialog').showModal();
+  }
 }
 
 function problemRecorderMimeType() {
@@ -164,6 +164,8 @@ async function openProblemCamera() {
     const video = $('#problemCameraView');
     video.srcObject = stream;
     await video.play();
+    state.problemCameraReturnToForm = $('#createDialog').open;
+    if (state.problemCameraReturnToForm) $('#createDialog').close();
     $('#problemCameraStage').hidden = false;
   } catch (error) {
     stopProblemCameraStream();
@@ -539,7 +541,7 @@ async function openTask(taskId) {
 async function loadProblemPhoto(taskId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/photo`, {
-      headers: { 'X-Telegram-Init-Data': telegramInitData() },
+      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
     });
     if (!response.ok) throw new Error('Не удалось загрузить фото');
     const url = URL.createObjectURL(await response.blob());
@@ -554,7 +556,7 @@ async function loadProblemPhoto(taskId) {
 async function loadProblemVideo(taskId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/video`, {
-      headers: { 'X-Telegram-Init-Data': telegramInitData() },
+      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
     });
     if (!response.ok) throw new Error('Не удалось загрузить видео');
     const url = URL.createObjectURL(await response.blob());
@@ -680,7 +682,7 @@ $('#createForm').addEventListener('submit', async (event) => {
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 });
-window.addEventListener('pagehide', closeProblemCamera);
+window.addEventListener('pagehide', () => closeProblemCamera(false));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && state.problemCameraStream && state.problemRecorder?.state !== 'recording') {
     closeProblemCamera();

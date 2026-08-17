@@ -250,14 +250,6 @@ function renderClubs(data, bookingsData = null) {
 }
 
 async function load() {
-  if (new URLSearchParams(window.location.search).get('open') === 'problems') {
-    if (tg?.initData) {
-      try { window.sessionStorage.setItem('omgTelegramInitData', tg.initData); }
-      catch (_error) { /* Telegram WebView may disable session storage. */ }
-    }
-    window.location.replace('/problems');
-    return;
-  }
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
     homeData = data;

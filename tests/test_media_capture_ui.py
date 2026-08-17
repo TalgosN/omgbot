@@ -18,6 +18,8 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn("data.set('photo', state.problemMedia.blob", script)
         self.assertIn("data.set('video', state.problemMedia.blob", script)
         self.assertIn('new MediaRecorder(', script)
+        self.assertIn("if (state.problemCameraReturnToForm) $('#createDialog').close();", script)
+        self.assertIn("$('#createDialog').showModal();", script)
 
     def test_shift_report_offers_current_and_batch_photo_files(self):
         html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')

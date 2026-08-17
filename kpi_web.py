@@ -2040,6 +2040,8 @@ def handle_upload_too_large(_error):
 
 @app.get('/')
 def index():
+    if request.args.get('open') == 'problems':
+        return send_from_directory(STATIC_DIR, 'problems.html')
     return send_from_directory(STATIC_DIR, 'home.html')
 
 
