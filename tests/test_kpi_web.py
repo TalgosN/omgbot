@@ -754,7 +754,8 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'class="shift-person"', script.data)
             self.assertIn(b'class="club-problems-link"', script.data)
             self.assertIn(b'/problems?club=', script.data)
-            self.assertIn(b'window.location.replace(`/problems${window.location.hash}`)', script.data)
+            self.assertIn(b"sessionStorage.setItem('omgTelegramInitData', tg.initData)", script.data)
+            self.assertIn(b"window.location.replace('/problems')", script.data)
             self.assertIn(b'data-telegram-username', script.data)
             self.assertIn(b'tg.openTelegramLink(url)', script.data)
             self.assertLess(
@@ -782,6 +783,8 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'class="media-badge video"', problem_script.data)
             self.assertIn(b"state.meta.clubs.includes(club)", problem_script.data)
             self.assertIn(b"' repair'", problem_script.data)
+            self.assertIn(b"sessionStorage.getItem('omgTelegramInitData')", problem_script.data)
+            self.assertIn(b"'X-Telegram-Init-Data': telegramInitData()", problem_script.data)
             self.assertNotIn('▧'.encode(), problem_script.data)
             self.assertNotIn('▶'.encode(), problem_script.data)
         finally:

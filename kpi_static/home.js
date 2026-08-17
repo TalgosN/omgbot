@@ -251,7 +251,11 @@ function renderClubs(data, bookingsData = null) {
 
 async function load() {
   if (new URLSearchParams(window.location.search).get('open') === 'problems') {
-    window.location.replace(`/problems${window.location.hash}`);
+    if (tg?.initData) {
+      try { window.sessionStorage.setItem('omgTelegramInitData', tg.initData); }
+      catch (_error) { /* Telegram WebView may disable session storage. */ }
+    }
+    window.location.replace('/problems');
     return;
   }
   try {

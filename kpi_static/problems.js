@@ -19,6 +19,12 @@ if (tg) {
   tg.setBackgroundColor('#09031d');
 }
 
+function telegramInitData() {
+  if (tg?.initData) return tg.initData;
+  try { return window.sessionStorage.getItem('omgTelegramInitData') || ''; }
+  catch (_error) { return ''; }
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
@@ -35,7 +41,7 @@ function dateTimeLabel(value) {
   return `${dateLabel(date)}${time ? ` · ${time.slice(0, 5)}` : ''}`;
 }
 async function api(path, options = {}) {
-  const headers = { 'X-Telegram-Init-Data': tg?.initData || '', ...(options.headers || {}) };
+  const headers = { 'X-Telegram-Init-Data': telegramInitData(), ...(options.headers || {}) };
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
@@ -533,7 +539,7 @@ async function openTask(taskId) {
 async function loadProblemPhoto(taskId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/photo`, {
-      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+      headers: { 'X-Telegram-Init-Data': telegramInitData() },
     });
     if (!response.ok) throw new Error('Не удалось загрузить фото');
     const url = URL.createObjectURL(await response.blob());
@@ -548,7 +554,7 @@ async function loadProblemPhoto(taskId) {
 async function loadProblemVideo(taskId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/video`, {
-      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+      headers: { 'X-Telegram-Init-Data': telegramInitData() },
     });
     if (!response.ok) throw new Error('Не удалось загрузить видео');
     const url = URL.createObjectURL(await response.blob());
