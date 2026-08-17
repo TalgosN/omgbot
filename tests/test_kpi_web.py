@@ -754,6 +754,7 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'class="shift-person"', script.data)
             self.assertIn(b'class="club-problems-link"', script.data)
             self.assertIn(b'/problems?club=', script.data)
+            self.assertIn(b'window.location.replace(`/problems${window.location.hash}`)', script.data)
             self.assertIn(b'data-telegram-username', script.data)
             self.assertIn(b'tg.openTelegramLink(url)', script.data)
             self.assertLess(

@@ -114,7 +114,7 @@ class HelpMenuTest(unittest.TestCase):
         self.assertEqual(problem_button.text, '🚩 Доска проблем')
         self.assertEqual(
             problem_button.web_app.url,
-            'https://bot.omg-vr.ru/problems',
+            'https://bot.omg-vr.ru/?open=problems',
         )
 
     def test_resource_links_include_shift_and_all_sheets(self):

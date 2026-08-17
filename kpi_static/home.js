@@ -250,6 +250,10 @@ function renderClubs(data, bookingsData = null) {
 }
 
 async function load() {
+  if (new URLSearchParams(window.location.search).get('open') === 'problems') {
+    window.location.replace(`/problems${window.location.hash}`);
+    return;
+  }
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
     homeData = data;

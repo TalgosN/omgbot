@@ -69,7 +69,7 @@ def _webapp_url(path=''):
 
 def _main_menu_button(text):
     if text == '🚩 Доска проблем':
-        problems_url = _webapp_url('problems')
+        problems_url = _webapp_url('?open=problems')
         if problems_url:
             return telebot.types.KeyboardButton(
                 text,
