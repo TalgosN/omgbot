@@ -4,7 +4,6 @@ from telebot import *
 #from constants import *
 from constants import get_clubs, get_clublist, funclist_today, CHATS, TEXTS, tags_main
 from club_config import select_question_set
-from sheets import *
 from datetime import datetime,timedelta
 import math
 import random
@@ -13,6 +12,12 @@ from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 
 DB_PATH = 'db/omgbot.sql'
 _club_status_dashboard_lock = threading.Lock()
+
+
+def update_table_open():
+    from sheets import update_table_open as sync_update_table_open
+
+    return sync_update_table_open()
 
 
 def initialize_club_status_dashboard_schema(db_path=DB_PATH):

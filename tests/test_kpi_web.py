@@ -57,6 +57,7 @@ def user(role):
 class KpiWebTest(unittest.TestCase):
     def setUp(self):
         kpi_web.app.config['TESTING'] = True
+        kpi_web._kpi_cache.clear()
         self.client = kpi_web.app.test_client()
         self.headers = {'X-Telegram-Init-Data': signed_init_data()}
         self.membership_patch = patch.object(
@@ -109,9 +110,19 @@ class KpiWebTest(unittest.TestCase):
         script = self.client.get('/static/swipe_navigation.js')
         try:
             self.assertEqual(script.status_code, 200)
+            self.assertEqual(
+                script.headers['Cache-Control'],
+                'public, max-age=300',
+            )
             self.assertIn(b"navigate('/')", script.data)
         finally:
             script.close()
+
+        page = self.client.get('/kpi')
+        try:
+            self.assertEqual(page.headers['Cache-Control'], 'no-store')
+        finally:
+            page.close()
 
     def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
         response = self.client.get('/kpi')
@@ -1729,10 +1740,17 @@ class KpiWebTest(unittest.TestCase):
                 '/api/kpi?month=2026-07&date=2026-07-15',
                 headers=self.headers,
             )
+            cached_response = self.client.get(
+                '/api/kpi?month=2026-07&date=2026-07-15',
+                headers=self.headers,
+            )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(cached_response.status_code, 200)
         self.assertEqual(response.get_json()['employees'][0]['login'], '@one')
+        self.assertEqual(response.get_json(), cached_response.get_json())
         self.assertEqual(response.get_json()['date'], '2026-07-15')
+        self.assertEqual(calculate.call_count, 3)
         self.assertTrue(all(
             call.kwargs['employee_logins'] == ['@one']
             for call in calculate.call_args_list

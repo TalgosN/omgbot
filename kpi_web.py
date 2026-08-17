@@ -80,7 +80,6 @@ from shift_config_store import (
     rollback_version,
     save_editor_config,
 )
-from sheets import update_table_open
 from task_notifications import (
     BOT_TASK_TYPE,
     GENERAL_TASK_TYPE,
@@ -109,8 +108,11 @@ CAMERA_TEST_RECIPIENT_CHAT_ID = str(
 ).strip()
 CAMERA_TEST_COOLDOWN_SECONDS = 8
 ANALYTICS_CACHE_SECONDS = 60
+KPI_CACHE_SECONDS = 60
 _analytics_cache = {}
 _analytics_cache_lock = threading.Lock()
+_kpi_cache = {}
+_kpi_cache_lock = threading.Lock()
 _membership_bot = None
 _membership_bot_lock = threading.Lock()
 _camera_test_sent_at = {}
@@ -127,6 +129,14 @@ initialize_shift_time_schema(DB_PATH)
 def _clear_analytics_cache():
     with _analytics_cache_lock:
         _analytics_cache.clear()
+    with _kpi_cache_lock:
+        _kpi_cache.clear()
+
+
+def update_table_open():
+    from sheets import update_table_open as sync_update_table_open
+
+    return sync_update_table_open()
 
 
 def _validate_month(value):
@@ -2051,7 +2061,11 @@ def _month_close_preview(month):
 
 @app.after_request
 def add_security_headers(response):
-    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Cache-Control'] = (
+        'public, max-age=300'
+        if request.path.startswith('/static/')
+        else 'no-store'
+    )
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     return response
@@ -3108,6 +3122,13 @@ def api_kpi():
         request.args.get('date') or _default_day(month),
         month,
     )
+    current_login = _actor_login()
+    cache_key = (month, selected_day, current_login)
+    with _kpi_cache_lock:
+        cached = _kpi_cache.get(cache_key)
+    if cached and time.monotonic() - cached['created_at'] < KPI_CACHE_SECONDS:
+        return jsonify(cached['payload'])
+
     active_logins = _active_employee_logins()
     employee_logins = active_logins
     rows = calculate_monthly_kpi(
@@ -3185,7 +3206,6 @@ def api_kpi():
         if str(item.get('employee_login') or '').strip().lower()
         in active_login_set
     ]
-    current_login = _actor_login()
     current_employee = next(
         (
             row
@@ -3219,7 +3239,7 @@ def api_kpi():
             )
     freshness = get_kpi_freshness(month, period_end=selected_day)
     freshness['calculated_at'] = datetime.now(UTC).isoformat()
-    return jsonify({
+    payload = {
         'month': month[:7],
         'date': selected_day,
         'month_status': get_month_status(month),
@@ -3227,7 +3247,20 @@ def api_kpi():
         'penalties': penalties,
         'my_kpi': current_employee,
         'freshness': freshness,
-    })
+    }
+    with _kpi_cache_lock:
+        expired_keys = [
+            key
+            for key, value in _kpi_cache.items()
+            if time.monotonic() - value['created_at'] >= KPI_CACHE_SECONDS
+        ]
+        for key in expired_keys:
+            _kpi_cache.pop(key, None)
+        _kpi_cache[cache_key] = {
+            'created_at': time.monotonic(),
+            'payload': payload,
+        }
+    return jsonify(payload)
 
 
 @app.get('/api/kpi/details')
