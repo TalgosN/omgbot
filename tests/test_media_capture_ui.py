@@ -51,6 +51,21 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('putPhoto(', confirm_handler)
         self.assertIn('saveDraft();', confirm_handler)
 
+    def test_started_shift_draft_can_be_reset_without_creating_a_new_run(self):
+        html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')
+        script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
+
+        self.assertIn('id="discardDraft" type="button">Сбросить черновик', html)
+        reset_handler = script.split("$('#discardDraft').addEventListener", 1)[1]
+        reset_handler = reset_handler.split("window.addEventListener('omg:navigation-back'", 1)[0]
+        self.assertIn('if (runtime.draft.started_at)', reset_handler)
+        self.assertIn('await clearDraftPhotos(runtime.draft);', reset_handler)
+        self.assertIn("runtime.draft.stage = 'checklist';", reset_handler)
+        self.assertIn('runtime.draft.answers = {};', reset_handler)
+        self.assertIn('runtime.draft.photo_ids = [];', reset_handler)
+        self.assertIn('await startFreshScenario();', reset_handler)
+        self.assertIn("$('#discardDraft').hidden = false;", script)
+
 
 if __name__ == '__main__':
     unittest.main()

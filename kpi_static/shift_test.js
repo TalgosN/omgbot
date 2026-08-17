@@ -908,8 +908,23 @@ $('#discardDraft').addEventListener('click', async () => {
   button.disabled = true;
   try {
     $('#resumeDialog').close();
-    await deleteDraft();
-    await startFreshScenario();
+    if (runtime.draft.started_at) {
+      await clearDraftPhotos(runtime.draft);
+      clearBatchSelection();
+      releaseReviewUrls();
+      runtime.retakeQuestionId = null;
+      runtime.draft.stage = 'checklist';
+      runtime.draft.text_index = 0;
+      runtime.draft.photo_index = 0;
+      runtime.draft.answers = {};
+      runtime.draft.photo_ids = [];
+      saveDraft();
+      renderChecklist();
+      toast('Черновик очищен. Начало смены сохранено.');
+    } else {
+      await deleteDraft();
+      await startFreshScenario();
+    }
   } catch (error) {
     showError(error);
   } finally {
@@ -980,7 +995,7 @@ async function initialize() {
   const answered = Object.keys(runtime.draft.answers).length;
   const photos = runtime.draft.photo_ids.length;
   $('#resumeDescription').textContent = `${runtime.scenario.club}: ответов ${answered}, фотографий ${photos}. Черновик хранится только на этом устройстве.`;
-  $('#discardDraft').hidden = Boolean(runtime.draft.started_at);
+  $('#discardDraft').hidden = false;
   $('#resumeDialog').showModal();
 }
 
