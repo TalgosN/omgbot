@@ -81,8 +81,11 @@
         <p id="photoStageText">Камера откроется один раз и будет переходить между пунктами автоматически.</p>
       </div>
       <div id="nextPhotoPrompt" class="next-photo-prompt"></div>
-      <button id="openCamera" class="primary-button" type="button">Открыть камеру</button>
-      <button id="systemCamera" class="secondary-button" type="button" hidden>Снять системной камерой</button>
+      <div class="photo-source-actions">
+        <button id="openCamera" class="primary-button" type="button">Открыть камеру</button>
+        <button id="systemCamera" class="secondary-button" type="button">Выбрать фото для этого пункта</button>
+        <button id="batchPhotos" class="secondary-button batch-button" type="button">Загрузить несколько фото</button>
+      </div>
     </section>
 
     <section id="reviewStage" class="stage-card" hidden>
@@ -116,6 +119,7 @@
       <small>Одно короткое нажатие — одно фото</small>
     </div>
     <button id="closeCamera" class="close-camera" type="button" aria-label="Закрыть камеру">×</button>
+    <button id="cameraFileButton" class="camera-file-button" type="button">Выбрать фото</button>
     <div id="cameraSaving" class="camera-saving" hidden>Сохраняем…</div>
     <div class="camera-controls">
       <span>Сфотографировать</span>
@@ -143,7 +147,8 @@
     </div>
   </dialog>
 
-  <input id="systemPhoto" type="file" accept="image/*" capture="environment" hidden>
+  <input id="systemPhoto" type="file" accept="image/*" hidden>
+  <input id="batchPhotoInput" type="file" accept="image/*" multiple hidden>
   <div id="testToast" class="test-toast" role="status"></div>
   <script src="/static/shift_test.js"></script>
   <script src="/static/swipe_navigation.js"></script>

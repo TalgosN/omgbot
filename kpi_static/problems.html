@@ -104,8 +104,15 @@
       </section>
       <label id="regularTitleField"><span>Название</span><input id="createTitle" name="title" maxlength="50" required placeholder="Коротко опишите суть"></label>
       <label><span>Описание</span><textarea name="description" maxlength="1000" required rows="6" placeholder="Что произошло или что предлагаете"></textarea></label>
-      <label class="photo-field"><span>Фото, необязательно</span><input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
-      <label class="photo-field"><span>Видео, необязательно</span><input name="video" type="file" accept="video/mp4,video/quicktime,video/webm"><small>До 20 МБ, желательно не дольше 20 секунд. Прикрепите фото или видео.</small></label>
+      <section class="problem-media-picker">
+        <div class="problem-media-label"><span>Фото или видео, необязательно</span><small>Одно вложение · фото до 6 МБ, видео до 20 МБ</small></div>
+        <div class="problem-media-actions">
+          <button id="attachProblemFile" type="button"><i>↥</i><span>Прикрепить файл</span></button>
+          <button id="openProblemCamera" class="camera" type="button"><i>◉</i><span>Открыть камеру</span></button>
+        </div>
+        <article id="problemMediaPreview" class="problem-media-preview hidden"></article>
+      </section>
+      <input id="problemMediaFile" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" hidden>
       <button class="primary-button wide" type="submit">Добавить анонимно</button>
     </form>
   </dialog>
@@ -157,6 +164,22 @@
       <button id="messageSubmit" class="primary-button wide" type="submit">Отправить</button>
     </form>
   </dialog>
+
+  <section id="problemCameraStage" class="problem-camera-stage" data-swipe-ignore hidden>
+    <video id="problemCameraView" autoplay muted playsinline></video>
+    <div class="problem-camera-shade"></div>
+    <div class="problem-camera-instruction">
+      <span>Вложение к заявке</span>
+      <strong>Снимите проблему крупно и понятно</strong>
+      <small>Короткое нажатие — фото · удержание — видео</small>
+    </div>
+    <div id="problemRecordingBadge" class="problem-recording-badge" hidden><i></i><span id="problemRecordingTime">00:00</span></div>
+    <button id="closeProblemCamera" class="problem-close-camera" type="button" aria-label="Закрыть камеру">×</button>
+    <div class="problem-camera-controls">
+      <span id="problemCaptureHint">Нажмите или удерживайте</span>
+      <button id="problemShutter" class="problem-shutter" type="button" aria-label="Сделать фото или записать видео"><i></i></button>
+    </div>
+  </section>
 
   <div id="toast" class="problem-toast"></div>
   <script src="/static/problems.js"></script>

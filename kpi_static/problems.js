@@ -1,6 +1,17 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
-const state = { me: null, meta: null, status: 'work', tasks: [], selected: null, action: null, repairCatalog: null, migration: null, mappingTask: null, boardView: 'tasks', analyticsMode: 'month', analytics: null };
+const PROBLEM_HOLD_DELAY_MS = 420;
+const PROBLEM_MAX_VIDEO_MS = 15000;
+const state = {
+  me: null, meta: null, status: 'work', tasks: [], selected: null,
+  action: null, repairCatalog: null, migration: null, mappingTask: null,
+  boardView: 'tasks', analyticsMode: 'month', analytics: null,
+  problemMedia: null, problemMediaUrl: null, problemCameraStream: null,
+  problemRecorder: null, problemRecorderChunks: [], problemPressTimer: null,
+  problemRecordingTimer: null, problemRecordingTimeout: null,
+  problemRecordingStartedAt: 0, problemPointerActive: false,
+  problemHoldTriggered: false, problemDiscardRecording: false,
+};
 tg?.ready();
 tg?.expand();
 if (tg) {
@@ -37,6 +48,196 @@ function toast(message, error = false) {
   element.className = `problem-toast visible${error ? ' error' : ''}`;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { element.className = 'problem-toast'; }, 2600);
+}
+
+function problemMediaSize(size) {
+  return size >= 1024 * 1024
+    ? `${(size / (1024 * 1024)).toFixed(1)} МБ`
+    : `${Math.max(1, Math.round(size / 1024))} КБ`;
+}
+
+function renderProblemMedia() {
+  const preview = $('#problemMediaPreview');
+  if (!state.problemMedia) {
+    preview.classList.add('hidden');
+    preview.replaceChildren();
+    return;
+  }
+  if (state.problemMediaUrl) URL.revokeObjectURL(state.problemMediaUrl);
+  state.problemMediaUrl = URL.createObjectURL(state.problemMedia.blob);
+  const media = state.problemMedia.kind === 'photo'
+    ? `<img src="${state.problemMediaUrl}" alt="Фото проблемы">`
+    : `<video src="${state.problemMediaUrl}" controls muted playsinline preload="metadata"></video>`;
+  preview.innerHTML = `${media}<div><strong>${escapeHtml(state.problemMedia.kind === 'photo' ? 'Фотография' : 'Видео')}</strong><small>${escapeHtml(state.problemMedia.filename)} · ${problemMediaSize(state.problemMedia.blob.size)}</small></div><button id="clearProblemMedia" type="button" aria-label="Удалить вложение">×</button>`;
+  preview.classList.remove('hidden');
+}
+
+function clearProblemMedia() {
+  state.problemMedia = null;
+  if (state.problemMediaUrl) URL.revokeObjectURL(state.problemMediaUrl);
+  state.problemMediaUrl = null;
+  $('#problemMediaFile').value = '';
+  renderProblemMedia();
+}
+
+function setProblemMedia(blob, kind, filename) {
+  const maximum = kind === 'video' ? 20 * 1024 * 1024 : 6 * 1024 * 1024;
+  if (!blob?.size) {
+    toast('Камера вернула пустой файл', true);
+    return false;
+  }
+  if (blob.size > maximum) {
+    toast(kind === 'video' ? 'Видео больше 20 МБ' : 'Фото больше 6 МБ', true);
+    return false;
+  }
+  state.problemMedia = { blob, kind, filename };
+  renderProblemMedia();
+  closeProblemCamera();
+  tg?.HapticFeedback?.notificationOccurred('success');
+  return true;
+}
+
+function stopProblemCameraStream() {
+  state.problemCameraStream?.getTracks().forEach((track) => track.stop());
+  state.problemCameraStream = null;
+  $('#problemCameraView').srcObject = null;
+}
+
+function clearProblemRecordingTimers() {
+  clearInterval(state.problemRecordingTimer);
+  clearTimeout(state.problemRecordingTimeout);
+  state.problemRecordingTimer = null;
+  state.problemRecordingTimeout = null;
+}
+
+function closeProblemCamera() {
+  clearTimeout(state.problemPressTimer);
+  state.problemPointerActive = false;
+  if (state.problemRecorder?.state === 'recording') {
+    state.problemDiscardRecording = true;
+    state.problemRecorder.stop();
+  } else {
+    stopProblemCameraStream();
+  }
+  clearProblemRecordingTimers();
+  $('#problemCameraStage').hidden = true;
+  $('#problemRecordingBadge').hidden = true;
+  $('#problemShutter').classList.remove('holding');
+}
+
+function problemRecorderMimeType() {
+  if (!window.MediaRecorder) return '';
+  const types = [
+    'video/mp4;codecs=h264,aac', 'video/mp4',
+    'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
+  ];
+  return types.find((type) => MediaRecorder.isTypeSupported?.(type)) || '';
+}
+
+async function openProblemCamera() {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    toast('Встроенная камера недоступна — прикрепите файл', true);
+    $('#problemMediaFile').click();
+    return;
+  }
+  $('#openProblemCamera').disabled = true;
+  let stream;
+  try {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: true,
+      });
+    } catch (_microphoneError) {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+    }
+    state.problemCameraStream = stream;
+    const video = $('#problemCameraView');
+    video.srcObject = stream;
+    await video.play();
+    $('#problemCameraStage').hidden = false;
+  } catch (error) {
+    stopProblemCameraStream();
+    toast(error.message || 'Камера недоступна — прикрепите файл', true);
+  } finally {
+    $('#openProblemCamera').disabled = false;
+  }
+}
+
+function captureProblemPhoto() {
+  const video = $('#problemCameraView');
+  if (!state.problemCameraStream || !video.videoWidth || !video.videoHeight) {
+    toast('Камера ещё готовит изображение', true);
+    return;
+  }
+  const scale = Math.min(1, 1600 / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob((blob) => {
+    if (!blob) toast('Не удалось сохранить фотографию', true);
+    else setProblemMedia(blob, 'photo', 'problem-camera.jpg');
+  }, 'image/jpeg', 0.84);
+}
+
+function updateProblemRecordingTime() {
+  const elapsed = Math.min(
+    PROBLEM_MAX_VIDEO_MS,
+    Date.now() - state.problemRecordingStartedAt,
+  );
+  $('#problemRecordingTime').textContent = `00:${String(Math.floor(elapsed / 1000)).padStart(2, '0')}`;
+}
+
+function stopProblemRecording() {
+  clearProblemRecordingTimers();
+  $('#problemRecordingBadge').hidden = true;
+  $('#problemShutter').classList.remove('holding');
+  $('#problemCaptureHint').textContent = 'Нажмите или удерживайте';
+  if (state.problemRecorder?.state === 'recording') state.problemRecorder.stop();
+}
+
+function startProblemRecording() {
+  if (!state.problemPointerActive || !state.problemCameraStream || !window.MediaRecorder) {
+    if (!window.MediaRecorder) toast('Видео на этом устройстве недоступно', true);
+    return;
+  }
+  const mimeType = problemRecorderMimeType();
+  try {
+    state.problemDiscardRecording = false;
+    state.problemRecorderChunks = [];
+    state.problemRecorder = new MediaRecorder(
+      state.problemCameraStream,
+      mimeType ? { mimeType, videoBitsPerSecond: 2500000 } : undefined,
+    );
+  } catch (_error) {
+    toast('Видео не запустилось — можно сделать фото', true);
+    return;
+  }
+  state.problemRecorder.ondataavailable = (event) => {
+    if (event.data?.size) state.problemRecorderChunks.push(event.data);
+  };
+  state.problemRecorder.onstop = () => {
+    if (state.problemDiscardRecording) {
+      stopProblemCameraStream();
+      return;
+    }
+    const type = state.problemRecorder.mimeType || mimeType || 'video/webm';
+    const blob = new Blob(state.problemRecorderChunks, { type });
+    setProblemMedia(blob, 'video', `problem-camera.${type.includes('mp4') ? 'mp4' : 'webm'}`);
+  };
+  state.problemRecordingStartedAt = Date.now();
+  state.problemRecorder.start(250);
+  $('#problemRecordingBadge').hidden = false;
+  $('#problemShutter').classList.add('holding');
+  $('#problemCaptureHint').textContent = 'Отпустите, чтобы закончить';
+  updateProblemRecordingTime();
+  state.problemRecordingTimer = setInterval(updateProblemRecordingTime, 200);
+  state.problemRecordingTimeout = setTimeout(stopProblemRecording, PROBLEM_MAX_VIDEO_MS);
+  tg?.HapticFeedback?.impactOccurred('medium');
 }
 
 function renderFilters() {
@@ -394,6 +595,50 @@ $('#problemList').addEventListener('click', (event) => {
   if (card) openTask(Number(card.dataset.id));
 });
 $('#newProblem').addEventListener('click', () => $('#createDialog').showModal());
+$('#attachProblemFile').addEventListener('click', () => {
+  $('#problemMediaFile').value = '';
+  $('#problemMediaFile').click();
+});
+$('#problemMediaFile').addEventListener('change', (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const photoTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+  const videoTypes = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
+  if (photoTypes.has(file.type)) setProblemMedia(file, 'photo', file.name || 'problem-photo.jpg');
+  else if (videoTypes.has(file.type)) setProblemMedia(file, 'video', file.name || 'problem-video.mp4');
+  else toast('Выберите JPEG, PNG, WebP, MP4, MOV или WebM', true);
+});
+$('#problemMediaPreview').addEventListener('click', (event) => {
+  if (event.target.closest('#clearProblemMedia')) clearProblemMedia();
+});
+$('#openProblemCamera').addEventListener('click', openProblemCamera);
+$('#closeProblemCamera').addEventListener('click', closeProblemCamera);
+$('#problemShutter').addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  state.problemPointerActive = true;
+  state.problemHoldTriggered = false;
+  $('#problemShutter').setPointerCapture?.(event.pointerId);
+  state.problemPressTimer = setTimeout(() => {
+    state.problemHoldTriggered = true;
+    startProblemRecording();
+  }, PROBLEM_HOLD_DELAY_MS);
+});
+const finishProblemCapture = (event) => {
+  event.preventDefault();
+  clearTimeout(state.problemPressTimer);
+  if (!state.problemPointerActive) return;
+  state.problemPointerActive = false;
+  if (state.problemHoldTriggered) stopProblemRecording();
+  else captureProblemPhoto();
+};
+$('#problemShutter').addEventListener('pointerup', finishProblemCapture);
+$('#problemShutter').addEventListener('pointercancel', (event) => {
+  event.preventDefault();
+  clearTimeout(state.problemPressTimer);
+  state.problemPointerActive = false;
+  if (state.problemHoldTriggered) stopProblemRecording();
+});
+$('#problemShutter').addEventListener('contextmenu', (event) => event.preventDefault());
 $('#createType').addEventListener('change', () => updateCreateFields().catch((error) => toast(error.message, true)));
 $('#createClub').addEventListener('change', () => updateCreateFields().catch((error) => toast(error.message, true)));
 $('#repairItem').addEventListener('change', () => { updateRepairDetails(); updateRepairTitle(); });
@@ -408,11 +653,17 @@ $('#createForm').addEventListener('submit', async (event) => {
   button.disabled = true;
   try {
     const data = new FormData(event.target);
+    if (state.problemMedia?.kind === 'photo') {
+      data.set('photo', state.problemMedia.blob, state.problemMedia.filename);
+    } else if (state.problemMedia?.kind === 'video') {
+      data.set('video', state.problemMedia.blob, state.problemMedia.filename);
+    }
     if (data.get('type') === 'Ремонт') {
       data.set('repair_location_ids', JSON.stringify(selectedRepairLocations().map((entry) => entry.id)));
     }
     await api('/api/problems', { method: 'POST', body: data });
     event.target.reset();
+    clearProblemMedia();
     await updateCreateFields();
     $('#createDialog').close();
     state.status = 'work';
@@ -422,6 +673,12 @@ $('#createForm').addEventListener('submit', async (event) => {
     toast('Проблема добавлена анонимно');
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
+});
+window.addEventListener('pagehide', closeProblemCamera);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.problemCameraStream && state.problemRecorder?.state !== 'recording') {
+    closeProblemCamera();
+  }
 });
 $('#detailDialog').addEventListener('click', async (event) => {
   const historyTask = event.target.closest('[data-history-task]');

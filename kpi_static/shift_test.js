@@ -273,7 +273,9 @@ function renderPhotoReady(reason = '') {
   $('#openCamera').textContent = runtime.draft.photo_index || runtime.retakeQuestionId
     ? 'Открыть камеру и продолжить'
     : 'Открыть камеру';
-  $('#systemCamera').hidden = true;
+  $('#systemCamera').hidden = false;
+  $('#batchPhotos').hidden = Boolean(runtime.retakeQuestionId);
+  $('#batchPhotos').textContent = `Загрузить несколько фото · осталось ${questions.length - runtime.draft.photo_index}`;
   setStage('photoStage');
 }
 
@@ -297,7 +299,7 @@ function stopCamera() {
 async function openCamera() {
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     $('#systemCamera').hidden = false;
-    renderPhotoReady('Встроенная камера недоступна. Используйте системную камеру телефона.');
+    renderPhotoReady('Встроенная камера недоступна. Выберите фото с телефона.');
     return;
   }
   $('#openCamera').disabled = true;
@@ -318,7 +320,7 @@ async function openCamera() {
   } catch (error) {
     stopCamera();
     $('#systemCamera').hidden = false;
-    renderPhotoReady('Telegram не дал встроенной камере доступ. Можно открыть системную камеру.');
+    renderPhotoReady('Telegram не дал встроенной камере доступ. Можно выбрать фото с телефона.');
     toast(error.message || 'Камера недоступна', true);
   } finally {
     $('#openCamera').disabled = false;
@@ -691,6 +693,8 @@ $('#previousQuestion').addEventListener('click', () => {
 
 $('#openCamera').addEventListener('click', openCamera);
 $('#systemCamera').addEventListener('click', () => $('#systemPhoto').click());
+$('#batchPhotos').addEventListener('click', () => $('#batchPhotoInput').click());
+$('#cameraFileButton').addEventListener('click', () => $('#systemPhoto').click());
 $('#closeCamera').addEventListener('click', () => {
   stopCamera();
   renderPhotoReady('Серия сохранена. Можно продолжить с этого же пункта.');
@@ -709,6 +713,46 @@ $('#systemPhoto').addEventListener('change', async (event) => {
     toast(error.message, true);
   } finally {
     $('#systemCamera').disabled = false;
+  }
+});
+
+$('#batchPhotoInput').addEventListener('change', async (event) => {
+  const files = [...event.target.files];
+  event.target.value = '';
+  if (!files.length) return;
+  const questions = photoQuestions();
+  const remaining = questions.slice(runtime.draft.photo_index);
+  if (files.length > remaining.length) {
+    toast(`Осталось только ${remaining.length} фотопунктов`, true);
+    return;
+  }
+  const button = $('#batchPhotos');
+  button.disabled = true;
+  button.textContent = `Обрабатываем 0 из ${files.length}`;
+  let saved = 0;
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      const question = remaining[index];
+      const blob = await compressSystemPhoto(files[index]);
+      await putPhoto(question.id, blob);
+      if (!runtime.draft.photo_ids.includes(question.id)) {
+        runtime.draft.photo_ids.push(question.id);
+      }
+      runtime.draft.photo_index += 1;
+      saved += 1;
+      saveDraft();
+      button.textContent = `Обрабатываем ${saved} из ${files.length}`;
+    }
+    tg?.HapticFeedback?.notificationOccurred('success');
+    if (runtime.draft.photo_index >= questions.length) await renderReview();
+    else renderPhotoReady(`${saved} фото загружено. Следующее фото можно снять или выбрать.`);
+  } catch (error) {
+    renderPhotoReady(saved
+      ? `${saved} фото сохранено. Остальные не загрузились — можно продолжить с текущего пункта.`
+      : 'Фото не загрузились. Попробуйте выбрать их ещё раз.');
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 });
 
