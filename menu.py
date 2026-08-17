@@ -68,14 +68,27 @@ def _webapp_url(path=''):
 
 
 def _main_menu_button(text):
-    if text == '🚩 Доска проблем':
-        problems_url = _webapp_url('?open=problems')
-        if problems_url:
-            return telebot.types.KeyboardButton(
-                text,
-                web_app=telebot.types.WebAppInfo(problems_url),
-            )
     return text
+
+
+def open_problems_app(message, bot):
+    problems_url = _webapp_url('problems')
+    if not problems_url:
+        bot.send_message(
+            message.chat.id,
+            'OMG VR Mini App ещё не подключён к HTTPS-ссылке.',
+        )
+        return
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.add(telebot.types.InlineKeyboardButton(
+        '🚩 Открыть Доску проблем',
+        web_app=telebot.types.WebAppInfo(problems_url),
+    ))
+    bot.send_message(
+        message.chat.id,
+        'Доска проблем:',
+        reply_markup=markup,
+    )
 
 def hello(chatid, bot):
     bot.clear_step_handler_by_chat_id(chatid)
@@ -123,8 +136,7 @@ def func(message, bot):
         promotion_admin_menu(message, bot)
 
     elif a == '🚩 Доска проблем':
-        from taskboard import task_board
-        task_board(message, bot)
+        open_problems_app(message, bot)
         
     elif a == '👤 Аккаунт':
         from account import account_settings

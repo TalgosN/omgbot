@@ -113,16 +113,6 @@ class KpiWebTest(unittest.TestCase):
         finally:
             script.close()
 
-    def test_problem_bot_launch_is_served_without_client_redirect(self):
-        response = self.client.get('/?open=problems')
-        try:
-            self.assertEqual(response.status_code, 200)
-            self.assertIn(b'id="problemList"', response.data)
-            self.assertIn(b'/static/problems.js', response.data)
-            self.assertNotIn(b'/static/home.js', response.data)
-        finally:
-            response.close()
-
     def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
         response = self.client.get('/kpi')
         try:

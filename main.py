@@ -667,8 +667,8 @@ def command_schedule(message):
 
 @bot.message_handler(commands=['problems'])
 def command_problems(message):
-    from taskboard import task_board
-    _run_private_menu_command(message, lambda: task_board(message, bot))
+    from menu import open_problems_app
+    _run_private_menu_command(message, lambda: open_problems_app(message, bot))
 
 
 @bot.message_handler(commands=['account'])

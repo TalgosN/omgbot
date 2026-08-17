@@ -101,7 +101,7 @@ class HelpMenuTest(unittest.TestCase):
 
         bot.register_next_step_handler.assert_not_called()
 
-    def test_problem_button_opens_mini_app_directly(self):
+    def test_problem_reply_button_opens_authorized_inline_app(self):
         bot = Mock()
         self.menu.funclist = {0: ('🚩 Доска проблем', 'Обычная кнопка')}
         self.menu.get_user.return_value = {'status': 0, 'nick_name': 'Тест'}
@@ -111,10 +111,18 @@ class HelpMenuTest(unittest.TestCase):
 
         markup = bot.send_message.call_args.kwargs['reply_markup']
         problem_button = markup.rows[0][0]
-        self.assertEqual(problem_button.text, '🚩 Доска проблем')
+        self.assertEqual(problem_button, '🚩 Доска проблем')
+
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+        with patch.object(self.menu.app_constants, 'KPI_WEBAPP_URL', 'https://bot.omg-vr.ru/'):
+            self.menu.open_problems_app(message, bot)
+
+        inline_markup = bot.send_message.call_args.kwargs['reply_markup']
+        open_button = inline_markup.rows[0][0]
+        self.assertEqual(open_button.text, '🚩 Открыть Доску проблем')
         self.assertEqual(
-            problem_button.web_app.url,
-            'https://bot.omg-vr.ru/?open=problems',
+            open_button.web_app.url,
+            'https://bot.omg-vr.ru/problems',
         )
 
     def test_resource_links_include_shift_and_all_sheets(self):
