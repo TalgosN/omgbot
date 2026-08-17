@@ -88,6 +88,34 @@
       </div>
     </section>
 
+    <section id="batchOrderStage" class="stage-card" hidden>
+      <div class="progress-head"><span>Пакетная загрузка</span><strong data-club></strong></div>
+      <div class="stage-heading batch-heading">
+        <p class="eyebrow">Перед выбором фотографий</p>
+        <h2>Порядок фотопунктов</h2>
+        <p>В галерее выбирайте фотографии в том же порядке. Можно выбрать только часть — она заполнит первые незавершённые пункты.</p>
+      </div>
+      <ol id="batchQuestionList" class="batch-question-list"></ol>
+      <div class="batch-stage-actions">
+        <button id="cancelBatchOrder" type="button">Назад</button>
+        <button id="chooseBatchPhotos" class="primary-button" type="button">Понятно, выбрать фото</button>
+      </div>
+    </section>
+
+    <section id="batchReviewStage" class="stage-card" hidden>
+      <div class="progress-head"><span id="batchReviewProgress">Проверка пачки</span><strong data-club></strong></div>
+      <div class="stage-heading batch-heading">
+        <p class="eyebrow">Перед сохранением</p>
+        <h2>Сопоставьте фотографии</h2>
+        <p>Проверьте, что каждая фотография соответствует подписи. Порядок можно изменить стрелками.</p>
+      </div>
+      <div id="batchReviewList" class="batch-review-list"></div>
+      <div class="batch-stage-actions">
+        <button id="cancelBatchReview" type="button">Отмена</button>
+        <button id="confirmBatchPhotos" class="primary-button" type="button">Сохранить фотографии</button>
+      </div>
+    </section>
+
     <section id="reviewStage" class="stage-card" hidden>
       <div class="stage-heading">
         <p class="eyebrow">Перед отправкой</p>
@@ -149,6 +177,7 @@
 
   <input id="systemPhoto" type="file" accept="image/*" hidden>
   <input id="batchPhotoInput" type="file" accept="image/*" multiple hidden>
+  <input id="batchReplaceInput" type="file" accept="image/*" hidden>
   <div id="testToast" class="test-toast" role="status"></div>
   <script src="/static/shift_test.js"></script>
   <script src="/static/swipe_navigation.js"></script>

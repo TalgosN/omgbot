@@ -79,8 +79,10 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .problem-card h3 { min-width:0; margin:9px 0 0; font-size:13px; line-height:1.4; }
 .problem-card p { margin: 7px 0 0; color: var(--muted); font-size: 9px; }
 .problem-card-badges { display:flex; width:100%; min-height:25px; align-items:center; gap:5px; }
-.type-badge { flex:none; padding:5px 9px; border-radius:999px; color:var(--purple); background:var(--lavender); font-size:9px; font-weight:750; white-space:nowrap; }
+.type-badge { flex:none; padding:5px 9px; border:1px solid transparent; border-radius:999px; font-size:9px; font-weight:750; white-space:nowrap; }
 .type-badge.repair { border:1px solid rgba(216,122,255,.34); color:#d87aff; background:rgba(162,77,225,.1); }
+.type-badge.general { border-color:rgba(255,209,102,.34); color:#ffd166; background:rgba(255,209,102,.09); }
+.type-badge.bot { border-color:rgba(112,232,180,.32); color:#70e8b4; background:rgba(112,232,180,.09); }
 .media-badge { padding:5px 9px; border:1px solid transparent; border-radius:999px; font-size:9px; font-weight:750; white-space:nowrap; }
 .media-badge.photo { border-color:rgba(255,159,203,.2); color:#ff9fcb; background:rgba(255,111,157,.1); }
 .media-badge.video { border-color:rgba(112,215,255,.2); color:#70d7ff; background:rgba(112,215,255,.1); }

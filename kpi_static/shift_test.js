@@ -16,6 +16,10 @@ const runtime = {
   capturing: false,
   retakeQuestionId: null,
   reviewUrls: [],
+  batchItems: [],
+  batchReviewUrls: [],
+  batchReplaceIndex: null,
+  batchStartIndex: null,
 };
 
 tg?.ready();
@@ -156,7 +160,7 @@ function photoQuestions() {
 }
 
 function setStage(stageId) {
-  ['loadingCard', 'errorCard', 'ownerClubStage', 'checklistStage', 'questionStage', 'photoStage', 'reviewStage', 'successStage']
+  ['loadingCard', 'errorCard', 'ownerClubStage', 'checklistStage', 'questionStage', 'photoStage', 'batchOrderStage', 'batchReviewStage', 'reviewStage', 'successStage']
     .forEach((id) => { $(`#${id}`).hidden = id !== stageId; });
 }
 
@@ -277,6 +281,59 @@ function renderPhotoReady(reason = '') {
   $('#batchPhotos').hidden = Boolean(runtime.retakeQuestionId);
   $('#batchPhotos').textContent = `Загрузить несколько фото · осталось ${questions.length - runtime.draft.photo_index}`;
   setStage('photoStage');
+}
+
+function releaseBatchReviewUrls() {
+  runtime.batchReviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  runtime.batchReviewUrls = [];
+}
+
+function clearBatchSelection() {
+  releaseBatchReviewUrls();
+  runtime.batchItems = [];
+  runtime.batchReplaceIndex = null;
+  runtime.batchStartIndex = null;
+  $('#batchPhotoInput').value = '';
+  $('#batchReplaceInput').value = '';
+}
+
+function renderBatchOrder() {
+  clearBatchSelection();
+  const questions = photoQuestions();
+  $('#batchQuestionList').innerHTML = questions.map((question, index) => {
+    const completed = runtime.draft.photo_ids.includes(question.id);
+    const current = !completed && index === runtime.draft.photo_index;
+    const className = completed ? 'completed' : current ? 'current' : 'pending';
+    return `<li class="${className}"><i>${completed ? '✓' : index + 1}</i><span>${escapeHtml(question.text)}</span></li>`;
+  }).join('');
+  $('#chooseBatchPhotos').textContent = `Выбрать до ${questions.length - runtime.draft.photo_index} фото`;
+  setStage('batchOrderStage');
+}
+
+function renderBatchReview() {
+  releaseBatchReviewUrls();
+  const questions = photoQuestions();
+  $('#batchReviewProgress').textContent = `${runtime.batchItems.length} фото · проверьте порядок`;
+  $('#confirmBatchPhotos').textContent = `Сохранить ${runtime.batchItems.length} фото`;
+  $('#batchReviewList').innerHTML = runtime.batchItems.map((item, index) => {
+    const question = questions[runtime.batchStartIndex + index];
+    const url = URL.createObjectURL(item.blob);
+    runtime.batchReviewUrls.push(url);
+    return `
+      <article>
+        <img src="${url}" alt="Фото ${index + 1}">
+        <div class="batch-review-copy">
+          <span>Фото ${index + 1}</span>
+          <strong>${escapeHtml(question.text)}</strong>
+          <div class="batch-review-controls">
+            <button type="button" data-batch-move="up" data-batch-index="${index}" ${index ? '' : 'disabled'} aria-label="Поднять фотографию">↑</button>
+            <button type="button" data-batch-move="down" data-batch-index="${index}" ${index + 1 < runtime.batchItems.length ? '' : 'disabled'} aria-label="Опустить фотографию">↓</button>
+            <button type="button" data-batch-replace="${index}">Заменить</button>
+          </div>
+        </div>
+      </article>`;
+  }).join('');
+  setStage('batchReviewStage');
 }
 
 function updateCameraInstruction() {
@@ -693,7 +750,7 @@ $('#previousQuestion').addEventListener('click', () => {
 
 $('#openCamera').addEventListener('click', openCamera);
 $('#systemCamera').addEventListener('click', () => $('#systemPhoto').click());
-$('#batchPhotos').addEventListener('click', () => $('#batchPhotoInput').click());
+$('#batchPhotos').addEventListener('click', renderBatchOrder);
 $('#cameraFileButton').addEventListener('click', () => $('#systemPhoto').click());
 $('#closeCamera').addEventListener('click', () => {
   stopCamera();
@@ -726,30 +783,102 @@ $('#batchPhotoInput').addEventListener('change', async (event) => {
     toast(`Осталось только ${remaining.length} фотопунктов`, true);
     return;
   }
-  const button = $('#batchPhotos');
+  const button = $('#chooseBatchPhotos');
   button.disabled = true;
   button.textContent = `Обрабатываем 0 из ${files.length}`;
-  let saved = 0;
+  runtime.batchStartIndex = runtime.draft.photo_index;
+  runtime.batchItems = [];
   try {
     for (let index = 0; index < files.length; index += 1) {
-      const question = remaining[index];
       const blob = await compressSystemPhoto(files[index]);
-      await putPhoto(question.id, blob);
+      runtime.batchItems.push({ blob, filename: files[index].name || `photo-${index + 1}.jpg` });
+      button.textContent = `Обрабатываем ${index + 1} из ${files.length}`;
+    }
+    renderBatchReview();
+  } catch (error) {
+    clearBatchSelection();
+    renderBatchOrder();
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('#cancelBatchOrder').addEventListener('click', () => renderPhotoReady());
+$('#chooseBatchPhotos').addEventListener('click', () => $('#batchPhotoInput').click());
+$('#cancelBatchReview').addEventListener('click', () => {
+  clearBatchSelection();
+  renderPhotoReady();
+});
+
+$('#batchReviewList').addEventListener('click', (event) => {
+  const move = event.target.closest('[data-batch-move]');
+  if (move) {
+    const index = Number(move.dataset.batchIndex);
+    const nextIndex = move.dataset.batchMove === 'up' ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= runtime.batchItems.length) return;
+    [runtime.batchItems[index], runtime.batchItems[nextIndex]] = [
+      runtime.batchItems[nextIndex], runtime.batchItems[index],
+    ];
+    renderBatchReview();
+    tg?.HapticFeedback?.selectionChanged();
+    return;
+  }
+  const replace = event.target.closest('[data-batch-replace]');
+  if (replace) {
+    runtime.batchReplaceIndex = Number(replace.dataset.batchReplace);
+    $('#batchReplaceInput').value = '';
+    $('#batchReplaceInput').click();
+  }
+});
+
+$('#batchReplaceInput').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  event.target.value = '';
+  const index = runtime.batchReplaceIndex;
+  runtime.batchReplaceIndex = null;
+  if (!file || index === null || !runtime.batchItems[index]) return;
+  try {
+    const blob = await compressSystemPhoto(file);
+    runtime.batchItems[index] = { blob, filename: file.name || `photo-${index + 1}.jpg` };
+    renderBatchReview();
+    tg?.HapticFeedback?.notificationOccurred('success');
+  } catch (error) {
+    toast(error.message, true);
+  }
+});
+
+$('#confirmBatchPhotos').addEventListener('click', async () => {
+  if (!runtime.batchItems.length || runtime.batchStartIndex !== runtime.draft.photo_index) {
+    clearBatchSelection();
+    renderPhotoReady('Порядок фотопунктов изменился. Выберите пачку ещё раз.');
+    return;
+  }
+  const questions = photoQuestions();
+  const button = $('#confirmBatchPhotos');
+  button.disabled = true;
+  let saved = 0;
+  try {
+    for (let index = 0; index < runtime.batchItems.length; index += 1) {
+      const question = questions[runtime.draft.photo_index];
+      await putPhoto(question.id, runtime.batchItems[index].blob);
       if (!runtime.draft.photo_ids.includes(question.id)) {
         runtime.draft.photo_ids.push(question.id);
       }
       runtime.draft.photo_index += 1;
       saved += 1;
       saveDraft();
-      button.textContent = `Обрабатываем ${saved} из ${files.length}`;
+      button.textContent = `Сохраняем ${saved} из ${runtime.batchItems.length}`;
     }
+    clearBatchSelection();
     tg?.HapticFeedback?.notificationOccurred('success');
     if (runtime.draft.photo_index >= questions.length) await renderReview();
-    else renderPhotoReady(`${saved} фото загружено. Следующее фото можно снять или выбрать.`);
+    else renderPhotoReady(`${saved} фото сохранено. Продолжайте со следующего пункта.`);
   } catch (error) {
+    clearBatchSelection();
     renderPhotoReady(saved
-      ? `${saved} фото сохранено. Остальные не загрузились — можно продолжить с текущего пункта.`
-      : 'Фото не загрузились. Попробуйте выбрать их ещё раз.');
+      ? `${saved} фото сохранено. Продолжайте с текущего пункта.`
+      : 'Пачка не сохранилась. Попробуйте выбрать фотографии ещё раз.');
     toast(error.message, true);
   } finally {
     button.disabled = false;
@@ -790,12 +919,21 @@ $('#discardDraft').addEventListener('click', async () => {
 
 window.addEventListener('omg:navigation-back', (event) => {
   event.preventDefault();
+  if (!$('#batchReviewStage').hidden) {
+    renderBatchOrder();
+    return;
+  }
+  if (!$('#batchOrderStage').hidden) {
+    renderPhotoReady();
+    return;
+  }
   stopCamera();
   window.location.assign('/shift');
 });
 window.addEventListener('pagehide', () => {
   stopCamera();
   releaseReviewUrls();
+  releaseBatchReviewUrls();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && runtime.stream) {

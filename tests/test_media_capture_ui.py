@@ -28,11 +28,28 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="systemCamera"', html)
         self.assertIn('id="batchPhotos"', html)
         self.assertIn('id="cameraFileButton"', html)
+        self.assertIn('id="batchOrderStage"', html)
+        self.assertIn('id="batchQuestionList"', html)
+        self.assertIn('id="batchReviewStage"', html)
+        self.assertIn('id="batchReviewList"', html)
+        self.assertIn('id="batchReplaceInput"', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)
+        self.assertIn('function renderBatchOrder()', script)
+        self.assertIn('function renderBatchReview()', script)
+        self.assertIn("event.target.closest('[data-batch-move]')", script)
+        self.assertIn("event.target.closest('[data-batch-replace]')", script)
+        self.assertIn("$('#confirmBatchPhotos').addEventListener('click'", script)
         self.assertIn('await putPhoto(question.id, blob);', script)
         self.assertIn('files.length > remaining.length', script)
+        selection_handler = script.split("$('#batchPhotoInput').addEventListener", 1)[1]
+        selection_handler = selection_handler.split("$('#cancelBatchOrder').addEventListener", 1)[0]
+        self.assertNotIn('putPhoto(', selection_handler)
+        confirm_handler = script.split("$('#confirmBatchPhotos').addEventListener", 1)[1]
+        confirm_handler = confirm_handler.split("$('#photoReview').addEventListener", 1)[0]
+        self.assertIn('putPhoto(', confirm_handler)
+        self.assertIn('saveDraft();', confirm_handler)
 
 
 if __name__ == '__main__':

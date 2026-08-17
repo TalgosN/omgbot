@@ -263,6 +263,12 @@ function applyUrlFilters() {
   if (club && state.meta.clubs.includes(club)) $('#clubFilter').value = club;
 }
 
+function taskTypeBadgeClass(type) {
+  if (type === 'Ремонт') return 'repair';
+  if (type === 'Улучшение бота') return 'bot';
+  return 'general';
+}
+
 function selectedRepairLocations() {
   return [...document.querySelectorAll('#repairLocations input:checked')].map((input) => ({
     id: Number(input.value), name: input.dataset.name,
@@ -353,7 +359,7 @@ function renderList() {
   const tasks = state.tasks.filter((task) => (!club || task.club === club) && (!type || task.type === type));
   $('#problemList').innerHTML = tasks.length ? tasks.map((task) => `
     <button class="problem-card" type="button" data-id="${task.id}">
-      <div class="problem-card-badges"><span class="type-badge${task.type === 'Ремонт' ? ' repair' : ''}">${escapeHtml(task.type)}</span>${task.has_photo ? '<span class="media-badge photo">● Фото</span>' : ''}${task.has_video ? '<span class="media-badge video">● Видео</span>' : ''}</div>
+      <div class="problem-card-badges"><span class="type-badge ${taskTypeBadgeClass(task.type)}">${escapeHtml(task.type)}</span>${task.has_photo ? '<span class="media-badge photo">● Фото</span>' : ''}${task.has_video ? '<span class="media-badge video">● Видео</span>' : ''}</div>
       <h3>${escapeHtml(task.title)}</h3>
       <p>${escapeHtml(task.club)} · ${dateLabel(task.date)}</p>
     </button>

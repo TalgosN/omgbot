@@ -780,7 +780,9 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'class="media-badge photo"', problem_script.data)
             self.assertIn(b'class="media-badge video"', problem_script.data)
             self.assertIn(b"state.meta.clubs.includes(club)", problem_script.data)
-            self.assertIn(b"' repair'", problem_script.data)
+            self.assertIn(b"return 'repair'", problem_script.data)
+            self.assertIn(b"return 'bot'", problem_script.data)
+            self.assertIn(b"return 'general'", problem_script.data)
             self.assertNotIn('▧'.encode(), problem_script.data)
             self.assertNotIn('▶'.encode(), problem_script.data)
         finally:
