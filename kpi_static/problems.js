@@ -6,6 +6,7 @@ const state = {
   me: null, meta: null, status: 'work', tasks: [], selected: null,
   action: null, repairCatalog: null, migration: null, mappingTask: null,
   boardView: 'tasks', analyticsMode: 'month', analytics: null,
+  equipment: [], equipmentDetail: null, equipmentNeedsConfirmation: false,
   problemMedia: null, problemMediaUrl: null, problemCameraStream: null,
   problemRecorder: null, problemRecorderChunks: [], problemPressTimer: null,
   problemRecordingTimer: null, problemRecordingTimeout: null,
@@ -40,7 +41,11 @@ async function api(path, options = {}) {
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Ошибка сервера');
+  if (!response.ok) {
+    const error = new Error(payload.error || 'Ошибка сервера');
+    error.payload = payload;
+    throw error;
+  }
   return payload;
 }
 function toast(message, error = false) {
@@ -461,14 +466,133 @@ async function loadProblemAnalytics() {
   }
 }
 
+function renderEquipment() {
+  const club = $('#equipmentClub').value;
+  const itemId = Number($('#equipmentType').value) || null;
+  const query = $('#equipmentSearch').value.trim().toLowerCase();
+  const units = state.equipment.filter((unit) => {
+    const searchable = `${unit.item.name} ${unit.location.name} ${unit.club}`.toLowerCase();
+    return (!club || unit.club === club)
+      && (!itemId || unit.item.id === itemId)
+      && (!query || searchable.includes(query));
+  });
+  if (!units.length) {
+    $('#equipmentList').innerHTML = '<div class="empty-card">Подходящее оборудование не найдено.</div>';
+    return;
+  }
+  const groups = new Map();
+  units.forEach((unit) => {
+    const key = club ? unit.location.name : unit.club;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(unit);
+  });
+  $('#equipmentList').innerHTML = [...groups.entries()].map(([name, entries]) => `
+    <section class="equipment-group">
+      <header class="equipment-group-head"><h3>${escapeHtml(name)}</h3><span>${entries.length}</span></header>
+      <div class="equipment-group-grid">${entries.map((unit) => `
+        <button class="equipment-card" type="button" data-equipment-id="${unit.id}">
+          <div><strong>${escapeHtml(unit.item.name)}</strong><span>${escapeHtml(unit.location.name)} · поколение ${unit.generation}</span></div>
+          <footer><small>${unit.repair_count} ${unit.repair_count === 1 ? 'ремонт' : 'ремонтов'}${unit.last_repair ? ` · ${dateLabel(unit.last_repair)}` : ''}</small><b class="${unit.open_count ? 'attention' : ''}">${unit.open_count ? `Открыто: ${unit.open_count}` : 'Исправно'}</b></footer>
+        </button>
+      `).join('')}</div>
+    </section>
+  `).join('');
+}
+
+async function loadEquipment() {
+  $('#equipmentList').innerHTML = '<div class="empty-card">Загрузка…</div>';
+  try {
+    const payload = await api('/api/equipment');
+    state.equipment = payload.units;
+    const currentClub = $('#equipmentClub').value;
+    const currentType = $('#equipmentType').value;
+    $('#equipmentClub').innerHTML = `<option value="">Все клубы</option>${state.meta.clubs.map((club) => `<option value="${escapeHtml(club)}">${escapeHtml(club)}</option>`).join('')}`;
+    const itemTypes = [...new Map(state.equipment.map((unit) => [unit.item.id, unit.item])).values()]
+      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+    $('#equipmentType').innerHTML = `<option value="">Все устройства</option>${itemTypes.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('')}`;
+    $('#equipmentClub').value = currentClub;
+    $('#equipmentType').value = currentType;
+    renderEquipment();
+  } catch (error) {
+    $('#equipmentList').innerHTML = `<div class="empty-card">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderEquipmentDetail(unit) {
+  state.equipmentDetail = unit;
+  $('#equipmentDetailMeta').textContent = `${unit.club} · ${unit.location.name}`;
+  $('#equipmentDetailTitle').textContent = unit.item.name;
+  const generations = unit.generations.map((generation) => `
+    <span class="equipment-generation ${generation.active ? 'current' : ''}">
+      Поколение ${generation.generation}${generation.active ? ' · сейчас' : ''}
+    </span>
+  `).join('');
+  const replacementHistory = unit.replacements.length ? `
+    <section class="equipment-detail-section">
+      <h3>Замены</h3>
+      ${unit.replacements.map((entry) => `
+        <article class="equipment-timeline-entry">
+          <strong>Поколение ${entry.generation} → ${entry.replacement_generation}</strong>
+          <time>${dateTimeLabel(entry.event_at)}</time>
+          <span>${escapeHtml(entry.actor_name || entry.actor_login || 'Сотрудник')}${entry.message ? ` · ${escapeHtml(entry.message)}` : ''}</span>
+        </article>
+      `).join('')}
+    </section>` : '';
+  const repairHistory = unit.history.length ? unit.history.map((entry) => `
+    <button class="equipment-timeline-entry" type="button" data-equipment-task="${entry.task_id}">
+      <strong>Заявка №${entry.task_id} · поколение ${entry.generation}</strong>
+      <time>${dateLabel(entry.dtrep)}</time>
+      <span>${entry.detail_name ? `${escapeHtml(entry.detail_name)} · ` : ''}${escapeHtml(entry.status)}${entry.description ? `<br>${escapeHtml(entry.description)}` : ''}</span>
+    </button>
+  `).join('') : '<div class="empty-card">История ремонтов пока пуста.</div>';
+  $('#equipmentDetailContent').innerHTML = `
+    <section class="equipment-identity"><strong>${escapeHtml(unit.item.name)}</strong><span>${escapeHtml(unit.location.name)} · ${escapeHtml(unit.club)}</span></section>
+    <div class="equipment-generations">${generations}</div>
+    ${replacementHistory}
+    <section class="equipment-detail-section"><h3>Ремонты</h3>${repairHistory}</section>
+    ${unit.active ? '<button class="replace-equipment-button" type="button" data-replace-equipment>Заменено на новое</button>' : ''}
+  `;
+}
+
+async function openEquipment(unitId) {
+  try {
+    const unit = await api(`/api/equipment/${unitId}`);
+    renderEquipmentDetail(unit);
+    $('#equipmentDialog').showModal();
+  } catch (error) { toast(error.message, true); }
+}
+
+function openEquipmentReplacement() {
+  const unit = state.equipmentDetail;
+  if (!unit?.active) return;
+  state.equipmentNeedsConfirmation = unit.open_tasks.some((task) => task.location_count > 1);
+  $('#replaceEquipmentIdentity').textContent = `${unit.item.name} · ${unit.location.name}, ${unit.club}`;
+  const multiTasks = unit.open_tasks.filter((task) => task.location_count > 1);
+  $('#replaceEquipmentWarning').classList.toggle('hidden', !unit.open_tasks.length);
+  if (unit.open_tasks.length) {
+    $('#replaceEquipmentWarning').innerHTML = multiTasks.length
+      ? `<strong>Будут закрыты связанные заявки</strong>У ${multiTasks.length} ${multiTasks.length === 1 ? 'заявки указано несколько мест' : 'заявок указано несколько мест'}. Замена закроет такие заявки целиком.`
+      : `<strong>Будут закрыты связанные заявки</strong>Открытых заявок: ${unit.open_tasks.length}. После замены они перейдут в «Выполнено».`;
+  }
+  $('#replaceEquipmentMessage').value = '';
+  $('#replaceEquipmentSubmit').textContent = unit.open_tasks.length
+    ? 'Заменить и закрыть заявки' : 'Заменить на новое';
+  $('#replaceEquipmentDialog').showModal();
+}
+
 async function setBoardView(view) {
   state.boardView = view;
   $('#tasksView').classList.toggle('hidden', view !== 'tasks');
   $('#analyticsView').classList.toggle('hidden', view !== 'analytics');
+  $('#equipmentView').classList.toggle('hidden', view !== 'equipment');
+  $('#boardViewTabs').classList.toggle(
+    'hidden', !state.meta.can_view_analytics || view === 'equipment',
+  );
   document.querySelectorAll('#boardViewTabs button').forEach(
     (button) => button.classList.toggle('active', button.dataset.boardView === view),
   );
   if (view === 'analytics') await loadProblemAnalytics();
+  if (view === 'equipment') await loadEquipment();
 }
 
 async function loadTasks() {
@@ -604,6 +728,15 @@ $('#oldestProblem').addEventListener('click', () => {
 });
 $('#clubFilter').addEventListener('change', renderList);
 $('#typeFilter').addEventListener('change', renderList);
+$('#equipmentClub').addEventListener('change', renderEquipment);
+$('#equipmentType').addEventListener('change', renderEquipment);
+$('#equipmentSearch').addEventListener('input', renderEquipment);
+$('#equipmentMode').addEventListener('click', () => setBoardView('equipment'));
+$('#equipmentBack').addEventListener('click', () => setBoardView('tasks'));
+$('#equipmentList').addEventListener('click', (event) => {
+  const card = event.target.closest('[data-equipment-id]');
+  if (card) openEquipment(Number(card.dataset.equipmentId));
+});
 $('#problemList').addEventListener('click', (event) => {
   const card = event.target.closest('[data-id]');
   if (card) openTask(Number(card.dataset.id));
@@ -683,6 +816,7 @@ $('#createForm').addEventListener('submit', async (event) => {
     state.status = 'work';
     document.querySelectorAll('#problemTabs button').forEach((item) => item.classList.toggle('active', item.dataset.status === 'work'));
     if (state.boardView === 'analytics') await loadProblemAnalytics();
+    else if (state.boardView === 'equipment') await loadEquipment();
     else await loadTasks();
     toast('Проблема добавлена анонимно');
   } catch (error) { toast(error.message, true); }
@@ -708,6 +842,7 @@ $('#detailDialog').addEventListener('click', async (event) => {
       await api(`/api/problems/${state.selected.id}/confirm`, { method: 'POST' });
       $('#detailDialog').close();
       if (state.boardView === 'analytics') await loadProblemAnalytics();
+      else if (state.boardView === 'equipment') await loadEquipment();
       else await loadTasks();
       toast('Решение подтверждено');
     } catch (error) { toast(error.message, true); }
@@ -719,6 +854,48 @@ $('#detailDialog').addEventListener('click', async (event) => {
   $('#actionMessage').value = '';
   $('#messageSubmit').textContent = action === 'solution' ? 'Отправить на проверку' : 'Вернуть в работу';
   $('#messageDialog').showModal();
+});
+
+$('#equipmentDialog').addEventListener('click', async (event) => {
+  const task = event.target.closest('[data-equipment-task]');
+  if (task) {
+    $('#equipmentDialog').close();
+    await openTask(Number(task.dataset.equipmentTask));
+    return;
+  }
+  if (event.target.closest('[data-replace-equipment]')) openEquipmentReplacement();
+});
+
+$('#replaceEquipmentForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = event.submitter || $('#replaceEquipmentSubmit');
+  button.disabled = true;
+  try {
+    const result = await api(`/api/equipment/${state.equipmentDetail.id}/replace`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: $('#replaceEquipmentMessage').value,
+        close_multi_location_tasks: state.equipmentNeedsConfirmation,
+      }),
+    });
+    $('#replaceEquipmentDialog').close();
+    $('#equipmentDialog').close();
+    await loadEquipment();
+    toast(result.closed_task_count
+      ? `Устройство заменено · закрыто заявок: ${result.closed_task_count}`
+      : 'Устройство заменено');
+  } catch (error) {
+    if (error.payload?.requires_confirmation) {
+      state.equipmentNeedsConfirmation = true;
+      $('#replaceEquipmentWarning').classList.remove('hidden');
+      $('#replaceEquipmentWarning').innerHTML = '<strong>Нужно дополнительное подтверждение</strong>Появилась заявка сразу на несколько мест. Повторное нажатие закроет её целиком.';
+      $('#replaceEquipmentSubmit').textContent = 'Подтвердить замену и закрыть';
+    } else {
+      toast(error.message, true);
+    }
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#repairCatalog').addEventListener('click', async () => {
@@ -787,6 +964,7 @@ $('#messageForm').addEventListener('submit', async (event) => {
     $('#messageDialog').close();
     $('#detailDialog').close();
     if (state.boardView === 'analytics') await loadProblemAnalytics();
+    else if (state.boardView === 'equipment') await loadEquipment();
     else await loadTasks();
     toast(action === 'solution' ? 'Решение отправлено на проверку' : 'Проблема возвращена в работу');
   } catch (error) { toast(error.message, true); }
@@ -800,6 +978,7 @@ async function init() {
     renderFilters();
     applyUrlFilters();
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
+    $('#equipmentMode').classList.toggle('hidden', !state.meta.can_view_equipment);
     $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);
     const currentYear = new Date().getFullYear();
     const monthOptions = [];

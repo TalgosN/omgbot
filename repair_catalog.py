@@ -2,6 +2,8 @@ import re
 import sqlite3
 from datetime import datetime
 
+from task_analytics import record_task_event
+
 
 DEFAULT_ITEMS = (
     ('VR-шлем', ('левая линза', 'правая линза', 'маска')),
@@ -92,6 +94,33 @@ def initialize_repair_schema(db_path='db/omgbot.sql'):
                     canonical_task_id INTEGER REFERENCES tasks(ID),
                     reason TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS equipment_units (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    club TEXT NOT NULL,
+                    location_id INTEGER NOT NULL REFERENCES repair_locations(id),
+                    item_type_id INTEGER NOT NULL REFERENCES repair_item_types(id),
+                    generation INTEGER NOT NULL DEFAULT 1,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    retired_at TEXT,
+                    replaced_by_id INTEGER REFERENCES equipment_units(id),
+                    UNIQUE(club, location_id, item_type_id, generation)
+                );
+                CREATE TABLE IF NOT EXISTS equipment_unit_tasks (
+                    unit_id INTEGER NOT NULL REFERENCES equipment_units(id),
+                    task_id INTEGER NOT NULL REFERENCES repair_cases(task_id),
+                    PRIMARY KEY(unit_id, task_id)
+                );
+                CREATE TABLE IF NOT EXISTS equipment_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    unit_id INTEGER NOT NULL REFERENCES equipment_units(id),
+                    event_type TEXT NOT NULL,
+                    event_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    actor_login TEXT,
+                    actor_name TEXT,
+                    message TEXT,
+                    related_unit_id INTEGER REFERENCES equipment_units(id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_repair_cases_item
                     ON repair_cases(item_type_id, detail_id);
                 CREATE INDEX IF NOT EXISTS idx_repair_locations_club
@@ -100,10 +129,18 @@ def initialize_repair_schema(db_path='db/omgbot.sql'):
                     ON repair_case_locations(location_id, task_id);
                 CREATE INDEX IF NOT EXISTS idx_repair_events_task
                     ON repair_events(task_id, event_at, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_equipment_active_identity
+                    ON equipment_units(club, location_id, item_type_id)
+                    WHERE active=1;
+                CREATE INDEX IF NOT EXISTS idx_equipment_unit_tasks_task
+                    ON equipment_unit_tasks(task_id, unit_id);
+                CREATE INDEX IF NOT EXISTS idx_equipment_events_unit
+                    ON equipment_events(unit_id, event_at, id);
                 '''
             )
             _seed_catalog(conn)
             _migrate_legacy_repairs(conn)
+            _sync_equipment_units(conn)
     finally:
         conn.close()
 
@@ -384,6 +421,80 @@ def catalog_payload(db_path, club=None, include_inactive=False):
         conn.close()
 
 
+def _ensure_equipment_unit(conn, club, item_id, location_id, created_at=None):
+    unit = conn.execute(
+        '''SELECT id FROM equipment_units
+           WHERE club=? AND item_type_id=? AND location_id=? AND active=1''',
+        (club, item_id, location_id),
+    ).fetchone()
+    if unit:
+        return unit['id'] if isinstance(unit, sqlite3.Row) else unit[0]
+    generation = conn.execute(
+        '''SELECT COALESCE(MAX(generation), 0) + 1
+           FROM equipment_units
+           WHERE club=? AND item_type_id=? AND location_id=?''',
+        (club, item_id, location_id),
+    ).fetchone()[0]
+    event_at = created_at or datetime.now().isoformat(timespec='seconds')
+    cursor = conn.execute(
+        '''INSERT INTO equipment_units(
+               club, location_id, item_type_id, generation, created_at
+           ) VALUES (?, ?, ?, ?, ?)''',
+        (club, location_id, item_id, generation, event_at),
+    )
+    unit_id = cursor.lastrowid
+    conn.execute(
+        '''INSERT INTO equipment_events(unit_id, event_type, event_at)
+           VALUES (?, 'discovered', ?)''',
+        (unit_id, event_at),
+    )
+    return unit_id
+
+
+def _link_equipment_unit(conn, task_id, club, item_id, location_id, created_at=None):
+    unit_id = _ensure_equipment_unit(
+        conn, club, item_id, location_id, created_at=created_at,
+    )
+    conn.execute(
+        '''INSERT OR IGNORE INTO equipment_unit_tasks(unit_id, task_id)
+           VALUES (?, ?)''',
+        (unit_id, task_id),
+    )
+    return unit_id
+
+
+def _sync_equipment_units(conn):
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+    ).fetchone():
+        return
+    repairs = conn.execute(
+        '''SELECT tasks.ID task_id, tasks.club, tasks.dtrep,
+                  cases.item_type_id, locations.location_id
+           FROM repair_cases cases
+           JOIN tasks ON tasks.ID=cases.task_id
+           JOIN repair_case_locations locations ON locations.task_id=cases.task_id
+           LEFT JOIN equipment_unit_tasks equipment
+             ON equipment.task_id=tasks.ID
+            AND equipment.unit_id IN (
+                SELECT id FROM equipment_units
+                WHERE location_id=locations.location_id
+                  AND item_type_id=cases.item_type_id
+            )
+           WHERE equipment.task_id IS NULL
+           ORDER BY date(tasks.dtrep), tasks.ID'''
+    ).fetchall()
+    for repair in repairs:
+        _link_equipment_unit(
+            conn,
+            repair['task_id'],
+            repair['club'],
+            repair['item_type_id'],
+            repair['location_id'],
+            created_at=repair['dtrep'],
+        )
+
+
 def create_repair_case(conn, task_id, club, item_id, detail_id, location_ids):
     item = conn.execute(
         'SELECT id, name FROM repair_item_types WHERE id=? AND active=1',
@@ -421,6 +532,8 @@ def create_repair_case(conn, task_id, club, item_id, detail_id, location_ids):
         'INSERT INTO repair_case_locations(task_id, location_id) VALUES (?, ?)',
         ((task_id, location['id']) for location in locations),
     )
+    for location in locations:
+        _link_equipment_unit(conn, task_id, club, item_id, location['id'])
     conn.execute(
         '''INSERT INTO repair_events(task_id, event_type, event_at)
            VALUES (?, 'created', ?)''',
@@ -452,22 +565,26 @@ def repair_payload(conn, task_id):
            WHERE links.task_id=? ORDER BY locations.sort_order, locations.name''',
         (task_id,),
     ).fetchall()
+    units = conn.execute(
+        '''SELECT units.id, units.generation, units.active,
+                  locations.id location_id, locations.name location_name
+           FROM equipment_unit_tasks links
+           JOIN equipment_units units ON units.id=links.unit_id
+           JOIN repair_locations locations ON locations.id=units.location_id
+           WHERE links.task_id=?
+           ORDER BY locations.sort_order, locations.name''',
+        (task_id,),
+    ).fetchall()
     history = conn.execute(
         '''SELECT DISTINCT tasks.ID, tasks.dtrep, tasks.title, tasks.status,
                           tasks.dtfb, tasks.feedback
-           FROM repair_cases current_case
-           JOIN repair_case_locations current_location
-             ON current_location.task_id=current_case.task_id
-           JOIN repair_case_locations history_location
-             ON history_location.location_id=current_location.location_id
-           JOIN repair_cases history_case
-             ON history_case.task_id=history_location.task_id
-            AND history_case.item_type_id=current_case.item_type_id
-            AND COALESCE(history_case.detail_id, 0)=COALESCE(current_case.detail_id, 0)
-           JOIN tasks ON tasks.ID=history_case.task_id
+           FROM equipment_unit_tasks current_unit
+           JOIN equipment_unit_tasks history_unit
+             ON history_unit.unit_id=current_unit.unit_id
+           JOIN tasks ON tasks.ID=history_unit.task_id
            LEFT JOIN repair_migration_exclusions excluded
              ON excluded.task_id=tasks.ID
-           WHERE current_case.task_id=? AND excluded.task_id IS NULL
+           WHERE current_unit.task_id=? AND excluded.task_id IS NULL
            ORDER BY date(tasks.dtrep) DESC, tasks.ID DESC''',
         (task_id,),
     ).fetchall()
@@ -475,6 +592,15 @@ def repair_payload(conn, task_id):
         'item': {'id': case['item_id'], 'name': case['item_name']},
         'detail': ({'id': case['detail_id'], 'name': case['detail_name']} if case['detail_id'] else None),
         'locations': [dict(row) for row in locations],
+        'units': [
+            {
+                'id': row['id'], 'generation': row['generation'],
+                'active': bool(row['active']),
+                'location_id': row['location_id'],
+                'location_name': row['location_name'],
+            }
+            for row in units
+        ],
         'mapping_source': case['mapping_source'],
         'history': [
             {
@@ -501,6 +627,223 @@ def add_repair_event(conn, task_id, event_type, message=None):
            VALUES (?, ?, ?, ?)''',
         (task_id, event_type, datetime.now().isoformat(timespec='seconds'), message),
     )
+
+
+def equipment_list_payload(db_path):
+    initialize_repair_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            '''SELECT units.id, units.club, units.generation,
+                      items.id item_id, items.name item_name,
+                      locations.id location_id, locations.name location_name,
+                      locations.sort_order location_order,
+                      COUNT(DISTINCT links.task_id) repair_count,
+                      SUM(CASE WHEN tasks.status IN ('В работе', 'На проверке')
+                               THEN 1 ELSE 0 END) open_count,
+                      MAX(tasks.dtrep) last_repair
+               FROM equipment_units units
+               JOIN repair_item_types items ON items.id=units.item_type_id
+               JOIN repair_locations locations ON locations.id=units.location_id
+               LEFT JOIN equipment_unit_tasks links ON links.unit_id=units.id
+               LEFT JOIN tasks ON tasks.ID=links.task_id
+               WHERE units.active=1
+               GROUP BY units.id
+               ORDER BY units.club, locations.sort_order, locations.name,
+                        items.sort_order, items.name'''
+        ).fetchall()
+        return {
+            'units': [
+                {
+                    'id': row['id'], 'club': row['club'],
+                    'generation': row['generation'],
+                    'item': {'id': row['item_id'], 'name': row['item_name']},
+                    'location': {
+                        'id': row['location_id'], 'name': row['location_name'],
+                    },
+                    'repair_count': row['repair_count'],
+                    'open_count': row['open_count'],
+                    'last_repair': row['last_repair'],
+                }
+                for row in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+def equipment_payload(conn, unit_id):
+    unit = conn.execute(
+        '''SELECT units.id, units.club, units.generation, units.active,
+                  units.created_at, units.retired_at, units.replaced_by_id,
+                  units.location_id, locations.name location_name,
+                  units.item_type_id, items.name item_name
+           FROM equipment_units units
+           JOIN repair_locations locations ON locations.id=units.location_id
+           JOIN repair_item_types items ON items.id=units.item_type_id
+           WHERE units.id=?''',
+        (unit_id,),
+    ).fetchone()
+    if not unit:
+        return None
+    generations = conn.execute(
+        '''SELECT id, generation, active, created_at, retired_at, replaced_by_id
+           FROM equipment_units
+           WHERE club=? AND location_id=? AND item_type_id=?
+           ORDER BY generation DESC''',
+        (unit['club'], unit['location_id'], unit['item_type_id']),
+    ).fetchall()
+    history = conn.execute(
+        '''SELECT tasks.ID task_id, tasks.dtrep, tasks.dtfb, tasks.status,
+                  tasks.title, tasks.desc description, tasks.feedback,
+                  details.name detail_name, identity.id unit_id,
+                  identity.generation,
+                  (SELECT COUNT(*) FROM repair_case_locations places
+                   WHERE places.task_id=tasks.ID) location_count
+           FROM equipment_units identity
+           JOIN equipment_unit_tasks links ON links.unit_id=identity.id
+           JOIN tasks ON tasks.ID=links.task_id
+           JOIN repair_cases cases ON cases.task_id=tasks.ID
+           LEFT JOIN repair_item_details details ON details.id=cases.detail_id
+           WHERE identity.club=? AND identity.location_id=?
+             AND identity.item_type_id=?
+           ORDER BY date(tasks.dtrep) DESC, tasks.ID DESC''',
+        (unit['club'], unit['location_id'], unit['item_type_id']),
+    ).fetchall()
+    replacements = conn.execute(
+        '''SELECT events.event_at, events.actor_login, events.actor_name,
+                  events.message, units.generation,
+                  replacement.generation replacement_generation
+           FROM equipment_events events
+           JOIN equipment_units units ON units.id=events.unit_id
+           LEFT JOIN equipment_units replacement
+             ON replacement.id=events.related_unit_id
+           WHERE units.club=? AND units.location_id=?
+             AND units.item_type_id=? AND events.event_type='replaced'
+           ORDER BY events.event_at DESC, events.id DESC''',
+        (unit['club'], unit['location_id'], unit['item_type_id']),
+    ).fetchall()
+    return {
+        'id': unit['id'], 'club': unit['club'],
+        'generation': unit['generation'], 'active': bool(unit['active']),
+        'created_at': unit['created_at'], 'retired_at': unit['retired_at'],
+        'replaced_by_id': unit['replaced_by_id'],
+        'item': {'id': unit['item_type_id'], 'name': unit['item_name']},
+        'location': {'id': unit['location_id'], 'name': unit['location_name']},
+        'generations': [
+            {
+                'id': row['id'], 'generation': row['generation'],
+                'active': bool(row['active']), 'created_at': row['created_at'],
+                'retired_at': row['retired_at'],
+                'replaced_by_id': row['replaced_by_id'],
+            }
+            for row in generations
+        ],
+        'history': [dict(row) for row in history],
+        'replacements': [dict(row) for row in replacements],
+        'open_tasks': [
+            dict(row) for row in history
+            if row['unit_id'] == unit['id']
+            and row['status'] in {'В работе', 'На проверке'}
+        ],
+    }
+
+
+def replace_equipment_unit(
+    conn, unit_id, actor, message, close_multi_location_tasks,
+    event_at, feedback_entry,
+):
+    unit = conn.execute(
+        '''SELECT * FROM equipment_units WHERE id=? AND active=1''',
+        (unit_id,),
+    ).fetchone()
+    if not unit:
+        return None
+    open_tasks = conn.execute(
+        '''SELECT tasks.*,
+                  (SELECT COUNT(*) FROM repair_case_locations locations
+                   WHERE locations.task_id=tasks.ID) location_count
+           FROM equipment_unit_tasks links
+           JOIN tasks ON tasks.ID=links.task_id
+           WHERE links.unit_id=?
+             AND tasks.status IN ('В работе', 'На проверке')
+           ORDER BY tasks.ID''',
+        (unit_id,),
+    ).fetchall()
+    multi_location_tasks = [
+        {'id': row['ID'], 'title': row['title'], 'location_count': row['location_count']}
+        for row in open_tasks if row['location_count'] > 1
+    ]
+    if multi_location_tasks and not close_multi_location_tasks:
+        return {
+            'requires_confirmation': True,
+            'multi_location_tasks': multi_location_tasks,
+            'open_task_count': len(open_tasks),
+        }
+
+    conn.execute(
+        '''UPDATE equipment_units SET active=0, retired_at=? WHERE id=?''',
+        (event_at, unit_id),
+    )
+    cursor = conn.execute(
+        '''INSERT INTO equipment_units(
+               club, location_id, item_type_id, generation, created_at
+           ) VALUES (?, ?, ?, ?, ?)''',
+        (
+            unit['club'], unit['location_id'], unit['item_type_id'],
+            unit['generation'] + 1, event_at,
+        ),
+    )
+    replacement_id = cursor.lastrowid
+    conn.execute(
+        'UPDATE equipment_units SET replaced_by_id=? WHERE id=?',
+        (replacement_id, unit_id),
+    )
+    actor = actor or {}
+    conn.execute(
+        '''INSERT INTO equipment_events(
+               unit_id, event_type, event_at, actor_login, actor_name,
+               message, related_unit_id
+           ) VALUES (?, 'replaced', ?, ?, ?, ?, ?)''',
+        (
+            unit_id, event_at, actor.get('login'), actor.get('name'),
+            message or None, replacement_id,
+        ),
+    )
+    conn.execute(
+        '''INSERT INTO equipment_events(
+               unit_id, event_type, event_at, actor_login, actor_name,
+               message, related_unit_id
+           ) VALUES (?, 'installed', ?, ?, ?, ?, ?)''',
+        (
+            replacement_id, event_at, actor.get('login'), actor.get('name'),
+            message or None, unit_id,
+        ),
+    )
+
+    closed_tasks = []
+    for task in open_tasks:
+        feedback = str(task['feedback'] or '').strip()
+        feedback = f'{feedback}\n\n{feedback_entry}'.strip()
+        conn.execute(
+            '''UPDATE tasks SET status='Выполнено', feedback=?, dtfb=?
+               WHERE ID=? AND status IN ('В работе', 'На проверке')''',
+            (feedback, event_at[:10], task['ID']),
+        )
+        add_repair_event(
+            conn, task['ID'], 'confirmed', message or 'Оборудование заменено на новое',
+        )
+        record_task_event(
+            conn, task['ID'], 'confirmed', event_at=datetime.fromisoformat(event_at),
+            actor=actor,
+        )
+        closed_tasks.append(dict(task))
+    return {
+        'requires_confirmation': False,
+        'replacement_id': replacement_id,
+        'closed_tasks': closed_tasks,
+    }
 
 
 def migration_review_payload(db_path):

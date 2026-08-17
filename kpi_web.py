@@ -65,9 +65,12 @@ from repair_catalog import (
     add_repair_event,
     catalog_payload,
     create_repair_case,
+    equipment_list_payload,
+    equipment_payload,
     initialize_repair_schema,
     migration_review_payload,
     repair_payload,
+    replace_equipment_unit,
 )
 from shift_config_store import (
     ACTIONS as SHIFT_ACTIONS,
@@ -1716,12 +1719,40 @@ def _delete_problem_after_failed_video(task_id, db_path=DB_PATH):
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 )
             }
+            equipment_units = []
+            if 'equipment_unit_tasks' in tables:
+                equipment_units = [
+                    row[0] for row in conn.execute(
+                        'SELECT unit_id FROM equipment_unit_tasks WHERE task_id=?',
+                        (task_id,),
+                    )
+                ]
             for table in (
-                'repair_case_locations', 'repair_events', 'repair_cases',
-                'task_videos', 'task_events',
+                'equipment_unit_tasks', 'repair_case_locations', 'repair_events',
+                'repair_cases', 'task_videos', 'task_events',
             ):
                 if table in tables:
                     conn.execute(f'DELETE FROM {table} WHERE task_id=?', (task_id,))
+            for unit_id in equipment_units:
+                if not conn.execute(
+                    'SELECT 1 FROM equipment_unit_tasks WHERE unit_id=?', (unit_id,)
+                ).fetchone() and conn.execute(
+                    '''SELECT 1 FROM equipment_units units
+                       WHERE units.id=? AND units.generation=1
+                         AND units.replaced_by_id IS NULL
+                         AND NOT EXISTS (
+                             SELECT 1 FROM equipment_events events
+                             WHERE events.unit_id=units.id
+                               AND events.event_type!='discovered'
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM equipment_events events
+                             WHERE events.related_unit_id=units.id
+                         )''',
+                    (unit_id,),
+                ).fetchone():
+                    conn.execute('DELETE FROM equipment_events WHERE unit_id=?', (unit_id,))
+                    conn.execute('DELETE FROM equipment_units WHERE id=?', (unit_id,))
             conn.execute('DELETE FROM tasks WHERE ID=?', (task_id,))
     finally:
         conn.close()
@@ -2515,6 +2546,7 @@ def api_problems_meta():
         ],
         'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_view_analytics': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
+        'can_view_equipment': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
         'repair_clubs': list(ZONE_COUNTS),
     })
@@ -2543,6 +2575,72 @@ def api_repair_catalog():
         and int(g.kpi_user['status']) >= ROLE_MANAGER
     )
     return jsonify(catalog_payload(DB_PATH, club, include_inactive))
+
+
+@app.get('/api/equipment')
+@require_technician
+def api_equipment():
+    return jsonify(equipment_list_payload(DB_PATH))
+
+
+@app.get('/api/equipment/<int:unit_id>')
+@require_technician
+def api_equipment_unit(unit_id):
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        result = equipment_payload(conn, unit_id)
+    finally:
+        conn.close()
+    if not result:
+        return jsonify({'error': 'Оборудование не найдено.'}), 404
+    return jsonify(result)
+
+
+@app.post('/api/equipment/<int:unit_id>/replace')
+@require_technician
+def api_replace_equipment(unit_id):
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get('message') or '').strip()
+    if len(message) > 1000:
+        raise ValueError('Комментарий должен быть не длиннее 1000 символов')
+    close_multi_location_tasks = bool(payload.get('close_multi_location_tasks'))
+    actor = task_actor_snapshot(g.kpi_user)
+    current = datetime.now(ZoneInfo('Europe/Moscow'))
+    event_at = current.isoformat(timespec='seconds')
+    feedback_message = message or 'Оборудование заменено на новое'
+    feedback_entry = (
+        f'<b>[{current.strftime("%d.%m")}] Замена оборудования:</b> '
+        f'{html.escape(feedback_message)}'
+    )
+    initialize_repair_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            result = replace_equipment_unit(
+                conn,
+                unit_id,
+                actor,
+                message,
+                close_multi_location_tasks,
+                event_at,
+                feedback_entry,
+            )
+    finally:
+        conn.close()
+    if not result:
+        return jsonify({'error': 'Оборудование уже заменено или не найдено.'}), 409
+    if result.get('requires_confirmation'):
+        return jsonify(result), 409
+    closed_tasks = result.pop('closed_tasks', [])
+    result['closed_task_count'] = len(closed_tasks)
+    for task in closed_tasks:
+        _send_problem_notification(
+            'completed', task, message=feedback_message, actor=actor,
+        )
+    return jsonify(result)
 
 
 @app.post('/api/repairs/catalog/items')

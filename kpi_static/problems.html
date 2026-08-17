@@ -19,7 +19,7 @@
       <div class="problem-title"><p id="problemUserName" class="eyebrow">Команда OMG VR</p><h1>OMG TASKBOARD</h1></div>
       <div id="problemUserBadge" class="user-badge">Загрузка…</div>
     </header>
-    <div class="header-actions"><button id="newProblem" class="primary-button" type="button">+ Добавить</button><button id="repairCatalog" class="secondary-button hidden" type="button">Справочник</button></div>
+    <div class="header-actions"><button id="newProblem" class="primary-button" type="button">+ Добавить</button><button id="repairCatalog" class="secondary-button hidden" type="button">Справочник</button><button id="equipmentMode" class="secondary-button equipment-mode-button hidden" type="button">Оборудование</button></div>
 
     <section class="problem-intro">
       <p class="eyebrow">Обращения и ремонт</p>
@@ -88,6 +88,19 @@
         <div class="analytics-card-head"><h3>По клубам</h3><small>Сначала самые загруженные</small></div>
         <div id="analyticsClubs" class="analytics-breakdown"></div>
       </section>
+    </section>
+
+    <section id="equipmentView" class="equipment-view hidden">
+      <header class="equipment-heading">
+        <button id="equipmentBack" type="button">← Назад к заявкам</button>
+        <div><p class="eyebrow">История ремонтов</p><h2>Оборудование</h2></div>
+      </header>
+      <section class="equipment-filters">
+        <select id="equipmentClub"><option value="">Все клубы</option></select>
+        <select id="equipmentType"><option value="">Все устройства</option></select>
+        <input id="equipmentSearch" type="search" placeholder="Поиск по устройству или месту">
+      </section>
+      <section id="equipmentList" class="equipment-list"><div class="empty-card">Загрузка…</div></section>
     </section>
   </main>
 
@@ -162,6 +175,21 @@
       <div class="dialog-head"><h2 id="messageTitle">Решение</h2><button type="button" class="close-dialog">×</button></div>
       <textarea id="actionMessage" maxlength="1000" required rows="6"></textarea>
       <button id="messageSubmit" class="primary-button wide" type="submit">Отправить</button>
+    </form>
+  </dialog>
+
+  <dialog id="equipmentDialog" class="problem-dialog equipment-dialog">
+    <div class="dialog-head"><div><p id="equipmentDetailMeta" class="eyebrow"></p><h2 id="equipmentDetailTitle"></h2></div><button type="button" class="close-dialog">×</button></div>
+    <div id="equipmentDetailContent"></div>
+  </dialog>
+
+  <dialog id="replaceEquipmentDialog" class="problem-dialog small-dialog">
+    <form id="replaceEquipmentForm">
+      <div class="dialog-head"><div><p class="eyebrow">Новое поколение</p><h2>Заменить устройство</h2></div><button type="button" class="close-dialog">×</button></div>
+      <p id="replaceEquipmentIdentity" class="mapping-description"></p>
+      <section id="replaceEquipmentWarning" class="replacement-warning hidden"></section>
+      <label><span>Комментарий, необязательно</span><textarea id="replaceEquipmentMessage" maxlength="1000" rows="5" placeholder="Например, старое устройство списано"></textarea></label>
+      <button id="replaceEquipmentSubmit" class="primary-button wide" type="submit">Заменить на новое</button>
     </form>
   </dialog>
 

@@ -1159,6 +1159,31 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         build.assert_not_called()
 
+    def test_equipment_is_available_only_from_technician_role(self):
+        for role in (1, 2, 3):
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(role)),
+                patch.object(
+                    kpi_web, 'equipment_list_payload',
+                    return_value={'units': []},
+                ) as equipment,
+            ):
+                response = self.client.get('/api/equipment', headers=self.headers)
+
+            self.assertEqual(response.status_code, 200)
+            equipment.assert_called_once_with(kpi_web.DB_PATH)
+
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'equipment_list_payload') as equipment,
+        ):
+            response = self.client.get('/api/equipment', headers=self.headers)
+
+        self.assertEqual(response.status_code, 403)
+        equipment.assert_not_called()
+
     def test_mini_app_creates_anonymous_problem_in_shared_tasks_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'tasks.db'
@@ -1247,6 +1272,103 @@ class KpiWebTest(unittest.TestCase):
             detail_response.get_json()['activity'][0]['actor'],
             {'name': 'Тестер', 'login': '@tester'},
         )
+        notify.assert_called_once()
+
+    def test_equipment_replacement_confirms_multi_location_repairs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   )'''
+            )
+            conn.commit()
+            conn.close()
+            kpi_web.initialize_repair_schema(str(db_path))
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            item_id = conn.execute(
+                "SELECT id FROM repair_item_types WHERE name='VR-шлем'"
+            ).fetchone()[0]
+            location_ids = [
+                row[0] for row in conn.execute(
+                    '''SELECT id FROM repair_locations
+                       WHERE club='Марьино' AND name IN ('1 зона', '2 зона')
+                       ORDER BY name'''
+                )
+            ]
+            with conn:
+                cursor = conn.execute(
+                    '''INSERT INTO tasks(
+                           dtrep, type, club, title, desc, status
+                       ) VALUES (
+                           '2026-08-17', 'Ремонт', 'Марьино',
+                           'VR-шлем — 1–2 зоны', 'Не включается', 'В работе'
+                       )'''
+                )
+                kpi_web.create_repair_case(
+                    conn, cursor.lastrowid, 'Марьино', item_id, None, location_ids,
+                )
+            unit_id = conn.execute(
+                '''SELECT units.id FROM equipment_units units
+                   WHERE units.location_id=? AND units.item_type_id=?''',
+                (location_ids[0], item_id),
+            ).fetchone()[0]
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(1)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, '_send_problem_notification') as notify,
+            ):
+                equipment_list = self.client.get(
+                    '/api/equipment', headers=self.headers,
+                )
+                equipment_detail = self.client.get(
+                    f'/api/equipment/{unit_id}', headers=self.headers,
+                )
+                warning = self.client.post(
+                    f'/api/equipment/{unit_id}/replace',
+                    headers=self.headers,
+                    json={'message': 'Выдан новый шлем'},
+                )
+                replaced = self.client.post(
+                    f'/api/equipment/{unit_id}/replace',
+                    headers=self.headers,
+                    json={
+                        'message': 'Выдан новый шлем',
+                        'close_multi_location_tasks': True,
+                    },
+                )
+
+            conn = sqlite3.connect(db_path)
+            task = conn.execute(
+                'SELECT status, feedback FROM tasks WHERE ID=1'
+            ).fetchone()
+            generations = conn.execute(
+                '''SELECT generation, active FROM equipment_units
+                   WHERE location_id=? AND item_type_id=? ORDER BY generation''',
+                (location_ids[0], item_id),
+            ).fetchall()
+            conn.close()
+
+        self.assertEqual(equipment_list.status_code, 200)
+        self.assertEqual(len(equipment_list.get_json()['units']), 2)
+        self.assertEqual(equipment_detail.status_code, 200)
+        self.assertEqual(len(equipment_detail.get_json()['open_tasks']), 1)
+        self.assertEqual(warning.status_code, 409)
+        self.assertTrue(warning.get_json()['requires_confirmation'])
+        self.assertEqual(replaced.status_code, 200)
+        self.assertEqual(replaced.get_json()['closed_task_count'], 1)
+        self.assertEqual(task[0], 'Выполнено')
+        self.assertIn('Выдан новый шлем', task[1])
+        self.assertEqual(generations, [(1, 0), (2, 1)])
         notify.assert_called_once()
 
     def test_problem_video_is_stored_as_telegram_reference(self):
