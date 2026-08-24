@@ -24,6 +24,7 @@ class MediaCaptureUiTests(unittest.TestCase):
     def test_shift_report_offers_current_and_batch_photo_files(self):
         html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')
         script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
+        styles = (ROOT / 'kpi_static' / 'shift_test.css').read_text(encoding='utf-8')
 
         self.assertIn('id="systemCamera"', html)
         self.assertIn('id="batchPhotos"', html)
@@ -33,6 +34,10 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="batchReviewStage"', html)
         self.assertIn('id="batchReviewList"', html)
         self.assertIn('id="batchReplaceInput"', html)
+        self.assertIn('id="photoProcessing"', html)
+        self.assertIn('id="cameraSavingText"', html)
+        self.assertIn('/static/shift_test.css?v=20260824-1', html)
+        self.assertIn('/static/shift_test.js?v=20260824-1', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)
@@ -41,6 +46,10 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn("event.target.closest('[data-batch-move]')", script)
         self.assertIn("event.target.closest('[data-batch-replace]')", script)
         self.assertIn("$('#confirmBatchPhotos').addEventListener('click'", script)
+        self.assertIn(
+            '(!runtime.retakeQuestionId && runtime.draft.photo_index >= questions.length)',
+            script,
+        )
         self.assertIn('await putPhoto(question.id, blob);', script)
         self.assertIn('files.length > remaining.length', script)
         selection_handler = script.split("$('#batchPhotoInput').addEventListener", 1)[1]
@@ -50,6 +59,22 @@ class MediaCaptureUiTests(unittest.TestCase):
         confirm_handler = confirm_handler.split("$('#photoReview').addEventListener", 1)[0]
         self.assertIn('putPhoto(', confirm_handler)
         self.assertIn('saveDraft();', confirm_handler)
+        self.assertIn('tg.requestFullscreen();', script)
+        self.assertIn('tg?.disableVerticalSwipes?.()', script)
+        self.assertIn('tg?.enableVerticalSwipes?.()', script)
+        self.assertIn('setCameraFeedback(true, \'Фото сохранено · следующий пункт\'', script)
+        self.assertIn('setPhotoProcessing(true, \'Обрабатываем фотографию…\'', script)
+        self.assertIn('var(--tg-content-safe-area-inset-top,0px)', styles)
+
+    def test_review_answers_can_be_edited_individually(self):
+        html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')
+        script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
+
+        self.assertIn('id="questionSubmit"', html)
+        self.assertIn('data-edit-answer=', script)
+        self.assertIn("event.target.closest('[data-edit-answer]')", script)
+        self.assertIn("runtime.editingAnswerQuestionId = question.id;", script)
+        self.assertIn("$('#questionSubmit').textContent = editingIndex >= 0 ? 'Сохранить' : 'Далее';", script)
 
     def test_started_shift_draft_can_be_reset_without_creating_a_new_run(self):
         html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')

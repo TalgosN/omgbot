@@ -15,6 +15,7 @@ const runtime = {
   stream: null,
   capturing: false,
   retakeQuestionId: null,
+  editingAnswerQuestionId: null,
   reviewUrls: [],
   batchItems: [],
   batchReviewUrls: [],
@@ -26,6 +27,17 @@ tg?.ready();
 tg?.expand();
 tg?.setHeaderColor('#031b22');
 tg?.setBackgroundColor('#031b22');
+
+function requestAppFullscreen() {
+  tg?.expand();
+  if (!tg?.isFullscreen && typeof tg?.requestFullscreen === 'function') {
+    try { tg.requestFullscreen(); }
+    catch (_error) { tg.expand(); }
+  }
+}
+
+tg?.onEvent?.('fullscreenFailed', () => tg.expand());
+requestAppFullscreen();
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -39,6 +51,30 @@ function toast(message, error = false) {
   element.className = `test-toast visible${error ? ' error' : ''}`;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { element.className = 'test-toast'; }, 3200);
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function setCameraFeedback(visible, message = 'Сохраняем фотографию…', success = false) {
+  const stage = $('#cameraStage');
+  const feedback = $('#cameraSaving');
+  stage.classList.toggle('busy', visible);
+  feedback.hidden = !visible;
+  feedback.classList.toggle('success', visible && success);
+  $('#cameraSavingText').textContent = message;
+  $('#shutter').disabled = visible;
+}
+
+function setPhotoProcessing(visible, message = 'Обрабатываем фотографию…', success = false) {
+  const feedback = $('#photoProcessing');
+  feedback.hidden = !visible;
+  feedback.classList.toggle('success', visible && success);
+  $('#photoProcessingText').textContent = message;
+  document.querySelectorAll('.photo-source-actions button').forEach((button) => {
+    button.disabled = visible;
+  });
 }
 
 async function api(path, options = {}) {
@@ -219,16 +255,21 @@ function renderChecklist() {
 
 function renderQuestion() {
   const questions = textQuestions();
-  if (!questions.length || runtime.draft.text_index >= questions.length) {
+  const editingIndex = runtime.editingAnswerQuestionId
+    ? questions.findIndex((question) => question.id === runtime.editingAnswerQuestionId)
+    : -1;
+  if (!questions.length || (editingIndex < 0 && runtime.draft.text_index >= questions.length)) {
     startPhotoPhase();
     return;
   }
-  const index = Math.max(0, runtime.draft.text_index);
+  const index = editingIndex >= 0 ? editingIndex : Math.max(0, runtime.draft.text_index);
   const question = questions[index];
   runtime.draft.stage = 'questions';
   runtime.draft.text_index = index;
   saveDraft();
-  $('#questionProgress').textContent = `Вопрос ${index + 1} из ${questions.length}`;
+  $('#questionProgress').textContent = editingIndex >= 0
+    ? 'Изменение ответа'
+    : `Вопрос ${index + 1} из ${questions.length}`;
   $('#questionProgressBar').style.width = `${((index + 1) / questions.length) * 100}%`;
   $('#questionLabel').textContent = question.text;
   const input = $('#questionAnswer');
@@ -239,7 +280,10 @@ function renderQuestion() {
   $('#questionHint').textContent = question.type === 'num'
     ? 'Допустимы только цифры'
     : 'Ответ обязателен';
-  $('#previousQuestion').textContent = index ? 'Назад' : 'К списку';
+  $('#previousQuestion').textContent = editingIndex >= 0
+    ? 'К отчёту'
+    : index ? 'Назад' : 'К списку';
+  $('#questionSubmit').textContent = editingIndex >= 0 ? 'Сохранить' : 'Далее';
   setStage('questionStage');
   setTimeout(() => input.focus(), 80);
 }
@@ -256,7 +300,10 @@ function startPhotoPhase() {
 
 function renderPhotoReady(reason = '') {
   const questions = photoQuestions();
-  if (!questions.length || runtime.draft.photo_index >= questions.length) {
+  if (
+    !questions.length
+    || (!runtime.retakeQuestionId && runtime.draft.photo_index >= questions.length)
+  ) {
     renderReview();
     return;
   }
@@ -351,15 +398,19 @@ function stopCamera() {
   runtime.stream = null;
   $('#cameraView').srcObject = null;
   $('#cameraStage').hidden = true;
+  setCameraFeedback(false);
+  try { tg?.enableVerticalSwipes?.(); } catch (_error) { /* Older clients. */ }
 }
 
 async function openCamera() {
+  requestAppFullscreen();
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     $('#systemCamera').hidden = false;
     renderPhotoReady('Встроенная камера недоступна. Выберите фото с телефона.');
     return;
   }
   $('#openCamera').disabled = true;
+  try { tg?.disableVerticalSwipes?.(); } catch (_error) { /* Older clients. */ }
   try {
     runtime.stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -417,17 +468,19 @@ async function capturePhoto() {
     return;
   }
   runtime.capturing = true;
-  $('#shutter').disabled = true;
-  $('#cameraSaving').hidden = false;
+  setCameraFeedback(true, 'Сохраняем фотографию…');
   try {
     const blob = await jpegFromSource(video, video.videoWidth, video.videoHeight);
-    await saveCapturedPhoto(blob);
+    const outcome = await saveCapturedPhoto(blob);
+    if (outcome === 'camera') {
+      setCameraFeedback(true, 'Фото сохранено · следующий пункт', true);
+      await wait(700);
+    }
   } catch (error) {
     toast(error.message, true);
   } finally {
     runtime.capturing = false;
-    $('#shutter').disabled = false;
-    $('#cameraSaving').hidden = true;
+    setCameraFeedback(false);
   }
 }
 
@@ -488,7 +541,7 @@ async function saveCapturedPhoto(blob) {
     stopCamera();
     saveDraft();
     await renderReview();
-    return;
+    return 'review';
   }
 
   if (!runtime.draft.photo_ids.includes(question.id)) {
@@ -499,10 +552,13 @@ async function saveCapturedPhoto(blob) {
   if (runtime.draft.photo_index >= questions.length) {
     stopCamera();
     await renderReview();
+    return 'review';
   } else if (runtime.stream) {
     updateCameraInstruction();
+    return 'camera';
   } else {
     renderPhotoReady();
+    return 'photo';
   }
 }
 
@@ -513,14 +569,18 @@ function releaseReviewUrls() {
 
 async function renderReview() {
   stopCamera();
+  runtime.editingAnswerQuestionId = null;
   runtime.draft.stage = 'review';
   saveDraft();
   const questions = textQuestions();
   $('#answerReview').innerHTML = questions.length
     ? questions.map((question) => `
-      <article><span>${escapeHtml(question.text)}</span><strong>${escapeHtml(runtime.draft.answers[question.id] || '—')}</strong></article>
+      <article>
+        <div class="answer-review-copy"><span>${escapeHtml(question.text)}</span><strong>${escapeHtml(runtime.draft.answers[question.id] || '—')}</strong></div>
+        <button type="button" data-edit-answer="${question.id}">Изменить</button>
+      </article>
     `).join('')
-    : '<article><span>Текстовых вопросов нет</span><strong>Можно отправлять фотографии</strong></article>';
+    : '<article><div class="answer-review-copy"><span>Текстовых вопросов нет</span><strong>Можно отправлять фотографии</strong></div></article>';
   $('#editAnswers').hidden = !questions.length;
 
   releaseReviewUrls();
@@ -736,12 +796,23 @@ $('#questionForm').addEventListener('submit', (event) => {
     return;
   }
   runtime.draft.answers[question.id] = value;
+  if (runtime.editingAnswerQuestionId) {
+    runtime.editingAnswerQuestionId = null;
+    saveDraft();
+    renderReview();
+    return;
+  }
   runtime.draft.text_index += 1;
   saveDraft();
   renderQuestion();
 });
 
 $('#previousQuestion').addEventListener('click', () => {
+  if (runtime.editingAnswerQuestionId) {
+    runtime.editingAnswerQuestionId = null;
+    renderReview();
+    return;
+  }
   if (runtime.draft.text_index > 0) {
     runtime.draft.text_index -= 1;
     renderQuestion();
@@ -762,14 +833,26 @@ $('#systemPhoto').addEventListener('change', async (event) => {
   const file = event.target.files[0];
   event.target.value = '';
   if (!file) return;
-  $('#systemCamera').disabled = true;
+  const cameraVisible = Boolean(runtime.stream && !$('#cameraStage').hidden);
+  if (cameraVisible) setCameraFeedback(true, 'Обрабатываем фотографию…');
+  else setPhotoProcessing(true, 'Обрабатываем фотографию…');
   try {
     const blob = await compressSystemPhoto(file);
-    await saveCapturedPhoto(blob);
+    const outcome = await saveCapturedPhoto(blob);
+    if (outcome === 'camera') {
+      setCameraFeedback(true, 'Фото сохранено · следующий пункт', true);
+      await wait(700);
+    } else if (outcome === 'photo') {
+      setPhotoProcessing(true, 'Фото сохранено · следующий пункт', true);
+      await wait(700);
+    } else {
+      toast('Фотография заменена');
+    }
   } catch (error) {
     toast(error.message, true);
   } finally {
-    $('#systemCamera').disabled = false;
+    setCameraFeedback(false);
+    setPhotoProcessing(false);
   }
 });
 
@@ -892,7 +975,20 @@ $('#photoReview').addEventListener('click', (event) => {
   renderPhotoReady();
 });
 
+$('#answerReview').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-edit-answer]');
+  if (!button) return;
+  const question = textQuestions().find((item) => item.id === button.dataset.editAnswer);
+  if (!question) {
+    toast('Не удалось найти выбранный вопрос', true);
+    return;
+  }
+  runtime.editingAnswerQuestionId = question.id;
+  renderQuestion();
+});
+
 $('#editAnswers').addEventListener('click', () => {
+  runtime.editingAnswerQuestionId = null;
   runtime.draft.text_index = 0;
   renderQuestion();
 });

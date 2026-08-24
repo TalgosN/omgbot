@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
-  <link rel="stylesheet" href="/static/shift_test.css">
+  <link rel="stylesheet" href="/static/shift_test.css?v=20260824-1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -68,7 +68,7 @@
         <small id="questionHint"></small>
         <div class="form-actions">
           <button id="previousQuestion" type="button">Назад</button>
-          <button class="primary-button" type="submit">Далее</button>
+          <button id="questionSubmit" class="primary-button" type="submit">Далее</button>
         </div>
       </form>
     </section>
@@ -85,6 +85,9 @@
         <button id="openCamera" class="primary-button" type="button">Открыть камеру</button>
         <button id="systemCamera" class="secondary-button" type="button">Выбрать фото для этого пункта</button>
         <button id="batchPhotos" class="secondary-button batch-button" type="button">Загрузить несколько фото</button>
+      </div>
+      <div id="photoProcessing" class="photo-processing" role="status" aria-live="polite" hidden>
+        <i></i><strong id="photoProcessingText">Обрабатываем фотографию…</strong>
       </div>
     </section>
 
@@ -148,7 +151,9 @@
     </div>
     <button id="closeCamera" class="close-camera" type="button" aria-label="Закрыть камеру">×</button>
     <button id="cameraFileButton" class="camera-file-button" type="button">Выбрать фото</button>
-    <div id="cameraSaving" class="camera-saving" hidden>Сохраняем…</div>
+    <div id="cameraSaving" class="camera-saving" role="status" aria-live="polite" hidden>
+      <i></i><strong id="cameraSavingText">Сохраняем фотографию…</strong>
+    </div>
     <div class="camera-controls">
       <span>Сфотографировать</span>
       <button id="shutter" class="shutter" type="button" aria-label="Сделать фотографию"><i></i></button>
@@ -179,7 +184,7 @@
   <input id="batchPhotoInput" type="file" accept="image/*" multiple hidden>
   <input id="batchReplaceInput" type="file" accept="image/*" hidden>
   <div id="testToast" class="test-toast" role="status"></div>
-  <script src="/static/shift_test.js"></script>
+  <script src="/static/shift_test.js?v=20260824-1"></script>
   <script src="/static/swipe_navigation.js"></script>
 </body>
 </html>
