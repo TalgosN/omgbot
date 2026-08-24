@@ -91,6 +91,8 @@ from task_notifications import (
 )
 from task_analytics import (
     build_task_analytics,
+    build_task_report,
+    format_task_report_text,
     initialize_task_analytics_schema,
     record_task_event,
     task_activity_payload,
@@ -274,6 +276,118 @@ def _kpi_export_workbook(rows, month):
     sheet.page_setup.fitToWidth = 1
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     return workbook
+
+
+def _task_report_workbook(report):
+    workbook = Workbook()
+    summary_sheet = workbook.active
+    summary_sheet.title = 'Сводка'
+    summary_sheet.sheet_view.showGridLines = False
+    summary_sheet.merge_cells('A1:B1')
+    summary_sheet['A1'] = 'Доска проблем OMG VR'
+    summary_sheet['A2'] = 'Период'
+    summary_sheet['B2'] = report['period']['label']
+    summary_sheet['A3'] = 'Сформировано'
+    summary_sheet['B3'] = datetime.fromisoformat(
+        report['generated_at']
+    ).strftime('%d.%m.%Y %H:%M')
+    summary_rows = (
+        ('Создано за период', report['summary']['created']),
+        ('Выполнено за период', report['summary']['completed']),
+        ('Сейчас в работе', report['summary']['work']),
+        ('На проверке', report['summary']['review']),
+        ('Всего незакрытых', report['summary']['open']),
+    )
+    for row_number, values in enumerate(summary_rows, start=5):
+        summary_sheet.cell(row=row_number, column=1, value=values[0])
+        summary_sheet.cell(row=row_number, column=2, value=values[1])
+    club_start = 11
+    summary_sheet.cell(row=club_start, column=1, value='Незакрытые по клубам')
+    summary_sheet.cell(row=club_start, column=2, value='Количество')
+    for row_number, club in enumerate(report['clubs'], start=club_start + 1):
+        summary_sheet.cell(row=row_number, column=1, value=club['label'])
+        summary_sheet.cell(row=row_number, column=2, value=club['open'])
+
+    purple = PatternFill('solid', fgColor='7030A0')
+    pale_purple = PatternFill('solid', fgColor='EADCF3')
+    thin = Side(style='thin', color='D7C6E1')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    summary_sheet['A1'].fill = purple
+    summary_sheet['A1'].font = Font(color='FFFFFF', bold=True, size=16)
+    summary_sheet['A1'].alignment = Alignment(horizontal='center')
+    for row in range(2, 10):
+        for column in range(1, 3):
+            cell = summary_sheet.cell(row=row, column=column)
+            cell.border = border
+            if column == 1:
+                cell.font = Font(bold=True)
+    for cell in summary_sheet[club_start]:
+        cell.fill = purple
+        cell.font = Font(color='FFFFFF', bold=True)
+    for row in range(club_start + 1, club_start + 1 + len(report['clubs'])):
+        for cell in summary_sheet[row]:
+            cell.border = border
+    summary_sheet.column_dimensions['A'].width = 30
+    summary_sheet.column_dimensions['B'].width = 22
+
+    tasks_sheet = workbook.create_sheet('Заявки')
+    tasks_sheet.sheet_view.showGridLines = False
+    tasks_sheet.freeze_panes = 'A2'
+    headers = (
+        'ID', 'Создано', 'Закрыто', 'Клуб', 'Тип', 'Название', 'Описание',
+        'Статус', 'Дней', 'Попало в отчёт', 'История решения',
+    )
+    tasks_sheet.append(headers)
+    for cell in tasks_sheet[1]:
+        cell.fill = purple
+        cell.font = Font(color='FFFFFF', bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border
+    for task in report['rows']:
+        reasons = []
+        if task['is_backlog']:
+            reasons.append('незакрыта')
+        if task['created_in_period']:
+            reasons.append('создана за период')
+        if task['completed_in_period']:
+            reasons.append('выполнена за период')
+        feedback = html.unescape(re.sub(r'<[^>]+>', '', task['feedback']))
+        tasks_sheet.append((
+            task['id'],
+            _display_date(task['date']),
+            _display_date(task['closed_at']),
+            task['club'],
+            task['type'],
+            task['title'],
+            task['description'][:32000],
+            task['status'],
+            task['age_days'],
+            ', '.join(reasons),
+            feedback[:32000],
+        ))
+    for row in tasks_sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+        if row[7].value in {'В работе', 'На проверке'}:
+            for cell in row:
+                cell.fill = pale_purple
+    widths = (8, 13, 13, 18, 22, 35, 50, 16, 10, 26, 50)
+    for column, width in enumerate(widths, start=1):
+        tasks_sheet.column_dimensions[
+            tasks_sheet.cell(row=1, column=column).column_letter
+        ].width = width
+    tasks_sheet.auto_filter.ref = f'A1:K{max(tasks_sheet.max_row, 1)}'
+    tasks_sheet.row_dimensions[1].height = 28
+    return workbook
+
+
+def _display_date(value):
+    parsed = str(value or '').split('T', 1)[0]
+    try:
+        return datetime.strptime(parsed, '%Y-%m-%d').strftime('%d.%m.%Y')
+    except ValueError:
+        return ''
 
 
 def _shift_month(month, offset):
@@ -2668,6 +2782,7 @@ def api_problems_meta():
         ],
         'can_process': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_view_analytics': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
+        'can_export_analytics': int(g.kpi_user['status']) >= ROLE_MANAGER,
         'can_view_equipment': int(g.kpi_user['status']) >= ROLE_TECHNICIAN,
         'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
         'repair_clubs': list(ZONE_COUNTS),
@@ -2684,6 +2799,58 @@ def api_problem_analytics():
         month=request.args.get('month'),
         year=request.args.get('year'),
     ))
+
+
+def _problem_report_from_request():
+    return build_task_report(
+        DB_PATH,
+        mode=str(request.args.get('mode') or 'month').strip().lower(),
+        month=request.args.get('month'),
+        year=request.args.get('year'),
+    )
+
+
+@app.get('/api/problems/export/text')
+@require_manager
+def api_problem_report_text():
+    return (
+        format_task_report_text(_problem_report_from_request()),
+        200,
+        {'Content-Type': 'text/plain; charset=utf-8'},
+    )
+
+
+@app.post('/api/problems/export/excel')
+@require_manager
+def api_problem_report_excel():
+    report = _problem_report_from_request()
+    workbook = _task_report_workbook(report)
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    period = (
+        report['period']['value']
+        if report['period']['mode'] != 'all' else 'all'
+    )
+    filename = f'Taskboard_{period}.xlsx'
+    output.name = filename
+    bot = _notification_bot()
+    if not bot:
+        output.close()
+        return jsonify({'error': 'Telegram-бот временно недоступен.'}), 503
+    try:
+        bot.send_document(
+            g.kpi_user['chatid'],
+            output,
+            caption=f"🚩 Доска проблем · {report['period']['label']}",
+        )
+    except Exception as error:
+        print(f'Ошибка отправки Excel Taskboard в Telegram: {error}')
+        return jsonify({'error': 'Не удалось отправить Excel в чат с ботом.'}), 502
+    finally:
+        output.close()
+    return jsonify({'sent': True, 'filename': filename})
 
 
 @app.get('/api/repairs/catalog')
@@ -3371,7 +3538,7 @@ def api_kpi():
     return jsonify(payload)
 
 
-@app.get('/api/kpi/export')
+@app.post('/api/kpi/export')
 @require_manager
 def api_kpi_export():
     month = _validate_month(
@@ -3394,15 +3561,28 @@ def api_kpi_export():
     workbook.save(output)
     workbook.close()
     output.seek(0)
-    return send_file(
-        output,
-        mimetype=(
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        ),
-        as_attachment=True,
-        download_name=f'KPI_{month[:7]}.xlsx',
-        max_age=0,
-    )
+    filename = f'KPI_{month[:7]}.xlsx'
+    output.name = filename
+    bot = _notification_bot()
+    if not bot:
+        output.close()
+        return jsonify({'error': 'Telegram-бот временно недоступен.'}), 503
+    try:
+        bot.send_document(
+            g.kpi_user['chatid'],
+            output,
+            caption=(
+                f'📊 KPI за '
+                f'{KPI_EXPORT_MONTH_NAMES[month_start.month - 1]} '
+                f'{month_start.year}'
+            ),
+        )
+    except Exception as error:
+        print(f'Ошибка отправки Excel KPI в Telegram: {error}')
+        return jsonify({'error': 'Не удалось отправить Excel в чат с ботом.'}), 502
+    finally:
+        output.close()
+    return jsonify({'sent': True, 'filename': filename})
 
 
 @app.get('/api/kpi/details')

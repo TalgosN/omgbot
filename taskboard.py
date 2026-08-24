@@ -1,10 +1,13 @@
 from telebot import *
 from constants import *
+from html import escape
+import io
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
 from permissions import (
     ROLE_EMPLOYEE,
+    ROLE_MANAGER,
     ROLE_TECHNICIAN,
     get_user,
     require_role,
@@ -25,6 +28,12 @@ from task_analytics import (
 
 TASK_DB_PATH = 'db/omgbot.sql'
 TASK_REVIEW_DAYS = 14
+READONLY_TASK_PAGE_SIZE = 30
+READONLY_TASK_STATUSES = {
+    'work': ('В работе',),
+    'review': ('На проверке',),
+    'done': ('Выполнено', 'Архив'),
+}
 
 
 def _task_mentions(task_type, club):
@@ -93,6 +102,160 @@ def _task_type_fill(task_type):
     if task_type == GENERAL_TASK_TYPE:
         return 'обращения'
     return TEXTS['messtype_fill'][task_type]
+
+
+def _readonly_webapp_markup():
+    from menu import _webapp_url
+
+    markup = types.InlineKeyboardMarkup()
+    problems_url = _webapp_url('problems')
+    if problems_url:
+        markup.add(types.InlineKeyboardButton(
+            '🚩 Открыть в приложении',
+            web_app=types.WebAppInfo(problems_url),
+        ))
+    return markup
+
+
+def _readonly_task_rows(status_key, page):
+    statuses = READONLY_TASK_STATUSES[status_key]
+    placeholders = ','.join('?' for _status in statuses)
+    direction = 'DESC' if status_key == 'done' else 'ASC'
+    conn = sqlite3.connect(TASK_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        counts = {
+            key: conn.execute(
+                f"SELECT COUNT(*) FROM tasks WHERE status IN ({','.join('?' for _item in values)})",
+                values,
+            ).fetchone()[0]
+            for key, values in READONLY_TASK_STATUSES.items()
+        }
+        total = counts[status_key]
+        max_page = max((total - 1) // READONLY_TASK_PAGE_SIZE, 0)
+        page = min(max(page, 0), max_page)
+        rows = conn.execute(
+            f'''SELECT ID, dtrep, type, club, title, photo, desc, status,
+                       dtfb, feedback
+                FROM tasks WHERE status IN ({placeholders})
+                ORDER BY date(dtrep) {direction}, ID {direction}
+                LIMIT ? OFFSET ?''',
+            (*statuses, READONLY_TASK_PAGE_SIZE, page * READONLY_TASK_PAGE_SIZE),
+        ).fetchall()
+    finally:
+        conn.close()
+    return rows, counts, page, max_page
+
+
+def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if status_key not in READONLY_TASK_STATUSES:
+        status_key = 'work'
+    rows, counts, page, max_page = _readonly_task_rows(status_key, page)
+    labels = {'work': 'В работе', 'review': 'На проверке', 'done': 'Выполнено'}
+    text_lines = [f"<b>🚩 {labels[status_key]}</b>"]
+    current_club = None
+    for task in rows:
+        club = str(task['club'] or 'Без клуба')
+        if club != current_club:
+            current_club = club
+            text_lines.extend(('', f'<b>{escape(club)}</b>'))
+        text_lines.append(f"#{task['ID']} {escape(str(task['title'] or 'Без названия'))}")
+    if not rows:
+        text_lines.extend(('', 'Заявок в этом разделе нет.'))
+    if max_page:
+        text_lines.extend(('', f'Страница {page + 1} из {max_page + 1}'))
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.row(*[
+        types.InlineKeyboardButton(
+            f"{labels[key]} · {counts[key]}",
+            callback_data=f'readonly_tasks:{key}:0',
+        )
+        for key in ('work', 'review', 'done')
+    ])
+    task_buttons = [
+        types.InlineKeyboardButton(
+            f"#{task['ID']} · {str(task['title'] or 'Без названия')[:20]}",
+            callback_data=f"readonly_task:{task['ID']}:{status_key}:{page}",
+        )
+        for task in rows
+    ]
+    for index in range(0, len(task_buttons), 2):
+        markup.row(*task_buttons[index:index + 2])
+    navigation = []
+    if page > 0:
+        navigation.append(types.InlineKeyboardButton(
+            '← Назад', callback_data=f'readonly_tasks:{status_key}:{page - 1}',
+        ))
+    if page < max_page:
+        navigation.append(types.InlineKeyboardButton(
+            'Дальше →', callback_data=f'readonly_tasks:{status_key}:{page + 1}',
+        ))
+    if navigation:
+        markup.row(*navigation)
+    markup.row(types.InlineKeyboardButton(
+        'Закрыть просмотр', callback_data='readonly_tasks:close',
+    ))
+    text = '\n'.join(text_lines)
+    if edit:
+        try:
+            bot.edit_message_text(
+                text,
+                message.chat.id,
+                message.id,
+                reply_markup=markup,
+                parse_mode='HTML',
+            )
+            return
+        except Exception:
+            pass
+    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
+
+
+def show_readonly_task_detail(message, bot, task_id):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    conn = sqlite3.connect(TASK_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        task = conn.execute(
+            '''SELECT ID, dtrep, type, club, title, photo, desc, status,
+                      dtfb, feedback FROM tasks WHERE ID=?''',
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not task:
+        bot.send_message(message.chat.id, 'Заявка не найдена или уже удалена.')
+        return
+    detail = (
+        f"🚩 #{task['ID']} · {task['title'] or 'Без названия'}\n\n"
+        f"Тип: {task['type'] or '—'}\n"
+        f"Клуб: {task['club'] or '—'}\n"
+        f"Статус: {task['status'] or '—'}\n"
+        f"Создано: {task['dtrep'] or '—'}\n"
+        f"Закрыто: {task['dtfb'] or '—'}\n\n"
+        f"Описание:\n{task['desc'] or '—'}\n\n"
+        f"История решения:\n{task['feedback'] or 'Пока нет'}"
+    )
+    markup = _readonly_webapp_markup()
+    if task['photo'] is not None:
+        photo = io.BytesIO(task['photo'])
+        photo.name = f"problem_{task['ID']}.jpg"
+        bot.send_photo(
+            message.chat.id,
+            photo=photo,
+            caption=detail[:1024],
+            reply_markup=markup,
+        )
+    else:
+        bot.send_message(
+            message.chat.id,
+            detail[:4096],
+            reply_markup=markup,
+        )
 
 ##### taskdesk
 
@@ -874,6 +1037,40 @@ def show_done_tasks(message, page, bot):
     text = "\n".join(list_title)
     bot.send_message(message.chat.id, f'Вот список выполненных проблем:\n\n{text}', reply_markup=markup)
     bot.send_message(message.chat.id, 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"', reply_markup=types.ReplyKeyboardRemove())
+
+def register_readonly_callback(bot):
+    @bot.callback_query_handler(
+        func=lambda call: str(call.data or '').startswith('readonly_')
+    )
+    def readonly_callback(call):
+        if not require_role(call, bot, ROLE_MANAGER):
+            return
+        bot.answer_callback_query(call.id)
+        if call.data == 'readonly_tasks:close':
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.id,
+                reply_markup=None,
+            )
+            return
+        if call.data.startswith('readonly_task:'):
+            try:
+                task_id = int(call.data.split(':', 3)[1])
+            except (IndexError, ValueError):
+                bot.send_message(call.message.chat.id, 'Не удалось открыть заявку.')
+                return
+            show_readonly_task_detail(call.message, bot, task_id)
+            return
+        parts = call.data.split(':')
+        status_key = parts[1] if len(parts) > 1 else 'work'
+        try:
+            page = int(parts[2]) if len(parts) > 2 else 0
+        except ValueError:
+            page = 0
+        show_readonly_tasks(
+            call.message, bot, status_key=status_key, page=page, edit=True,
+        )
+
 
 def register_callback(bot):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('all_'))

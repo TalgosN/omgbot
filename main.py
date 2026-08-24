@@ -883,9 +883,10 @@ def today_sched():
 ############################# core taskboard
 
 ###### start
-from taskboard import register_callback,register_callback2
+from taskboard import register_callback, register_callback2, register_readonly_callback
 register_callback (bot)
 register_callback2 (bot)
+register_readonly_callback(bot)
 
 from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)

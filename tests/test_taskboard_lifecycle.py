@@ -22,6 +22,7 @@ def load_taskboard_module():
     }
     permissions = types.ModuleType('permissions')
     permissions.ROLE_EMPLOYEE = 0
+    permissions.ROLE_MANAGER = 2
     permissions.ROLE_TECHNICIAN = 1
     permissions.require_role = lambda *_args: True
     permissions.role_of = lambda *_args: 0

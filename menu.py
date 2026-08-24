@@ -84,6 +84,12 @@ def open_problems_app(message, bot):
         '🚩 Открыть Доску проблем',
         web_app=telebot.types.WebAppInfo(problems_url),
     ))
+    user = get_user(message)
+    if user and int(user['status']) >= ROLE_MANAGER:
+        markup.add(telebot.types.InlineKeyboardButton(
+            '📋 Быстрый просмотр в боте',
+            callback_data='readonly_tasks:work',
+        ))
     bot.send_message(
         message.chat.id,
         'Доска проблем:',

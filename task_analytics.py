@@ -15,6 +15,10 @@ MOSCOW = ZoneInfo('Europe/Moscow')
 EVENT_TYPES = {'created', 'solution', 'returned', 'confirmed'}
 STATUS_LABELS = ('В работе', 'На проверке', 'Выполнено')
 TYPE_ORDER = (REPAIR_TASK_TYPE, GENERAL_TASK_TYPE, BOT_TASK_TYPE)
+REPORT_MONTH_NAMES = (
+    'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+    'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+)
 
 
 def _create_schema(conn):
@@ -377,3 +381,158 @@ def build_task_analytics(db_path, mode='month', month=None, year=None, now=None)
         'oldest_open': oldest,
         'trend': trend,
     }
+
+
+def _in_period(value, start, end):
+    if value is None:
+        return False
+    return start is None or start <= value < end
+
+
+def _report_period_label(mode, start, year):
+    if mode == 'month':
+        return f'{REPORT_MONTH_NAMES[start.month - 1]} {start.year}'
+    if mode == 'year':
+        return str(year)
+    return 'всё время'
+
+
+def build_task_report(db_path, mode='month', month=None, year=None, now=None):
+    """Builds one dataset for text and Excel management reports."""
+    current = now or datetime.now(MOSCOW)
+    month = month or current.strftime('%Y-%m')
+    year = year or str(current.year)
+    start, end, _label = _period(mode, month, year, current)
+    initialize_task_analytics_schema(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        tasks = conn.execute(
+            '''SELECT ID, dtrep, type, club, title, desc, status, dtfb,
+                      feedback
+               FROM tasks ORDER BY date(dtrep), ID'''
+        ).fetchall()
+        confirmed_rows = conn.execute(
+            '''SELECT task_id, MAX(event_at) AS event_at
+               FROM task_events WHERE event_type='confirmed'
+               GROUP BY task_id'''
+        ).fetchall()
+    finally:
+        conn.close()
+
+    confirmed_at = {
+        int(row['task_id']): _parse_event_time(row['event_at'])
+        for row in confirmed_rows
+    }
+    rows = []
+    for task in tasks:
+        task_id = int(task['ID'])
+        created = _parse_date(task['dtrep'])
+        status = _canonical_status(task['status'])
+        closed_event = confirmed_at.get(task_id)
+        closed = (
+            closed_event.astimezone(MOSCOW).date()
+            if closed_event else _parse_date(task['dtfb'])
+        ) if status == 'Выполнено' else None
+        is_open = status in STATUS_LABELS[:2]
+        created_in_period = _in_period(created, start, end)
+        completed_in_period = (
+            status == 'Выполнено' and _in_period(closed, start, end)
+        )
+        if not (is_open or created_in_period or completed_in_period):
+            continue
+        age_days = None
+        if created:
+            finish = closed if status == 'Выполнено' and closed else current.date()
+            age_days = max((finish - created).days, 0)
+        rows.append({
+            'id': task_id,
+            'date': created.isoformat() if created else '',
+            'closed_at': closed.isoformat() if closed else '',
+            'type': _canonical_type(task['type']),
+            'club': _normalize_legacy_text(task['club']).strip() or 'Без клуба',
+            'title': _normalize_legacy_text(task['title']).strip(),
+            'description': _normalize_legacy_text(task['desc']).strip(),
+            'feedback': _normalize_legacy_text(task['feedback']).strip(),
+            'status': status,
+            'age_days': age_days,
+            'is_backlog': is_open,
+            'created_in_period': created_in_period,
+            'completed_in_period': completed_in_period,
+        })
+
+    backlog = sorted(
+        (row for row in rows if row['is_backlog']),
+        key=lambda row: (row['club'], row['date'] or '9999-99-99', row['id']),
+    )
+    club_counts = {}
+    for row in backlog:
+        club_counts[row['club']] = club_counts.get(row['club'], 0) + 1
+    report_rows = sorted(
+        rows,
+        key=lambda row: (
+            not row['is_backlog'], row['club'], row['date'] or '9999-99-99',
+            row['id'],
+        ),
+    )
+    return {
+        'period': {
+            'mode': mode,
+            'value': month if mode == 'month' else year,
+            'label': _report_period_label(mode, start, year),
+        },
+        'generated_at': current.isoformat(timespec='seconds'),
+        'summary': {
+            'created': sum(row['created_in_period'] for row in rows),
+            'completed': sum(row['completed_in_period'] for row in rows),
+            'work': sum(row['status'] == 'В работе' for row in backlog),
+            'review': sum(row['status'] == 'На проверке' for row in backlog),
+            'open': len(backlog),
+        },
+        'clubs': [
+            {'label': label, 'open': count}
+            for label, count in sorted(
+                club_counts.items(), key=lambda item: (-item[1], item[0]),
+            )
+        ],
+        'backlog': backlog,
+        'rows': report_rows,
+    }
+
+
+def format_task_report_text(report):
+    summary = report['summary']
+    lines = [
+        '🚩 ОТЧЁТ ПО ДОСКЕ ПРОБЛЕМ',
+        f"Период: {report['period']['label']}",
+        '',
+        f"Создано за период: {summary['created']}",
+        f"Выполнено за период: {summary['completed']}",
+        f"Сейчас в работе: {summary['work']}",
+        f"На проверке: {summary['review']}",
+        f"Всего незакрытых: {summary['open']}",
+    ]
+    if report['clubs']:
+        lines.extend(('', 'НЕЗАКРЫТЫЕ ПО КЛУБАМ'))
+        lines.extend(
+            f"{item['label']} — {item['open']}"
+            for item in report['clubs']
+        )
+    if report['backlog']:
+        lines.extend(('', 'НЕЗАКРЫТЫЕ ЗАЯВКИ'))
+        current_club = None
+        for task in report['backlog']:
+            if task['club'] != current_club:
+                current_club = task['club']
+                lines.extend(('', current_club))
+            age = (
+                f" — {task['age_days']} дн."
+                if task['age_days'] is not None else ''
+            )
+            lines.append(
+                f"#{task['id']} {task['title']} · {task['status']}{age}"
+            )
+    else:
+        lines.extend(('', 'Незакрытых заявок нет.'))
+    return '\n'.join(lines)

@@ -759,27 +759,13 @@ async function exportKpiExcel() {
   label.textContent = 'Формирую файл…';
   try {
     const params = new URLSearchParams({ month: state.month });
-    const response = await fetch(`/api/kpi/export?${params}`, {
-      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || 'Не удалось сформировать Excel');
-    }
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `KPI_${state.month}.xlsx`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast(`Excel за ${monthLabel(state.month)} готов`);
+    await api(`/api/kpi/export?${params}`, { method: 'POST' });
+    showToast(`Excel за ${monthLabel(state.month)} отправлен в чат`);
   } catch (error) {
     showToast(error.message, true);
   } finally {
     button.disabled = false;
-    label.textContent = 'Выгрузить Excel';
+    label.textContent = 'Отправить Excel';
   }
 }
 

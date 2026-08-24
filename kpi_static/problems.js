@@ -454,15 +454,85 @@ function renderProblemAnalytics(data) {
   renderAnalyticsBreakdown('#analyticsClubs', data.clubs);
 }
 
-async function loadProblemAnalytics() {
-  $('#analyticsSummary').innerHTML = '<div class="analytics-loading"></div><div class="analytics-loading"></div>';
+function analyticsQueryParams() {
   const params = new URLSearchParams({ mode: state.analyticsMode });
   if (state.analyticsMode === 'month') params.set('month', $('#analyticsMonth').value);
   if (state.analyticsMode === 'year') params.set('year', $('#analyticsYear').value);
+  return params;
+}
+
+async function loadProblemAnalytics() {
+  $('#analyticsSummary').innerHTML = '<div class="analytics-loading"></div><div class="analytics-loading"></div>';
   try {
-    renderProblemAnalytics(await api(`/api/problems/analytics?${params}`));
+    renderProblemAnalytics(await api(`/api/problems/analytics?${analyticsQueryParams()}`));
   } catch (error) {
     $('#analyticsSummary').innerHTML = `<div class="empty-card analytics-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function problemExportResponse(path) {
+  const response = await fetch(`${path}?${analyticsQueryParams()}`, {
+    headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'Не удалось сформировать отчёт');
+  }
+  return response;
+}
+
+async function copyProblemReport() {
+  const button = $('#copyProblemReport');
+  const label = button.querySelector('strong');
+  button.disabled = true;
+  label.textContent = 'Формирую отчёт…';
+  try {
+    const text = await (await problemExportResponse('/api/problems/export/text')).text();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_error) {
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.style.position = 'fixed';
+      field.style.opacity = '0';
+      document.body.appendChild(field);
+      field.select();
+      if (!document.execCommand('copy')) throw new Error('Копирование недоступно');
+      field.remove();
+    }
+    toast('Отчёт скопирован — можно вставить в Telegram');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    label.textContent = 'Скопировать отчёт';
+  }
+}
+
+async function downloadProblemExcel() {
+  const button = $('#downloadProblemExcel');
+  const label = button.querySelector('strong');
+  button.disabled = true;
+  label.textContent = 'Формирую Excel…';
+  try {
+    const response = await problemExportResponse('/api/problems/export/excel');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    const period = state.analyticsMode === 'month'
+      ? $('#analyticsMonth').value
+      : (state.analyticsMode === 'year' ? $('#analyticsYear').value : 'all');
+    link.href = url;
+    link.download = `Taskboard_${period}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Excel готов');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    label.textContent = 'Скачать Excel';
   }
 }
 
@@ -722,6 +792,8 @@ $('#analyticsPeriodTabs').addEventListener('click', (event) => {
 });
 $('#analyticsMonth').addEventListener('change', loadProblemAnalytics);
 $('#analyticsYear').addEventListener('change', loadProblemAnalytics);
+$('#copyProblemReport').addEventListener('click', copyProblemReport);
+$('#downloadProblemExcel').addEventListener('click', downloadProblemExcel);
 $('#oldestProblem').addEventListener('click', () => {
   const taskId = Number($('#oldestProblem').dataset.taskId);
   if (taskId) openTask(taskId);
@@ -980,6 +1052,7 @@ async function init() {
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
     $('#equipmentMode').classList.toggle('hidden', !state.meta.can_view_equipment);
     $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);
+    $('#analyticsExports').classList.toggle('hidden', !state.meta.can_export_analytics);
     const currentYear = new Date().getFullYear();
     const monthOptions = [];
     for (let year = currentYear; year >= 2024; year -= 1) {

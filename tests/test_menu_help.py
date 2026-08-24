@@ -11,6 +11,7 @@ class Button:
         self.text = text
         self.url = kwargs.get('url')
         self.web_app = kwargs.get('web_app')
+        self.callback_data = kwargs.get('callback_data')
 
 
 class WebAppInfo:
@@ -124,6 +125,19 @@ class HelpMenuTest(unittest.TestCase):
             open_button.web_app.url,
             'https://bot.omg-vr.ru/problems',
         )
+
+    def test_problem_menu_offers_manager_readonly_view(self):
+        bot = Mock()
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+        self.menu.get_user.return_value = {'status': self.menu.ROLE_MANAGER}
+
+        with patch.object(self.menu.app_constants, 'KPI_WEBAPP_URL', 'https://bot.omg-vr.ru/'):
+            self.menu.open_problems_app(message, bot)
+
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        readonly_button = markup.rows[1][0]
+        self.assertEqual(readonly_button.text, '📋 Быстрый просмотр в боте')
+        self.assertEqual(readonly_button.callback_data, 'readonly_tasks:work')
 
     def test_resource_links_include_shift_and_all_sheets(self):
         with patch.dict(os.environ, {

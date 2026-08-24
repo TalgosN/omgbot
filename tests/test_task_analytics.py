@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 from task_analytics import (
     build_task_analytics,
+    build_task_report,
+    format_task_report_text,
     record_task_event,
     task_activity_payload,
 )
@@ -37,6 +39,8 @@ class TaskAnalyticsTest(unittest.TestCase):
                  'Новое обращение', 'Выполнено', '2026-08-08'),
                 (4, '2026-09-01', 'Улучшение бота', 'Каширка',
                  'Новая кнопка', 'На проверке', '2026-09-02');
+            ALTER TABLE tasks ADD COLUMN desc TEXT;
+            ALTER TABLE tasks ADD COLUMN feedback TEXT;
             '''
         )
         record_task_event(
@@ -96,6 +100,31 @@ class TaskAnalyticsTest(unittest.TestCase):
     def test_invalid_period_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Неизвестный период'):
             build_task_analytics(str(self.db_path), mode='week')
+
+    def test_report_keeps_all_backlog_and_period_movements(self):
+        report = build_task_report(
+            str(self.db_path),
+            mode='month',
+            month='2026-08',
+            now=datetime(2026, 9, 3, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+        )
+
+        self.assertEqual(report['summary'], {
+            'created': 3,
+            'completed': 2,
+            'work': 1,
+            'review': 1,
+            'open': 2,
+        })
+        self.assertEqual(
+            {task['id'] for task in report['backlog']},
+            {2, 4},
+        )
+        self.assertEqual({task['id'] for task in report['rows']}, {1, 2, 3, 4})
+        text = format_task_report_text(report)
+        self.assertIn('#2 Шлем · В работе', text)
+        self.assertIn('#4 Новая кнопка · На проверке', text)
+        self.assertIn('Всего незакрытых: 2', text)
 
     def test_task_activity_keeps_actor_snapshot(self):
         conn = sqlite3.connect(self.db_path)
