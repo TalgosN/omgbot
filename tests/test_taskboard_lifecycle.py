@@ -106,7 +106,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.assertEqual((page, max_page), (1, 1))
         self.assertEqual(before, after)
 
-    def test_readonly_board_uses_rich_html_without_management_actions(self):
+    def test_readonly_board_uses_legacy_preview_without_management_actions(self):
         class Markup:
             def __init__(self, **_kwargs):
                 self.rows = []
@@ -122,6 +122,7 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.taskboard.types = types.SimpleNamespace(
             InlineKeyboardMarkup=Markup,
             InlineKeyboardButton=Button,
+            ReplyKeyboardRemove=lambda: 'remove-keyboard',
         )
         conn = sqlite3.connect(self.db_path)
         conn.execute(
@@ -141,13 +142,18 @@ class TaskboardLifecycleTest(unittest.TestCase):
 
         self.taskboard.show_readonly_tasks(message, bot)
 
-        text = bot.send_message.call_args.args[1]
-        markup = bot.send_message.call_args.kwargs['reply_markup']
-        self.assertIn('🚩 <b>OMG TASKBOARD</b>', text)
-        self.assertIn('🟠 <b>1</b> в работе', text)
-        self.assertIn('📍 <b>Клуб</b>', text)
-        self.assertIn('<b>Шлем &amp; кабель</b>', text)
-        self.assertEqual(bot.send_message.call_args.kwargs['parse_mode'], 'HTML')
+        list_call, instruction_call = bot.send_message.call_args_list
+        text = list_call.args[1]
+        markup = list_call.kwargs['reply_markup']
+        self.assertIn('Вот список текущих проблем:', text)
+        self.assertIn('<b>Клуб:</b>', text)
+        self.assertIn('1) Шлем &amp; кабель', text)
+        self.assertNotIn('OMG TASKBOARD', text)
+        self.assertEqual(list_call.kwargs['parse_mode'], 'HTML')
+        self.assertIn('Выбери одну', instruction_call.args[1])
+        self.assertEqual(
+            instruction_call.kwargs['reply_markup'], 'remove-keyboard',
+        )
         callbacks = [
             button.callback_data for row in markup.rows for button in row
         ]
@@ -155,6 +161,44 @@ class TaskboardLifecycleTest(unittest.TestCase):
             button.text for row in markup.rows for button in row
         ])
         self.assertTrue(all(value.startswith('readonly_') for value in callbacks))
+
+    def test_readonly_detail_matches_legacy_card_and_keeps_readonly_back_button(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''INSERT INTO tasks(
+                   id, type, club, title, status, dtrep, photo, desc, feedback
+               ) VALUES (
+                   9, 'Общее обращение', 'Дмитровка', 'Предложение',
+                   'В работе', '2026-07-03', ?, 'Добавить вешалку', NULL
+               )''',
+            (b'photo-bytes',),
+        )
+        conn.commit()
+        conn.close()
+        bot = Mock()
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+        detail_markup = object()
+
+        with patch.object(
+            self.taskboard,
+            '_readonly_webapp_markup',
+            return_value=detail_markup,
+        ) as markup:
+            self.taskboard.show_readonly_task_detail(
+                message, bot, 9, source_status='work', page=1,
+            )
+
+        caption = bot.send_photo.call_args.kwargs['caption']
+        self.assertIn('<b>Предложение</b>', caption)
+        self.assertIn('<b>Тип:</b> Общее обращение', caption)
+        self.assertIn('<b>Клуб:</b> Дмитровка', caption)
+        self.assertIn('<b>Описание:</b> Добавить вешалку', caption)
+        self.assertIn('<b>Статус:</b> В работе', caption)
+        self.assertIn('<b>Дата:</b> 2026-07-03', caption)
+        self.assertIn('Ожидает решения...', caption)
+        self.assertEqual(bot.send_photo.call_args.kwargs['parse_mode'], 'HTML')
+        self.assertIs(bot.send_photo.call_args.kwargs['reply_markup'], detail_markup)
+        markup.assert_called_once_with('work', 1)
 
     def test_review_is_closed_on_fourteenth_day(self):
         conn = sqlite3.connect(self.db_path)

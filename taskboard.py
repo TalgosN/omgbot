@@ -35,13 +35,6 @@ READONLY_TASK_STATUSES = {
     'review': ('На проверке',),
     'done': ('Выполнено', 'Архив'),
 }
-READONLY_STATUS_META = {
-    'work': ('🟠', 'В работе'),
-    'review': ('🟣', 'На проверке'),
-    'done': ('🟢', 'Выполнено'),
-}
-
-
 def _task_mentions(task_type, club):
     club_tag = str(get_clubs().get(club, {}).get('tag') or '').strip()
     if task_type == REPAIR_TASK_TYPE:
@@ -110,10 +103,15 @@ def _task_type_fill(task_type):
     return TEXTS['messtype_fill'][task_type]
 
 
-def _readonly_webapp_markup():
+def _readonly_webapp_markup(status_key=None, page=0):
     from menu import _webapp_url
 
     markup = types.InlineKeyboardMarkup()
+    if status_key in READONLY_TASK_STATUSES:
+        markup.add(types.InlineKeyboardButton(
+            'Вернуться',
+            callback_data=f'readonly_tasks:{status_key}:{page}',
+        ))
     problems_url = _webapp_url('problems')
     if problems_url:
         markup.add(types.InlineKeyboardButton(
@@ -126,15 +124,6 @@ def _readonly_webapp_markup():
 def _readonly_plain_text(value):
     text = re.sub(r'<br\s*/?>', '\n', str(value or ''), flags=re.IGNORECASE)
     return unescape(re.sub(r'<[^>]+>', '', text)).strip()
-
-
-def _readonly_date(value):
-    try:
-        return datetime.strptime(str(value or '')[:10], '%Y-%m-%d').strftime(
-            '%d.%m.%Y'
-        )
-    except ValueError:
-        return '—'
 
 
 def _readonly_html(value, limit=1000):
@@ -152,15 +141,6 @@ def _readonly_html(value, limit=1000):
     if truncated:
         result.append('…')
     return ''.join(result)
-
-
-def _readonly_type_icon(value):
-    task_type = _readonly_plain_text(value)
-    if task_type == REPAIR_TASK_TYPE:
-        return '🛠'
-    if task_type == BOT_TASK_TYPE:
-        return '🤖'
-    return '💬'
 
 
 def _readonly_task_rows(status_key, page):
@@ -199,48 +179,37 @@ def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
         return
     if status_key not in READONLY_TASK_STATUSES:
         status_key = 'work'
-    rows, counts, page, max_page = _readonly_task_rows(status_key, page)
-    status_icon, status_label = READONLY_STATUS_META[status_key]
-    text_lines = [
-        '🚩 <b>OMG TASKBOARD</b>',
-        '<i>Быстрый просмотр · только чтение</i>',
-        '',
-        f"🟠 <b>{counts['work']}</b> в работе  ·  "
-        f"🟣 <b>{counts['review']}</b> на проверке  ·  "
-        f"🟢 <b>{counts['done']}</b> выполнено",
-        '',
-        f'{status_icon} <b>{status_label.upper()}</b>',
-    ]
-    current_club = None
+    rows, _counts, page, max_page = _readonly_task_rows(status_key, page)
+    grouped = {}
     for task in rows:
         club = str(task['club'] or 'Без клуба')
-        if club != current_club:
-            current_club = club
-            text_lines.extend(('', f'📍 <b>{escape(club)}</b>'))
-        text_lines.append(
-            f"{_readonly_type_icon(task['type'])} <code>#{task['ID']}</code> "
-            f"<b>{_readonly_html(task['title'], 80) or 'Без названия'}</b>\n"
-            f"    <i>{_readonly_date(task['dtrep'])} · "
-            f"{_readonly_html(task['type'], 80) or 'Без типа'}</i>"
-        )
+        grouped.setdefault(club, []).append(task)
+    configured_clubs = list(get_clubs())
+    club_order = [club for club in configured_clubs if club in grouped]
+    club_order.extend(sorted(
+        (club for club in grouped if club not in configured_clubs),
+        key=str.casefold,
+    ))
+    text_lines = []
+    for club in club_order:
+        if text_lines:
+            text_lines.append('')
+        text_lines.append(f'<b>{escape(club)}:</b>')
+        for index, task in enumerate(grouped[club], start=1):
+            text_lines.append(
+                f"{index}) {_readonly_html(task['title'], 80) or 'Без названия'}"
+            )
     if not rows:
-        text_lines.extend(('', 'Заявок в этом разделе нет.'))
+        text_lines.append('Заявок в этом разделе нет.')
     if max_page:
         text_lines.extend(('', f'Страница {page + 1} из {max_page + 1}'))
 
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.row(*[
-        types.InlineKeyboardButton(
-            f"{READONLY_STATUS_META[key][0]} "
-            f"{READONLY_STATUS_META[key][1]} · {counts[key]}",
-            callback_data=f'readonly_tasks:{key}:0',
-        )
-        for key in ('work', 'review', 'done')
-    ])
     task_buttons = [
         types.InlineKeyboardButton(
-            f"{_readonly_type_icon(task['type'])} #{task['ID']} · "
-            f"{_readonly_plain_text(task['title'])[:18] or 'Без названия'}",
+            f"{str(task['club'] or '—')[:3]}: "
+            f"{(_readonly_plain_text(task['title'])[:12] or 'Без названия')}"
+            f"{'...' if len(_readonly_plain_text(task['title'])) > 12 else ''}",
             callback_data=f"readonly_task:{task['ID']}:{status_key}:{page}",
         )
         for task in rows
@@ -259,9 +228,15 @@ def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
     if navigation:
         markup.row(*navigation)
     markup.row(types.InlineKeyboardButton(
-        'Закрыть просмотр', callback_data='readonly_tasks:close',
+        'Вернуться', callback_data='readonly_tasks:close',
     ))
-    text = '\n'.join(text_lines)
+    headings = {
+        'work': 'Вот список текущих проблем:',
+        'review': 'Вот список рассматриваемых проблем:',
+        'done': 'Вот список выполненных проблем:',
+    }
+    task_list = '\n'.join(text_lines)
+    text = f"{headings[status_key]}\n\n{task_list}"
     if edit:
         try:
             bot.edit_message_text(
@@ -275,9 +250,19 @@ def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
         except Exception:
             pass
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='HTML')
+    instructions = {
+        'work': 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"',
+        'review': 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"',
+        'done': 'Выбери одну, чтобы посмотреть подробнее или нажми "Вернуться"',
+    }
+    bot.send_message(
+        message.chat.id,
+        instructions[status_key],
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
 
 
-def show_readonly_task_detail(message, bot, task_id):
+def show_readonly_task_detail(message, bot, task_id, source_status='work', page=0):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     conn = sqlite3.connect(TASK_DB_PATH)
@@ -293,36 +278,22 @@ def show_readonly_task_detail(message, bot, task_id):
     if not task:
         bot.send_message(message.chat.id, 'Заявка не найдена или уже удалена.')
         return
-    normalized_status = _readonly_plain_text(task['status'])
-    status_key = (
-        'done' if normalized_status in {'Выполнено', 'Архив'}
-        else 'review' if normalized_status == 'На проверке' else 'work'
-    )
-    status_icon, status_label = READONLY_STATUS_META[status_key]
-
     def detail_text(compact=False):
-        description_limit = 220 if compact else 1000
-        feedback_limit = 260 if compact else 1800
-        status_date = ''
-        if status_key == 'done':
-            status_date = f" · закрыто {_readonly_date(task['dtfb'])}"
-        elif status_key == 'review':
-            status_date = f" · на проверке с {_readonly_date(task['dtfb'])}"
+        description_limit = 250 if compact else 1000
+        feedback_limit = 300 if compact else 1800
         return (
-            f"🚩 <b>ЗАЯВКА #{task['ID']}</b>\n"
             f"<b>{_readonly_html(task['title'], 100) or 'Без названия'}</b>\n\n"
-            f"{status_icon} <b>{status_label}</b>{status_date}\n"
-            f"📍 <b>{_readonly_html(task['club'], 100) or 'Без клуба'}</b>\n"
-            f"🏷 {_readonly_html(task['type'], 100) or 'Без типа'}\n"
-            f"🗓 Создано {_readonly_date(task['dtrep'])}\n\n"
-            f"📝 <b>Описание</b>\n"
-            f"{_readonly_html(task['desc'], description_limit) or 'Не заполнено'}\n\n"
-            f"💬 <b>История решения</b>\n"
-            f"{_readonly_html(task['feedback'], feedback_limit) or 'Пока нет'}\n\n"
-            f"<i>Это просмотр. Изменить статус можно в приложении.</i>"
+            f"<b>Тип:</b> {_readonly_html(task['type'], 100) or '—'}\n"
+            f"<b>Клуб:</b> {_readonly_html(task['club'], 100) or '—'}\n\n"
+            f"<b>Описание:</b> "
+            f"{_readonly_html(task['desc'], description_limit) or '—'}\n\n"
+            f"<b>Статус:</b> {_readonly_html(task['status'], 100) or '—'}\n"
+            f"<b>Дата:</b> {escape(str(task['dtrep'] or '—')[:10])}\n\n"
+            f"💬 <b>История решения:</b>\n"
+            f"{_readonly_html(task['feedback'], feedback_limit) or 'Ожидает решения...'}"
         )
 
-    markup = _readonly_webapp_markup()
+    markup = _readonly_webapp_markup(source_status, page)
     if task['photo'] is not None:
         photo = io.BytesIO(task['photo'])
         photo.name = f"problem_{task['ID']}.jpg"
@@ -1139,11 +1110,21 @@ def register_readonly_callback(bot):
             return
         if call.data.startswith('readonly_task:'):
             try:
-                task_id = int(call.data.split(':', 3)[1])
+                parts = call.data.split(':')
+                task_id = int(parts[1])
+                status_key = parts[2] if len(parts) > 2 else 'work'
+                page = int(parts[3]) if len(parts) > 3 else 0
             except (IndexError, ValueError):
                 bot.send_message(call.message.chat.id, 'Не удалось открыть заявку.')
                 return
-            show_readonly_task_detail(call.message, bot, task_id)
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.id,
+                reply_markup=None,
+            )
+            show_readonly_task_detail(
+                call.message, bot, task_id, status_key, page,
+            )
             return
         parts = call.data.split(':')
         status_key = parts[1] if len(parts) > 1 else 'work'
