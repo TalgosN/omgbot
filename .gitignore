@@ -2,6 +2,7 @@ venv/
 .env
 __pycache__/
 *.pyc
+.vs/
 .env
 db/
 key/omgbot-430116-e9a4d9c69b7f.json
