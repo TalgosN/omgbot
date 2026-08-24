@@ -289,6 +289,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(sheet['A4'].value, 'Дарья В')
         self.assertEqual(sheet['E4'].value, 1500)
         self.assertEqual(sheet.max_row, 4)
+        self.assertEqual(sheet['B3'].number_format, '0')
         self.assertEqual(sheet['C3'].number_format, '0%')
         self.assertEqual(sheet['A1'].font.name, 'Comfortaa')
         self.assertEqual(sheet['A3'].font.name, 'Comfortaa')

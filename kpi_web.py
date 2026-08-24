@@ -259,7 +259,7 @@ def _kpi_export_workbook(rows, month):
                 cell.fill = first_place
             elif column == 1:
                 cell.fill = zone_fills.get(employee.get('zone'), yellow)
-        sheet.cell(row=row_number, column=2).number_format = '0.##'
+        sheet.cell(row=row_number, column=2).number_format = '0'
         sheet.cell(row=row_number, column=3).number_format = '0%'
         sheet.cell(row=row_number, column=4).number_format = '0'
         sheet.cell(row=row_number, column=5).number_format = '# ##0'
