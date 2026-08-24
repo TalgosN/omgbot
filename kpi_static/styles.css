@@ -563,6 +563,29 @@ input, textarea {
   transform: rotate(180deg);
 }
 
+.manager-export-button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 12px;
+  padding: 8px 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 209, 102, 0.3);
+  border-radius: 13px;
+  color: #fff1b8;
+  text-align: left;
+  background: linear-gradient(145deg, rgba(255, 209, 102, 0.15), rgba(255, 209, 102, 0.06));
+  cursor: pointer;
+}
+
+.manager-export-button span { display: grid; min-width: 0; gap: 3px; }
+.manager-export-button strong { font-size: 10px; }
+.manager-export-button small { color: var(--muted); font-size: 8px; }
+.manager-export-button > b { flex: none; color: var(--warning); font-size: 9px; }
+.manager-export-button:disabled { opacity: 0.55; cursor: wait; }
+
 .manager-filter-content { margin-top: 12px; }
 .manager-filter-content .filter-grid { margin-top: 0; }
 #ratingView > .summary-grid { margin-top: 12px; }

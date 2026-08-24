@@ -12,6 +12,8 @@ from urllib.parse import urlencode
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
+from openpyxl import load_workbook
+
 import kpi_web
 
 
@@ -151,6 +153,11 @@ class KpiWebTest(unittest.TestCase):
             )
             self.assertIn('id="analyticsMonthDisplay"', kpi_html)
             self.assertIn('id="settingsMonthDisplay"', kpi_html)
+            self.assertIn('id="exportKpiExcel"', kpi_html)
+            self.assertLess(
+                kpi_html.index('id="managerFilters"'),
+                kpi_html.index('id="exportKpiExcel"'),
+            )
         finally:
             response.close()
 
@@ -207,6 +214,82 @@ class KpiWebTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.get_json()['can_manage'])
+
+    def test_manager_exports_full_month_kpi_excel(self):
+        rows = [
+            {
+                'login': '@second', 'nickname': 'Дарья В', 'shifts': 21,
+                'total_pct': 0.24, 'rank': 2, 'birthdays': 3, 'zone': '🔴',
+            },
+            {
+                'login': '@first', 'nickname': 'Мося', 'shifts': 26,
+                'total_pct': 1.28, 'rank': 1, 'birthdays': 2, 'zone': '🟢',
+            },
+            {
+                'login': '@zero', 'nickname': 'Без смен', 'shifts': 0,
+                'total_pct': 0, 'rank': None, 'birthdays': 1, 'zone': '⚪',
+            },
+        ]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(
+                kpi_web, '_active_employee_logins',
+                return_value=['@first', '@second', '@zero'],
+            ),
+            patch.object(
+                kpi_web, '_employee_logins_with_month_shifts',
+                return_value=['@first', '@second', '@zero'],
+            ),
+            patch.object(
+                kpi_web, 'calculate_monthly_kpi', return_value=rows,
+            ) as calculate,
+        ):
+            response = self.client.get(
+                '/api/kpi/export?month=2026-08', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            'attachment; filename=KPI_2026-08.xlsx',
+            response.headers['Content-Disposition'],
+        )
+        calculate.assert_called_once_with(
+            '2026-08-01',
+            employee_logins=['@first', '@second', '@zero'],
+            period_end='2026-08-31',
+        )
+        workbook = load_workbook(BytesIO(response.data))
+        sheet = workbook['KPI Август 2026']
+        self.assertIn('C1:E1', {str(item) for item in sheet.merged_cells.ranges})
+        self.assertEqual(
+            [sheet.cell(2, column).value for column in range(1, 6)],
+            ['Ник', 'По 6 ч', '%', 'Рейтинг', 'ДРшки'],
+        )
+        self.assertEqual(
+            [sheet.cell(3, column).value for column in range(1, 6)],
+            ['Мося', 26, 1.28, 1, 1000],
+        )
+        self.assertEqual(sheet['A4'].value, 'Дарья В')
+        self.assertEqual(sheet['E4'].value, 1500)
+        self.assertEqual(sheet.max_row, 4)
+        self.assertEqual(sheet['C3'].number_format, '0%')
+        self.assertEqual(sheet['A3'].fill.fgColor.rgb, '008EC37D')
+        self.assertEqual(sheet['A4'].fill.fgColor.rgb, '00F3C4C6')
+        workbook.close()
+
+    def test_employee_cannot_export_kpi_excel(self):
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'calculate_monthly_kpi') as calculate,
+        ):
+            response = self.client.get(
+                '/api/kpi/export?month=2026-08', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 403)
+        calculate.assert_not_called()
 
     def test_camera_prototype_is_linked_from_shift(self):
         shift_response = self.client.get('/shift')

@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 import telebot
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from bukza import (
     BUKZA_CLUB_CODES,
@@ -166,6 +168,112 @@ def _default_day(month):
     return month_start.replace(
         day=calendar.monthrange(month_start.year, month_start.month)[1],
     ).isoformat()
+
+
+KPI_EXPORT_MONTH_NAMES = (
+    'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+)
+KPI_EXPORT_BIRTHDAY_RATE = 500
+
+
+def _kpi_export_workbook(rows, month):
+    month_start = datetime.strptime(month, '%Y-%m-%d').date()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = (
+        f'KPI {KPI_EXPORT_MONTH_NAMES[month_start.month - 1]} '
+        f'{month_start.year}'
+    )
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = 'A3'
+    sheet.merge_cells('C1:E1')
+
+    sheet['A1'] = 'Сотрудник'
+    sheet['B1'] = 'Смены'
+    sheet['C1'] = 'Итого'
+    sheet['A2'] = 'Ник'
+    sheet['B2'] = 'По 6 ч'
+    sheet['C2'] = '%'
+    sheet['D2'] = 'Рейтинг'
+    sheet['E2'] = 'ДРшки'
+
+    yellow = PatternFill('solid', fgColor='FFE27A')
+    green = PatternFill('solid', fgColor='B7D7AE')
+    pale_green = PatternFill('solid', fgColor='DCEAD8')
+    first_place = PatternFill('solid', fgColor='8EC37D')
+    zone_fills = {
+        '🟢': PatternFill('solid', fgColor='C7E2B8'),
+        '🟡': PatternFill('solid', fgColor='FFF0BD'),
+        '🔴': PatternFill('solid', fgColor='F3C4C6'),
+        '⚪': PatternFill('solid', fgColor='E8E8E8'),
+    }
+    thin = Side(style='thin', color='202020')
+    medium = Side(style='medium', color='202020')
+    data_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_border = Border(left=medium, right=medium, top=medium, bottom=thin)
+    header_font = Font(name='Arial', size=11, bold=True, color='111111')
+    data_font = Font(name='Arial', size=11, color='202020')
+
+    for cell in sheet[1]:
+        cell.fill = yellow if cell.column == 1 else green
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = header_border
+    for cell in sheet[2]:
+        cell.fill = yellow if cell.column == 1 else pale_green
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = data_border
+
+    participants = sorted(
+        (row for row in rows if float(row.get('shifts') or 0) > 0),
+        key=lambda row: (
+            row.get('rank') is None,
+            row.get('rank') or 0,
+            str(row.get('nickname') or '').casefold(),
+        ),
+    )
+    for row_number, employee in enumerate(participants, start=3):
+        values = (
+            employee.get('nickname') or employee.get('login') or '—',
+            float(employee.get('shifts') or 0),
+            float(employee.get('total_pct') or 0),
+            employee.get('rank'),
+            int(round(
+                float(employee.get('birthdays') or 0)
+                * KPI_EXPORT_BIRTHDAY_RATE
+            )),
+        )
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_number, column=column, value=value)
+            cell.font = data_font
+            cell.border = data_border
+            cell.alignment = Alignment(
+                horizontal='left' if column == 1 else 'right',
+                vertical='center',
+            )
+            if employee.get('rank') == 1:
+                cell.fill = first_place
+            elif column == 1:
+                cell.fill = zone_fills.get(employee.get('zone'), yellow)
+        sheet.cell(row=row_number, column=2).number_format = '0.##'
+        sheet.cell(row=row_number, column=3).number_format = '0%'
+        sheet.cell(row=row_number, column=4).number_format = '0'
+        sheet.cell(row=row_number, column=5).number_format = '# ##0'
+        sheet.row_dimensions[row_number].height = 24
+
+    sheet.row_dimensions[1].height = 24
+    sheet.row_dimensions[2].height = 22
+    for column, width in {'A': 25, 'B': 11, 'C': 11, 'D': 12, 'E': 14}.items():
+        sheet.column_dimensions[column].width = width
+    last_row = max(2, len(participants) + 2)
+    sheet.auto_filter.ref = f'A2:E{last_row}'
+    sheet.print_area = f'A1:E{last_row}'
+    sheet.page_setup.orientation = 'portrait'
+    sheet.page_setup.fitToWidth = 1
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    return workbook
 
 
 def _shift_month(month, offset):
@@ -3261,6 +3369,40 @@ def api_kpi():
             'payload': payload,
         }
     return jsonify(payload)
+
+
+@app.get('/api/kpi/export')
+@require_manager
+def api_kpi_export():
+    month = _validate_month(
+        request.args.get('month') or date.today().strftime('%Y-%m')
+    )
+    month_start = datetime.strptime(month, '%Y-%m-%d').date()
+    month_end = month_start.replace(
+        day=calendar.monthrange(month_start.year, month_start.month)[1],
+    ).isoformat()
+    employee_logins = _employee_logins_with_month_shifts(
+        _active_employee_logins(), month,
+    )
+    rows = calculate_monthly_kpi(
+        month,
+        employee_logins=employee_logins,
+        period_end=month_end,
+    )
+    workbook = _kpi_export_workbook(rows, month)
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype=(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ),
+        as_attachment=True,
+        download_name=f'KPI_{month[:7]}.xlsx',
+        max_age=0,
+    )
 
 
 @app.get('/api/kpi/details')

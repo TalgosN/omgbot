@@ -752,6 +752,37 @@ async function loadData() {
   }
 }
 
+async function exportKpiExcel() {
+  const button = $('#exportKpiExcel');
+  const label = button.querySelector('strong');
+  button.disabled = true;
+  label.textContent = 'Формирую файл…';
+  try {
+    const params = new URLSearchParams({ month: state.month });
+    const response = await fetch(`/api/kpi/export?${params}`, {
+      headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || 'Не удалось сформировать Excel');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `KPI_${state.month}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`Excel за ${monthLabel(state.month)} готов`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+    label.textContent = 'Выгрузить Excel';
+  }
+}
+
 function chartOptions() {
   const individual = $('#analyticsScope').value === 'individual';
   return individual
@@ -1290,6 +1321,8 @@ $('#resetFilters').addEventListener('click', () => {
   renderManagerFilters();
   renderEmployees();
 });
+
+$('#exportKpiExcel').addEventListener('click', exportKpiExcel);
 
 document.querySelector('.sort-controls').addEventListener('click', (event) => {
   const button = event.target.closest('[data-sort]');
