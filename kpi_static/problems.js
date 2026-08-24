@@ -470,42 +470,19 @@ async function loadProblemAnalytics() {
   }
 }
 
-async function problemExportResponse(path) {
-  const response = await fetch(`${path}?${analyticsQueryParams()}`, {
-    headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || 'Не удалось сформировать отчёт');
-  }
-  return response;
-}
-
-async function copyProblemReport() {
-  const button = $('#copyProblemReport');
+async function sendProblemReport() {
+  const button = $('#sendProblemReport');
   const label = button.querySelector('strong');
   button.disabled = true;
-  label.textContent = 'Формирую отчёт…';
+  label.textContent = 'Отправляю отчёт…';
   try {
-    const text = await (await problemExportResponse('/api/problems/export/text')).text();
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (_error) {
-      const field = document.createElement('textarea');
-      field.value = text;
-      field.style.position = 'fixed';
-      field.style.opacity = '0';
-      document.body.appendChild(field);
-      field.select();
-      if (!document.execCommand('copy')) throw new Error('Копирование недоступно');
-      field.remove();
-    }
-    toast('Отчёт скопирован — можно вставить в Telegram');
+    await api(`/api/problems/export/text?${analyticsQueryParams()}`, { method: 'POST' });
+    toast('Отчёт отправлен в чат с ботом');
   } catch (error) {
     toast(error.message, true);
   } finally {
     button.disabled = false;
-    label.textContent = 'Скопировать отчёт';
+    label.textContent = 'Отправить отчёт';
   }
 }
 
@@ -513,26 +490,15 @@ async function downloadProblemExcel() {
   const button = $('#downloadProblemExcel');
   const label = button.querySelector('strong');
   button.disabled = true;
-  label.textContent = 'Формирую Excel…';
+  label.textContent = 'Отправляю Excel…';
   try {
-    const response = await problemExportResponse('/api/problems/export/excel');
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement('a');
-    const period = state.analyticsMode === 'month'
-      ? $('#analyticsMonth').value
-      : (state.analyticsMode === 'year' ? $('#analyticsYear').value : 'all');
-    link.href = url;
-    link.download = `Taskboard_${period}.xlsx`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast('Excel готов');
+    await api(`/api/problems/export/excel?${analyticsQueryParams()}`, { method: 'POST' });
+    toast('Excel отправлен в чат с ботом');
   } catch (error) {
     toast(error.message, true);
   } finally {
     button.disabled = false;
-    label.textContent = 'Скачать Excel';
+    label.textContent = 'Отправить Excel';
   }
 }
 
@@ -792,7 +758,7 @@ $('#analyticsPeriodTabs').addEventListener('click', (event) => {
 });
 $('#analyticsMonth').addEventListener('change', loadProblemAnalytics);
 $('#analyticsYear').addEventListener('change', loadProblemAnalytics);
-$('#copyProblemReport').addEventListener('click', copyProblemReport);
+$('#sendProblemReport').addEventListener('click', sendProblemReport);
 $('#downloadProblemExcel').addEventListener('click', downloadProblemExcel);
 $('#oldestProblem').addEventListener('click', () => {
   const taskId = Number($('#oldestProblem').dataset.taskId);

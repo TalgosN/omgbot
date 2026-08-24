@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from task_analytics import (
     build_task_analytics,
     build_task_report,
-    format_task_report_text,
+    format_task_report_html,
     record_task_event,
     task_activity_payload,
 )
@@ -41,11 +41,25 @@ class TaskAnalyticsTest(unittest.TestCase):
                  'Новая кнопка', 'На проверке', '2026-09-02');
             ALTER TABLE tasks ADD COLUMN desc TEXT;
             ALTER TABLE tasks ADD COLUMN feedback TEXT;
+            UPDATE tasks SET feedback='<b>[02.08] Админ:</b> Вопрос решён'
+            WHERE ID=1;
             '''
         )
         record_task_event(
             conn, 3, 'created',
             datetime(2026, 8, 8, 10, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+        )
+        record_task_event(
+            conn, 3, 'solution',
+            datetime(2026, 8, 8, 11, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+        )
+        record_task_event(
+            conn, 3, 'returned',
+            datetime(2026, 8, 8, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+        )
+        record_task_event(
+            conn, 3, 'solution',
+            datetime(2026, 8, 8, 13, 0, tzinfo=ZoneInfo('Europe/Moscow')),
         )
         record_task_event(
             conn, 3, 'confirmed',
@@ -115,16 +129,30 @@ class TaskAnalyticsTest(unittest.TestCase):
             'work': 1,
             'review': 1,
             'open': 2,
+            'average_first_response_seconds': (86400 + 3600) / 2,
+            'first_response_precision': 'day',
+            'average_resolution_seconds': (2 * 86400 + 5 * 3600) / 2,
+            'resolution_precision': 'day',
         })
         self.assertEqual(
             {task['id'] for task in report['backlog']},
             {2, 4},
         )
-        self.assertEqual({task['id'] for task in report['rows']}, {1, 2, 3, 4})
-        text = format_task_report_text(report)
-        self.assertIn('#2 Шлем · В работе', text)
-        self.assertIn('#4 Новая кнопка · На проверке', text)
-        self.assertIn('Всего незакрытых: 2', text)
+        self.assertEqual({task['id'] for task in report['closed']}, {1, 3})
+        exact = next(task for task in report['closed'] if task['id'] == 3)
+        legacy = next(task for task in report['closed'] if task['id'] == 1)
+        self.assertEqual(exact['first_response_seconds'], 3600)
+        self.assertEqual(exact['resolution_seconds'], 5 * 3600)
+        self.assertEqual(exact['return_count'], 1)
+        self.assertEqual(legacy['first_response_seconds'], 86400)
+        self.assertEqual(legacy['final_solution'], 'Вопрос решён')
+        chunks = format_task_report_html(report)
+        self.assertTrue(all(len(chunk) <= 3800 for chunk in chunks))
+        text = '\n'.join(chunks)
+        self.assertIn('✅ <b>Закрыто:</b> 2', text)
+        self.assertIn('⚠️ <b>Осталось незакрытых:</b> 2', text)
+        self.assertIn('#3 · Новое обращение', text)
+        self.assertNotIn('Шлем', text)
 
     def test_task_activity_keeps_actor_snapshot(self):
         conn = sqlite3.connect(self.db_path)

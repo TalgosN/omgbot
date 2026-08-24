@@ -173,6 +173,8 @@ class KpiWebTest(unittest.TestCase):
             )
             self.assertIn('id="boardViewTabs"', taskboard_html)
             self.assertIn('id="analyticsView"', taskboard_html)
+            self.assertIn('id="sendProblemReport"', taskboard_html)
+            self.assertIn('id="downloadProblemExcel"', taskboard_html)
             self.assertLess(
                 taskboard_html.index('id="analyticsSummary"'),
                 taskboard_html.index('id="analyticsTypes"'),
@@ -288,6 +290,8 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(sheet['E4'].value, 1500)
         self.assertEqual(sheet.max_row, 4)
         self.assertEqual(sheet['C3'].number_format, '0%')
+        self.assertEqual(sheet['A1'].font.name, 'Comfortaa')
+        self.assertEqual(sheet['A3'].font.name, 'Comfortaa')
         self.assertEqual(sheet['A3'].fill.fgColor.rgb, '008EC37D')
         self.assertEqual(sheet['A4'].fill.fgColor.rgb, '00F3C4C6')
         workbook.close()
@@ -1270,19 +1274,31 @@ class KpiWebTest(unittest.TestCase):
 
     def test_problem_text_report_is_manager_only_and_uses_selected_period(self):
         report = {'summary': {'open': 2}}
+        bot = Mock()
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'get_user', return_value=user(2)),
             patch.object(kpi_web, 'build_task_report', return_value=report) as build,
-            patch.object(kpi_web, 'format_task_report_text', return_value='Готовый отчёт'),
+            patch.object(
+                kpi_web, 'format_task_report_html',
+                return_value=['<b>Готовый отчёт</b>', 'Продолжение'],
+            ),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
         ):
-            response = self.client.get(
+            response = self.client.post(
                 '/api/problems/export/text?mode=month&month=2026-08',
                 headers=self.headers,
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_data(as_text=True), 'Готовый отчёт')
+        self.assertEqual(response.get_json(), {'sent': True, 'messages': 2})
+        self.assertEqual(bot.send_message.call_count, 2)
+        self.assertEqual(bot.send_message.call_args_list[0].args, (
+            '1001', '<b>Готовый отчёт</b>',
+        ))
+        self.assertEqual(
+            bot.send_message.call_args_list[0].kwargs['parse_mode'], 'HTML',
+        )
         build.assert_called_once_with(
             kpi_web.DB_PATH, mode='month', month='2026-08', year=None,
         )
@@ -1291,7 +1307,7 @@ class KpiWebTest(unittest.TestCase):
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'get_user', return_value=user(1)),
         ):
-            forbidden = self.client.get(
+            forbidden = self.client.post(
                 '/api/problems/export/text', headers=self.headers,
             )
         self.assertEqual(forbidden.status_code, 403)
@@ -1301,34 +1317,69 @@ class KpiWebTest(unittest.TestCase):
             'period': {'mode': 'month', 'value': '2026-08', 'label': 'август 2026'},
             'generated_at': '2026-08-24T12:30:00+03:00',
             'summary': {
-                'created': 1, 'completed': 0, 'work': 1, 'review': 0, 'open': 1,
+                'created': 1, 'completed': 1, 'work': 1, 'review': 0, 'open': 1,
+                'average_first_response_seconds': 1800,
+                'first_response_precision': 'exact',
+                'average_resolution_seconds': 7200,
+                'resolution_precision': 'exact',
             },
-            'clubs': [{'label': 'Каширка', 'open': 1}],
+            'open_clubs': [{'label': 'Каширка', 'open': 1}],
+            'closed_clubs': [{
+                'label': 'Каширка', 'count': 1,
+                'average_first_response_seconds': 1800,
+                'first_response_precision': 'exact',
+                'average_resolution_seconds': 7200,
+                'resolution_precision': 'exact',
+            }],
             'backlog': [],
             'rows': [{
-                'id': 15, 'date': '2026-08-20', 'closed_at': '',
+                'id': 15, 'date': '2026-08-20', 'closed_at': '2026-08-21',
                 'club': 'Каширка', 'type': 'Ремонт', 'title': 'Шлем 2 зона',
-                'description': 'Не включается', 'status': 'В работе',
-                'age_days': 4, 'is_backlog': True,
-                'created_in_period': True, 'completed_in_period': False,
-                'feedback': '',
+                'description': 'Не включается', 'status': 'Выполнено',
+                'age_days': 1, 'is_backlog': False,
+                'created_in_period': True, 'completed_in_period': True,
+                'feedback': '', 'final_solution': 'Заменили кабель',
+                'first_response_seconds': 1800,
+                'first_response_precision': 'exact',
+                'resolution_seconds': 7200,
+                'resolution_precision': 'exact',
+                'return_count': 0,
             }],
         }
+        sent_document = {}
+        bot = Mock()
+
+        def capture_document(chat_id, document, **kwargs):
+            sent_document['chat_id'] = chat_id
+            sent_document['filename'] = document.name
+            sent_document['content'] = document.getvalue()
+            sent_document['caption'] = kwargs.get('caption')
+
+        bot.send_document.side_effect = capture_document
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
             patch.object(kpi_web, 'get_user', return_value=user(3)),
             patch.object(kpi_web, '_problem_report_from_request', return_value=report),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
         ):
-            response = self.client.get(
+            response = self.client.post(
                 '/api/problems/export/excel?mode=month&month=2026-08',
                 headers=self.headers,
             )
 
         self.assertEqual(response.status_code, 200)
-        workbook = load_workbook(BytesIO(response.data))
-        self.assertEqual(workbook.sheetnames, ['Сводка', 'Заявки'])
-        self.assertEqual(workbook['Заявки']['A2'].value, 15)
-        self.assertEqual(workbook['Заявки']['F2'].value, 'Шлем 2 зона')
+        self.assertEqual(response.get_json(), {
+            'sent': True, 'filename': 'Taskboard_2026-08.xlsx',
+        })
+        self.assertEqual(sent_document['chat_id'], '1001')
+        self.assertEqual(sent_document['filename'], 'Taskboard_2026-08.xlsx')
+        self.assertEqual(sent_document['caption'], '🚩 Доска проблем · август 2026')
+        workbook = load_workbook(BytesIO(sent_document['content']))
+        self.assertEqual(workbook.sheetnames, ['Сводка', 'Закрытые'])
+        self.assertEqual(workbook['Закрытые']['A2'].value, 15)
+        self.assertEqual(workbook['Закрытые']['F2'].value, 'Шлем 2 зона')
+        self.assertEqual(workbook['Закрытые']['K2'].value, 'Заменили кабель')
+        self.assertEqual(workbook['Закрытые']['A2'].font.name, 'Comfortaa')
         workbook.close()
 
     def test_equipment_is_available_only_from_technician_role(self):

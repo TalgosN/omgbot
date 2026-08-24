@@ -1,3 +1,5 @@
+import html
+import re
 import sqlite3
 from datetime import date, datetime
 from statistics import median
@@ -397,6 +399,69 @@ def _report_period_label(mode, start, year):
     return 'всё время'
 
 
+def _plain_feedback(value):
+    text = re.sub(
+        r'<br\s*/?>', '\n', _normalize_legacy_text(value), flags=re.IGNORECASE,
+    )
+    return html.unescape(re.sub(r'<[^>]+>', '', text)).strip()
+
+
+def _final_solution(value):
+    entries = [
+        entry.strip() for entry in re.split(r'\n\s*\n', _plain_feedback(value))
+        if entry.strip()
+    ]
+    for entry in reversed(entries):
+        match = re.search(r'(?:Админ|Система):\s*(.+)', entry, flags=re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    return entries[-1] if entries else ''
+
+
+def _first_feedback_response_date(value, created, latest):
+    if not created:
+        return None
+    plain = _plain_feedback(value)
+    matches = re.findall(
+        r'\[(\d{1,2})\.(\d{1,2})\]\s*Админ:', plain,
+        flags=re.IGNORECASE,
+    )
+    candidates = []
+    last_year = (latest or created).year
+    for day_value, month_value in matches:
+        for year_value in range(created.year, last_year + 1):
+            try:
+                candidate = date(
+                    year_value, int(month_value), int(day_value),
+                )
+            except ValueError:
+                continue
+            if candidate >= created and (latest is None or candidate <= latest):
+                candidates.append(candidate)
+    return min(candidates, default=None)
+
+
+def _duration_value(start_time, end_time, start_date=None, end_date=None):
+    if start_time and end_time and end_time >= start_time:
+        return (end_time - start_time).total_seconds(), 'exact'
+    if start_date and end_date and end_date >= start_date:
+        return float((end_date - start_date).days * 86400), 'day'
+    return None, 'none'
+
+
+def _time_summary(rows, value_key, precision_key):
+    values = [row[value_key] for row in rows if row[value_key] is not None]
+    if not values:
+        return None, 'none'
+    precision = (
+        'exact'
+        if all(row[precision_key] == 'exact' for row in rows
+               if row[value_key] is not None)
+        else 'day'
+    )
+    return sum(values) / len(values), precision
+
+
 def build_task_report(db_path, mode='month', month=None, year=None, now=None):
     """Builds one dataset for text and Excel management reports."""
     current = now or datetime.now(MOSCOW)
@@ -413,24 +478,32 @@ def build_task_report(db_path, mode='month', month=None, year=None, now=None):
                       feedback
                FROM tasks ORDER BY date(dtrep), ID'''
         ).fetchall()
-        confirmed_rows = conn.execute(
-            '''SELECT task_id, MAX(event_at) AS event_at
-               FROM task_events WHERE event_type='confirmed'
-               GROUP BY task_id'''
+        event_rows = conn.execute(
+            '''SELECT task_id, event_type, event_at
+               FROM task_events
+               WHERE event_type IN ('created', 'solution', 'returned', 'confirmed')
+               ORDER BY event_at, id'''
         ).fetchall()
     finally:
         conn.close()
 
-    confirmed_at = {
-        int(row['task_id']): _parse_event_time(row['event_at'])
-        for row in confirmed_rows
-    }
-    rows = []
+    events = {}
+    for event in event_rows:
+        event_time = _parse_event_time(event['event_at'])
+        if event_time:
+            events.setdefault(int(event['task_id']), {}).setdefault(
+                event['event_type'], [],
+            ).append(event_time)
+
+    all_rows = []
     for task in tasks:
         task_id = int(task['ID'])
         created = _parse_date(task['dtrep'])
         status = _canonical_status(task['status'])
-        closed_event = confirmed_at.get(task_id)
+        task_events = events.get(task_id, {})
+        created_event = min(task_events.get('created', []), default=None)
+        first_solution = min(task_events.get('solution', []), default=None)
+        closed_event = max(task_events.get('confirmed', []), default=None)
         closed = (
             closed_event.astimezone(MOSCOW).date()
             if closed_event else _parse_date(task['dtfb'])
@@ -440,13 +513,30 @@ def build_task_report(db_path, mode='month', month=None, year=None, now=None):
         completed_in_period = (
             status == 'Выполнено' and _in_period(closed, start, end)
         )
-        if not (is_open or created_in_period or completed_in_period):
-            continue
         age_days = None
         if created:
             finish = closed if status == 'Выполнено' and closed else current.date()
             age_days = max((finish - created).days, 0)
-        rows.append({
+        normalized_feedback = _normalize_legacy_text(task['feedback']).strip()
+        feedback_response = _first_feedback_response_date(
+            normalized_feedback, created, closed or current.date(),
+        )
+        first_response, first_response_precision = _duration_value(
+            created_event,
+            first_solution,
+            start_date=created,
+            end_date=feedback_response,
+        )
+        resolution, resolution_precision = _duration_value(
+            created_event,
+            closed_event,
+            start_date=created,
+            end_date=closed,
+        )
+        feedback_returns = len(re.findall(
+            r'Сотрудник:', _plain_feedback(normalized_feedback), flags=re.IGNORECASE,
+        ))
+        all_rows.append({
             'id': task_id,
             'date': created.isoformat() if created else '',
             'closed_at': closed.isoformat() if closed else '',
@@ -455,26 +545,60 @@ def build_task_report(db_path, mode='month', month=None, year=None, now=None):
             'title': _normalize_legacy_text(task['title']).strip(),
             'description': _normalize_legacy_text(task['desc']).strip(),
             'feedback': _normalize_legacy_text(task['feedback']).strip(),
+            'final_solution': _final_solution(normalized_feedback),
             'status': status,
             'age_days': age_days,
+            'first_response_seconds': first_response,
+            'first_response_precision': first_response_precision,
+            'resolution_seconds': resolution,
+            'resolution_precision': resolution_precision,
+            'return_count': max(
+                len(task_events.get('returned', [])), feedback_returns,
+            ),
             'is_backlog': is_open,
             'created_in_period': created_in_period,
             'completed_in_period': completed_in_period,
         })
 
     backlog = sorted(
-        (row for row in rows if row['is_backlog']),
+        (row for row in all_rows if row['is_backlog']),
         key=lambda row: (row['club'], row['date'] or '9999-99-99', row['id']),
     )
-    club_counts = {}
-    for row in backlog:
-        club_counts[row['club']] = club_counts.get(row['club'], 0) + 1
-    report_rows = sorted(
-        rows,
+    completed = sorted(
+        (row for row in all_rows if row['completed_in_period']),
         key=lambda row: (
-            not row['is_backlog'], row['club'], row['date'] or '9999-99-99',
-            row['id'],
+            row['club'],
+            -(date.fromisoformat(row['closed_at']).toordinal()
+              if row['closed_at'] else 0),
+            -row['id'],
         ),
+    )
+    open_club_counts = {}
+    for row in backlog:
+        open_club_counts[row['club']] = open_club_counts.get(row['club'], 0) + 1
+    closed_clubs = []
+    for club in sorted({row['club'] for row in completed}):
+        club_rows = [row for row in completed if row['club'] == club]
+        response, response_precision = _time_summary(
+            club_rows, 'first_response_seconds', 'first_response_precision',
+        )
+        resolution, resolution_precision = _time_summary(
+            club_rows, 'resolution_seconds', 'resolution_precision',
+        )
+        closed_clubs.append({
+            'label': club,
+            'count': len(club_rows),
+            'average_first_response_seconds': response,
+            'first_response_precision': response_precision,
+            'average_resolution_seconds': resolution,
+            'resolution_precision': resolution_precision,
+        })
+    closed_clubs.sort(key=lambda item: (-item['count'], item['label']))
+    average_response, response_precision = _time_summary(
+        completed, 'first_response_seconds', 'first_response_precision',
+    )
+    average_resolution, resolution_precision = _time_summary(
+        completed, 'resolution_seconds', 'resolution_precision',
     )
     return {
         'period': {
@@ -484,55 +608,125 @@ def build_task_report(db_path, mode='month', month=None, year=None, now=None):
         },
         'generated_at': current.isoformat(timespec='seconds'),
         'summary': {
-            'created': sum(row['created_in_period'] for row in rows),
-            'completed': sum(row['completed_in_period'] for row in rows),
+            'created': sum(row['created_in_period'] for row in all_rows),
+            'completed': len(completed),
             'work': sum(row['status'] == 'В работе' for row in backlog),
             'review': sum(row['status'] == 'На проверке' for row in backlog),
             'open': len(backlog),
+            'average_first_response_seconds': average_response,
+            'first_response_precision': response_precision,
+            'average_resolution_seconds': average_resolution,
+            'resolution_precision': resolution_precision,
         },
-        'clubs': [
+        'open_clubs': [
             {'label': label, 'open': count}
             for label, count in sorted(
-                club_counts.items(), key=lambda item: (-item[1], item[0]),
+                open_club_counts.items(), key=lambda item: (-item[1], item[0]),
             )
         ],
+        'closed_clubs': closed_clubs,
         'backlog': backlog,
-        'rows': report_rows,
+        'closed': completed,
+        'rows': completed,
     }
 
 
-def format_task_report_text(report):
-    summary = report['summary']
-    lines = [
-        '🚩 ОТЧЁТ ПО ДОСКЕ ПРОБЛЕМ',
-        f"Период: {report['period']['label']}",
-        '',
-        f"Создано за период: {summary['created']}",
-        f"Выполнено за период: {summary['completed']}",
-        f"Сейчас в работе: {summary['work']}",
-        f"На проверке: {summary['review']}",
-        f"Всего незакрытых: {summary['open']}",
-    ]
-    if report['clubs']:
-        lines.extend(('', 'НЕЗАКРЫТЫЕ ПО КЛУБАМ'))
-        lines.extend(
-            f"{item['label']} — {item['open']}"
-            for item in report['clubs']
+def _report_duration(seconds, precision):
+    if seconds is None:
+        return 'нет данных'
+    if precision == 'day' and float(seconds) == 0:
+        return '≈ в тот же день'
+    prefix = '≈ ' if precision == 'day' else ''
+    minutes = max(round(seconds / 60), 0)
+    if minutes < 1:
+        return 'меньше минуты'
+    if minutes < 60:
+        return f'{prefix}{minutes} мин.'
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f'{prefix}{hours} ч {remaining_minutes} мин.'
+    days, remaining_hours = divmod(hours, 24)
+    return f'{prefix}{days} дн. {remaining_hours} ч'
+
+
+def _html_value(value, limit=700):
+    text = str(value or '').strip()
+    result = []
+    length = 0
+    truncated = False
+    for character in text:
+        token = '<br>' if character == '\n' else html.escape(character)
+        if length + len(token) > max(limit - 1, 0):
+            truncated = True
+            break
+        result.append(token)
+        length += len(token)
+    if truncated:
+        result.append('…')
+    return ''.join(result)
+
+
+def _report_date(value):
+    try:
+        return datetime.strptime(str(value or '')[:10], '%Y-%m-%d').strftime(
+            '%d.%m.%Y'
         )
-    if report['backlog']:
-        lines.extend(('', 'НЕЗАКРЫТЫЕ ЗАЯВКИ'))
-        current_club = None
-        for task in report['backlog']:
-            if task['club'] != current_club:
-                current_club = task['club']
-                lines.extend(('', current_club))
-            age = (
-                f" — {task['age_days']} дн."
-                if task['age_days'] is not None else ''
+    except ValueError:
+        return '—'
+
+
+def format_task_report_html(report, message_limit=3800):
+    summary = report['summary']
+    open_clubs = ' · '.join(
+        f"{_html_value(item['label'], 80)} — {item['open']}"
+        for item in report['open_clubs']
+    ) or 'нет'
+    intro = (
+        '🚩 <b>ОТЧЁТ ПО ДОСКЕ ПРОБЛЕМ</b>\n'
+        f"📅 <b>Период:</b> {_html_value(report['period']['label'], 80)}\n\n"
+        f"✅ <b>Закрыто:</b> {summary['completed']}\n"
+        f"🆕 <b>Создано:</b> {summary['created']}\n"
+        f"⚡ <b>Средний первый ответ:</b> "
+        f"{_report_duration(summary['average_first_response_seconds'], summary['first_response_precision'])}\n"
+        f"⏱ <b>Среднее полное решение:</b> "
+        f"{_report_duration(summary['average_resolution_seconds'], summary['resolution_precision'])}\n\n"
+        f"⚠️ <b>Осталось незакрытых:</b> {summary['open']} "
+        f"· в работе {summary['work']} · на проверке {summary['review']}\n"
+        f"📍 <i>{open_clubs}</i>"
+    )
+    chunks = [intro]
+    if not report['closed']:
+        chunks.append('✅ <b>ЗАКРЫТЫЕ ЗАЯВКИ</b>\n\nЗа выбранный период заявок нет.')
+        return chunks
+
+    tasks_by_club = {}
+    for task in report['closed']:
+        tasks_by_club.setdefault(task['club'], []).append(task)
+    for meta in report['closed_clubs']:
+        club = meta['label']
+        tasks = tasks_by_club[club]
+        heading = (
+            f"📍 <b>{_html_value(club, 100)} · закрыто {meta['count']}</b>\n"
+            f"<i>Первый ответ: {_report_duration(meta['average_first_response_seconds'], meta['first_response_precision'])} "
+            f"· решение: {_report_duration(meta['average_resolution_seconds'], meta['resolution_precision'])}</i>"
+        )
+        current = heading
+        for task in tasks:
+            solution = _html_value(task['final_solution'] or 'Итог не записан')
+            block = (
+                f"\n\n✅ <b>#{task['id']} · {_html_value(task['title'], 120)}</b>\n"
+                f"🏷 {_html_value(task['type'], 100)}\n"
+                f"🗓 {_report_date(task['date'])} → "
+                f"{_report_date(task['closed_at'])}\n"
+                f"⚡ Первый ответ: {_report_duration(task['first_response_seconds'], task['first_response_precision'])}\n"
+                f"⏱ Решение: {_report_duration(task['resolution_seconds'], task['resolution_precision'])}\n"
+                f"↩️ Возвратов: {task['return_count']}\n"
+                f"💬 <i>{solution}</i>"
             )
-            lines.append(
-                f"#{task['id']} {task['title']} · {task['status']}{age}"
-            )
-    else:
-        lines.extend(('', 'Незакрытых заявок нет.'))
-    return '\n'.join(lines)
+            if len(current) + len(block) > message_limit:
+                chunks.append(current)
+                current = f"{heading}\n<i>продолжение</i>{block}"
+            else:
+                current += block
+        chunks.append(current)
+    return chunks

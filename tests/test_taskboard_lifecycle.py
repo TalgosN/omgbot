@@ -57,7 +57,8 @@ class TaskboardLifecycleTest(unittest.TestCase):
         conn.execute(
             '''CREATE TABLE tasks (
                    id INTEGER PRIMARY KEY, type TEXT, club TEXT, title TEXT,
-                   status TEXT, dtfb TEXT, feedback TEXT
+                   status TEXT, dtfb TEXT, feedback TEXT, dtrep TEXT,
+                   photo BLOB, desc TEXT
                )'''
         )
         conn.execute(
@@ -73,6 +74,87 @@ class TaskboardLifecycleTest(unittest.TestCase):
     def tearDown(self):
         self.db_patch.stop()
         os.remove(self.db_path)
+
+    def test_readonly_board_pages_all_statuses_without_mutating_tasks(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany(
+            '''INSERT INTO tasks(id, type, club, title, status, dtrep)
+               VALUES (?, 'Ремонт', 'Клуб', ?, 'В работе', '2026-08-01')''',
+            [(task_id, f'Заявка {task_id}') for task_id in range(1, 32)],
+        )
+        conn.execute(
+            '''INSERT INTO tasks(id, type, club, title, status, dtrep)
+               VALUES (40, 'Ремонт', 'Клуб', 'Проверка', 'На проверке', '2026-08-02')'''
+        )
+        conn.execute(
+            '''INSERT INTO tasks(id, type, club, title, status, dtrep)
+               VALUES (41, 'Ремонт', 'Клуб', 'Готово', 'Выполнено', '2026-08-03')'''
+        )
+        conn.commit()
+        before = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+        conn.close()
+
+        rows, counts, page, max_page = self.taskboard._readonly_task_rows(
+            'work', 1,
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        after = conn.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(counts, {'work': 31, 'review': 1, 'done': 1})
+        self.assertEqual((page, max_page), (1, 1))
+        self.assertEqual(before, after)
+
+    def test_readonly_board_uses_rich_html_without_management_actions(self):
+        class Markup:
+            def __init__(self, **_kwargs):
+                self.rows = []
+
+            def row(self, *buttons):
+                self.rows.append(buttons)
+
+        class Button:
+            def __init__(self, text, **kwargs):
+                self.text = text
+                self.callback_data = kwargs.get('callback_data')
+
+        self.taskboard.types = types.SimpleNamespace(
+            InlineKeyboardMarkup=Markup,
+            InlineKeyboardButton=Button,
+        )
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''INSERT INTO tasks(
+                   id, type, club, title, status, dtrep, desc, feedback
+               ) VALUES (
+                   7, 'Ремонт', 'Клуб', 'Шлем & кабель', 'В работе',
+                   '2026-08-24', 'Описание', '<b>[24.08] Админ:</b> Проверяем'
+               )'''
+        )
+        conn.commit()
+        conn.close()
+        bot = Mock()
+        message = types.SimpleNamespace(
+            id=10, chat=types.SimpleNamespace(id=123),
+        )
+
+        self.taskboard.show_readonly_tasks(message, bot)
+
+        text = bot.send_message.call_args.args[1]
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        self.assertIn('🚩 <b>OMG TASKBOARD</b>', text)
+        self.assertIn('🟠 <b>1</b> в работе', text)
+        self.assertIn('📍 <b>Клуб</b>', text)
+        self.assertIn('<b>Шлем &amp; кабель</b>', text)
+        self.assertEqual(bot.send_message.call_args.kwargs['parse_mode'], 'HTML')
+        callbacks = [
+            button.callback_data for row in markup.rows for button in row
+        ]
+        self.assertNotIn('Обработать', [
+            button.text for row in markup.rows for button in row
+        ])
+        self.assertTrue(all(value.startswith('readonly_') for value in callbacks))
 
     def test_review_is_closed_on_fourteenth_day(self):
         conn = sqlite3.connect(self.db_path)

@@ -92,7 +92,7 @@ from task_notifications import (
 from task_analytics import (
     build_task_analytics,
     build_task_report,
-    format_task_report_text,
+    format_task_report_html,
     initialize_task_analytics_schema,
     record_task_event,
     task_activity_payload,
@@ -214,8 +214,8 @@ def _kpi_export_workbook(rows, month):
     medium = Side(style='medium', color='202020')
     data_border = Border(left=thin, right=thin, top=thin, bottom=thin)
     header_border = Border(left=medium, right=medium, top=medium, bottom=thin)
-    header_font = Font(name='Arial', size=11, bold=True, color='111111')
-    data_font = Font(name='Arial', size=11, color='202020')
+    header_font = Font(name='Comfortaa', size=11, bold=True, color='111111')
+    data_font = Font(name='Comfortaa', size=11, color='202020')
 
     for cell in sheet[1]:
         cell.fill = yellow if cell.column == 1 else green
@@ -283,7 +283,7 @@ def _task_report_workbook(report):
     summary_sheet = workbook.active
     summary_sheet.title = 'Сводка'
     summary_sheet.sheet_view.showGridLines = False
-    summary_sheet.merge_cells('A1:B1')
+    summary_sheet.merge_cells('A1:D1')
     summary_sheet['A1'] = 'Доска проблем OMG VR'
     summary_sheet['A2'] = 'Период'
     summary_sheet['B2'] = report['period']['label']
@@ -292,8 +292,22 @@ def _task_report_workbook(report):
         report['generated_at']
     ).strftime('%d.%m.%Y %H:%M')
     summary_rows = (
+        ('Закрыто за период', report['summary']['completed']),
         ('Создано за период', report['summary']['created']),
-        ('Выполнено за период', report['summary']['completed']),
+        (
+            'Средний первый ответ',
+            _task_duration_label(
+                report['summary']['average_first_response_seconds'],
+                report['summary']['first_response_precision'],
+            ),
+        ),
+        (
+            'Среднее полное решение',
+            _task_duration_label(
+                report['summary']['average_resolution_seconds'],
+                report['summary']['resolution_precision'],
+            ),
+        ),
         ('Сейчас в работе', report['summary']['work']),
         ('На проверке', report['summary']['review']),
         ('Всего незакрытых', report['summary']['open']),
@@ -301,78 +315,109 @@ def _task_report_workbook(report):
     for row_number, values in enumerate(summary_rows, start=5):
         summary_sheet.cell(row=row_number, column=1, value=values[0])
         summary_sheet.cell(row=row_number, column=2, value=values[1])
-    club_start = 11
-    summary_sheet.cell(row=club_start, column=1, value='Незакрытые по клубам')
-    summary_sheet.cell(row=club_start, column=2, value='Количество')
-    for row_number, club in enumerate(report['clubs'], start=club_start + 1):
+    closed_start = 14
+    closed_headers = (
+        'Закрытые по клубам', 'Количество', 'Первый ответ', 'Полное решение',
+    )
+    for column, value in enumerate(closed_headers, start=1):
+        summary_sheet.cell(row=closed_start, column=column, value=value)
+    for row_number, club in enumerate(
+        report['closed_clubs'], start=closed_start + 1,
+    ):
+        summary_sheet.cell(row=row_number, column=1, value=club['label'])
+        summary_sheet.cell(row=row_number, column=2, value=club['count'])
+        summary_sheet.cell(
+            row=row_number,
+            column=3,
+            value=_task_duration_label(
+                club['average_first_response_seconds'],
+                club['first_response_precision'],
+            ),
+        )
+        summary_sheet.cell(
+            row=row_number,
+            column=4,
+            value=_task_duration_label(
+                club['average_resolution_seconds'],
+                club['resolution_precision'],
+            ),
+        )
+
+    open_start = closed_start + len(report['closed_clubs']) + 3
+    summary_sheet.cell(row=open_start, column=1, value='Незакрытые по клубам')
+    summary_sheet.cell(row=open_start, column=2, value='Количество')
+    for row_number, club in enumerate(
+        report['open_clubs'], start=open_start + 1,
+    ):
         summary_sheet.cell(row=row_number, column=1, value=club['label'])
         summary_sheet.cell(row=row_number, column=2, value=club['open'])
 
     purple = PatternFill('solid', fgColor='7030A0')
-    pale_purple = PatternFill('solid', fgColor='EADCF3')
     thin = Side(style='thin', color='D7C6E1')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     summary_sheet['A1'].fill = purple
-    summary_sheet['A1'].font = Font(color='FFFFFF', bold=True, size=16)
+    summary_sheet['A1'].font = Font(
+        name='Comfortaa', color='FFFFFF', bold=True, size=16,
+    )
     summary_sheet['A1'].alignment = Alignment(horizontal='center')
-    for row in range(2, 10):
-        for column in range(1, 3):
+    for row in range(2, 12):
+        for column in range(1, 5):
             cell = summary_sheet.cell(row=row, column=column)
             cell.border = border
+            cell.font = Font(name='Comfortaa', size=10)
             if column == 1:
-                cell.font = Font(bold=True)
-    for cell in summary_sheet[club_start]:
-        cell.fill = purple
-        cell.font = Font(color='FFFFFF', bold=True)
-    for row in range(club_start + 1, club_start + 1 + len(report['clubs'])):
-        for cell in summary_sheet[row]:
+                cell.font = Font(name='Comfortaa', size=10, bold=True)
+    for header_row in (closed_start, open_start):
+        for cell in summary_sheet[header_row]:
+            cell.fill = purple
+            cell.font = Font(name='Comfortaa', color='FFFFFF', bold=True)
+    for row in summary_sheet.iter_rows(min_row=closed_start + 1):
+        for cell in row:
             cell.border = border
+            if not cell.font.bold:
+                cell.font = Font(name='Comfortaa', size=10)
     summary_sheet.column_dimensions['A'].width = 30
     summary_sheet.column_dimensions['B'].width = 22
+    summary_sheet.column_dimensions['C'].width = 22
+    summary_sheet.column_dimensions['D'].width = 22
 
-    tasks_sheet = workbook.create_sheet('Заявки')
+    tasks_sheet = workbook.create_sheet('Закрытые')
     tasks_sheet.sheet_view.showGridLines = False
     tasks_sheet.freeze_panes = 'A2'
     headers = (
         'ID', 'Создано', 'Закрыто', 'Клуб', 'Тип', 'Название', 'Описание',
-        'Статус', 'Дней', 'Попало в отчёт', 'История решения',
+        'Первый ответ', 'Полное решение', 'Возвраты', 'Итоговое решение',
     )
     tasks_sheet.append(headers)
     for cell in tasks_sheet[1]:
         cell.fill = purple
-        cell.font = Font(color='FFFFFF', bold=True)
+        cell.font = Font(name='Comfortaa', color='FFFFFF', bold=True)
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = border
     for task in report['rows']:
-        reasons = []
-        if task['is_backlog']:
-            reasons.append('незакрыта')
-        if task['created_in_period']:
-            reasons.append('создана за период')
-        if task['completed_in_period']:
-            reasons.append('выполнена за период')
-        feedback = html.unescape(re.sub(r'<[^>]+>', '', task['feedback']))
         tasks_sheet.append((
             task['id'],
             _display_date(task['date']),
             _display_date(task['closed_at']),
-            task['club'],
-            task['type'],
-            task['title'],
-            task['description'][:32000],
-            task['status'],
-            task['age_days'],
-            ', '.join(reasons),
-            feedback[:32000],
+            _excel_text(task['club']),
+            _excel_text(task['type']),
+            _excel_text(task['title']),
+            _excel_text(task['description']),
+            _task_duration_label(
+                task['first_response_seconds'], task['first_response_precision'],
+            ),
+            _task_duration_label(
+                task['resolution_seconds'], task['resolution_precision'],
+            ),
+            task['return_count'],
+            _excel_text(task['final_solution'] or 'Итог не записан'),
         ))
     for row in tasks_sheet.iter_rows(min_row=2):
         for cell in row:
             cell.border = border
+            cell.font = Font(name='Comfortaa', size=10)
             cell.alignment = Alignment(vertical='top', wrap_text=True)
-        if row[7].value in {'В работе', 'На проверке'}:
-            for cell in row:
-                cell.fill = pale_purple
-    widths = (8, 13, 13, 18, 22, 35, 50, 16, 10, 26, 50)
+    widths = (8, 13, 13, 18, 22, 35, 45, 20, 20, 10, 50)
     for column, width in enumerate(widths, start=1):
         tasks_sheet.column_dimensions[
             tasks_sheet.cell(row=1, column=column).column_letter
@@ -382,12 +427,35 @@ def _task_report_workbook(report):
     return workbook
 
 
+def _task_duration_label(seconds, precision):
+    if seconds is None:
+        return 'Нет данных'
+    if precision == 'day' and float(seconds) == 0:
+        return '≈ в тот же день'
+    prefix = '≈ ' if precision == 'day' else ''
+    minutes = max(round(float(seconds) / 60), 0)
+    if minutes < 1:
+        return 'Меньше минуты'
+    if minutes < 60:
+        return f'{prefix}{minutes} мин.'
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f'{prefix}{hours} ч {remaining_minutes} мин.'
+    days, remaining_hours = divmod(hours, 24)
+    return f'{prefix}{days} дн. {remaining_hours} ч'
+
+
 def _display_date(value):
     parsed = str(value or '').split('T', 1)[0]
     try:
         return datetime.strptime(parsed, '%Y-%m-%d').strftime('%d.%m.%Y')
     except ValueError:
         return ''
+
+
+def _excel_text(value):
+    text = str(value or '')[:32000]
+    return f"'{text}" if text.startswith(('=', '+', '-', '@')) else text
 
 
 def _shift_month(month, offset):
@@ -2810,14 +2878,26 @@ def _problem_report_from_request():
     )
 
 
-@app.get('/api/problems/export/text')
+@app.post('/api/problems/export/text')
 @require_manager
 def api_problem_report_text():
-    return (
-        format_task_report_text(_problem_report_from_request()),
-        200,
-        {'Content-Type': 'text/plain; charset=utf-8'},
-    )
+    report = _problem_report_from_request()
+    chunks = format_task_report_html(report)
+    bot = _notification_bot()
+    if not bot:
+        return jsonify({'error': 'Telegram-бот временно недоступен.'}), 503
+    try:
+        for chunk in chunks:
+            bot.send_message(
+                g.kpi_user['chatid'],
+                chunk,
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+            )
+    except Exception as error:
+        print(f'Ошибка отправки отчёта Taskboard в Telegram: {error}')
+        return jsonify({'error': 'Не удалось отправить отчёт в чат с ботом.'}), 502
+    return jsonify({'sent': True, 'messages': len(chunks)})
 
 
 @app.post('/api/problems/export/excel')

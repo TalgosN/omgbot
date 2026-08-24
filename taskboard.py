@@ -1,7 +1,8 @@
 from telebot import *
 from constants import *
-from html import escape
+from html import escape, unescape
 import io
+import re
 import sqlite3
 from datetime import datetime, timedelta
 import pytz
@@ -33,6 +34,11 @@ READONLY_TASK_STATUSES = {
     'work': ('В работе',),
     'review': ('На проверке',),
     'done': ('Выполнено', 'Архив'),
+}
+READONLY_STATUS_META = {
+    'work': ('🟠', 'В работе'),
+    'review': ('🟣', 'На проверке'),
+    'done': ('🟢', 'Выполнено'),
 }
 
 
@@ -117,6 +123,46 @@ def _readonly_webapp_markup():
     return markup
 
 
+def _readonly_plain_text(value):
+    text = re.sub(r'<br\s*/?>', '\n', str(value or ''), flags=re.IGNORECASE)
+    return unescape(re.sub(r'<[^>]+>', '', text)).strip()
+
+
+def _readonly_date(value):
+    try:
+        return datetime.strptime(str(value or '')[:10], '%Y-%m-%d').strftime(
+            '%d.%m.%Y'
+        )
+    except ValueError:
+        return '—'
+
+
+def _readonly_html(value, limit=1000):
+    text = _readonly_plain_text(value)
+    result = []
+    length = 0
+    truncated = False
+    for character in text:
+        token = '<br>' if character == '\n' else escape(character)
+        if length + len(token) > max(limit - 1, 0):
+            truncated = True
+            break
+        result.append(token)
+        length += len(token)
+    if truncated:
+        result.append('…')
+    return ''.join(result)
+
+
+def _readonly_type_icon(value):
+    task_type = _readonly_plain_text(value)
+    if task_type == REPAIR_TASK_TYPE:
+        return '🛠'
+    if task_type == BOT_TASK_TYPE:
+        return '🤖'
+    return '💬'
+
+
 def _readonly_task_rows(status_key, page):
     statuses = READONLY_TASK_STATUSES[status_key]
     placeholders = ','.join('?' for _status in statuses)
@@ -138,7 +184,8 @@ def _readonly_task_rows(status_key, page):
             f'''SELECT ID, dtrep, type, club, title, photo, desc, status,
                        dtfb, feedback
                 FROM tasks WHERE status IN ({placeholders})
-                ORDER BY date(dtrep) {direction}, ID {direction}
+                ORDER BY club COLLATE NOCASE, date(dtrep) {direction},
+                         ID {direction}
                 LIMIT ? OFFSET ?''',
             (*statuses, READONLY_TASK_PAGE_SIZE, page * READONLY_TASK_PAGE_SIZE),
         ).fetchall()
@@ -153,15 +200,29 @@ def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
     if status_key not in READONLY_TASK_STATUSES:
         status_key = 'work'
     rows, counts, page, max_page = _readonly_task_rows(status_key, page)
-    labels = {'work': 'В работе', 'review': 'На проверке', 'done': 'Выполнено'}
-    text_lines = [f"<b>🚩 {labels[status_key]}</b>"]
+    status_icon, status_label = READONLY_STATUS_META[status_key]
+    text_lines = [
+        '🚩 <b>OMG TASKBOARD</b>',
+        '<i>Быстрый просмотр · только чтение</i>',
+        '',
+        f"🟠 <b>{counts['work']}</b> в работе  ·  "
+        f"🟣 <b>{counts['review']}</b> на проверке  ·  "
+        f"🟢 <b>{counts['done']}</b> выполнено",
+        '',
+        f'{status_icon} <b>{status_label.upper()}</b>',
+    ]
     current_club = None
     for task in rows:
         club = str(task['club'] or 'Без клуба')
         if club != current_club:
             current_club = club
-            text_lines.extend(('', f'<b>{escape(club)}</b>'))
-        text_lines.append(f"#{task['ID']} {escape(str(task['title'] or 'Без названия'))}")
+            text_lines.extend(('', f'📍 <b>{escape(club)}</b>'))
+        text_lines.append(
+            f"{_readonly_type_icon(task['type'])} <code>#{task['ID']}</code> "
+            f"<b>{_readonly_html(task['title'], 80) or 'Без названия'}</b>\n"
+            f"    <i>{_readonly_date(task['dtrep'])} · "
+            f"{_readonly_html(task['type'], 80) or 'Без типа'}</i>"
+        )
     if not rows:
         text_lines.extend(('', 'Заявок в этом разделе нет.'))
     if max_page:
@@ -170,14 +231,16 @@ def show_readonly_tasks(message, bot, status_key='work', page=0, edit=False):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.row(*[
         types.InlineKeyboardButton(
-            f"{labels[key]} · {counts[key]}",
+            f"{READONLY_STATUS_META[key][0]} "
+            f"{READONLY_STATUS_META[key][1]} · {counts[key]}",
             callback_data=f'readonly_tasks:{key}:0',
         )
         for key in ('work', 'review', 'done')
     ])
     task_buttons = [
         types.InlineKeyboardButton(
-            f"#{task['ID']} · {str(task['title'] or 'Без названия')[:20]}",
+            f"{_readonly_type_icon(task['type'])} #{task['ID']} · "
+            f"{_readonly_plain_text(task['title'])[:18] or 'Без названия'}",
             callback_data=f"readonly_task:{task['ID']}:{status_key}:{page}",
         )
         for task in rows
@@ -230,16 +293,35 @@ def show_readonly_task_detail(message, bot, task_id):
     if not task:
         bot.send_message(message.chat.id, 'Заявка не найдена или уже удалена.')
         return
-    detail = (
-        f"🚩 #{task['ID']} · {task['title'] or 'Без названия'}\n\n"
-        f"Тип: {task['type'] or '—'}\n"
-        f"Клуб: {task['club'] or '—'}\n"
-        f"Статус: {task['status'] or '—'}\n"
-        f"Создано: {task['dtrep'] or '—'}\n"
-        f"Закрыто: {task['dtfb'] or '—'}\n\n"
-        f"Описание:\n{task['desc'] or '—'}\n\n"
-        f"История решения:\n{task['feedback'] or 'Пока нет'}"
+    normalized_status = _readonly_plain_text(task['status'])
+    status_key = (
+        'done' if normalized_status in {'Выполнено', 'Архив'}
+        else 'review' if normalized_status == 'На проверке' else 'work'
     )
+    status_icon, status_label = READONLY_STATUS_META[status_key]
+
+    def detail_text(compact=False):
+        description_limit = 220 if compact else 1000
+        feedback_limit = 260 if compact else 1800
+        status_date = ''
+        if status_key == 'done':
+            status_date = f" · закрыто {_readonly_date(task['dtfb'])}"
+        elif status_key == 'review':
+            status_date = f" · на проверке с {_readonly_date(task['dtfb'])}"
+        return (
+            f"🚩 <b>ЗАЯВКА #{task['ID']}</b>\n"
+            f"<b>{_readonly_html(task['title'], 100) or 'Без названия'}</b>\n\n"
+            f"{status_icon} <b>{status_label}</b>{status_date}\n"
+            f"📍 <b>{_readonly_html(task['club'], 100) or 'Без клуба'}</b>\n"
+            f"🏷 {_readonly_html(task['type'], 100) or 'Без типа'}\n"
+            f"🗓 Создано {_readonly_date(task['dtrep'])}\n\n"
+            f"📝 <b>Описание</b>\n"
+            f"{_readonly_html(task['desc'], description_limit) or 'Не заполнено'}\n\n"
+            f"💬 <b>История решения</b>\n"
+            f"{_readonly_html(task['feedback'], feedback_limit) or 'Пока нет'}\n\n"
+            f"<i>Это просмотр. Изменить статус можно в приложении.</i>"
+        )
+
     markup = _readonly_webapp_markup()
     if task['photo'] is not None:
         photo = io.BytesIO(task['photo'])
@@ -247,14 +329,16 @@ def show_readonly_task_detail(message, bot, task_id):
         bot.send_photo(
             message.chat.id,
             photo=photo,
-            caption=detail[:1024],
+            caption=detail_text(compact=True),
             reply_markup=markup,
+            parse_mode='HTML',
         )
     else:
         bot.send_message(
             message.chat.id,
-            detail[:4096],
+            detail_text(),
             reply_markup=markup,
+            parse_mode='HTML',
         )
 
 ##### taskdesk
