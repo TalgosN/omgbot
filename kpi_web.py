@@ -73,6 +73,7 @@ from repair_catalog import (
     migration_review_payload,
     repair_payload,
     replace_equipment_unit,
+    similar_repairs_payload,
 )
 from shift_config_store import (
     ACTIONS as SHIFT_ACTIONS,
@@ -90,6 +91,7 @@ from task_notifications import (
     progress_task_notification,
 )
 from task_analytics import (
+    add_task_comment,
     build_task_analytics,
     build_task_report,
     format_task_report_html,
@@ -97,6 +99,7 @@ from task_analytics import (
     record_task_event,
     task_activity_payload,
     task_actor_snapshot,
+    task_comments_payload,
 )
 
 
@@ -2029,7 +2032,7 @@ def _delete_problem_after_failed_video(task_id, db_path=DB_PATH):
                 ]
             for table in (
                 'equipment_unit_tasks', 'repair_case_locations', 'repair_events',
-                'repair_cases', 'task_videos', 'task_events',
+                'repair_cases', 'task_videos', 'task_events', 'task_comments',
             ):
                 if table in tables:
                     conn.execute(f'DELETE FROM {table} WHERE task_id=?', (task_id,))
@@ -3191,6 +3194,7 @@ def api_problem(task_id):
         ).fetchone()
         repair = repair_payload(conn, task_id) if row else None
         activity = task_activity_payload(conn, task_id) if row else []
+        comments = task_comments_payload(conn, task_id) if row else []
     finally:
         conn.close()
     if not row:
@@ -3198,7 +3202,69 @@ def api_problem(task_id):
     result = _task_payload(row)
     result['repair'] = repair
     result['activity'] = activity
+    result['comments'] = comments
     return jsonify(result)
+
+
+@app.post('/api/problems/<int:task_id>/comments')
+@require_technician
+def api_problem_comment(task_id):
+    payload = request.get_json(silent=True) or {}
+    message = str(payload.get('message') or '').strip()
+    if not message or len(message) > 1000:
+        raise ValueError('Комментарий должен быть не длиннее 1000 символов')
+    initialize_task_analytics_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            if not conn.execute(
+                'SELECT 1 FROM tasks WHERE ID=?', (task_id,),
+            ).fetchone():
+                return jsonify({'error': 'Проблема не найдена.'}), 404
+            comment_id = add_task_comment(
+                conn,
+                task_id,
+                message,
+                actor=task_actor_snapshot(g.kpi_user),
+            )
+            comment = conn.execute(
+                '''SELECT id, message, created_at, actor_login, actor_name
+                   FROM task_comments WHERE id=?''',
+                (comment_id,),
+            ).fetchone()
+    finally:
+        conn.close()
+    return jsonify({
+        'id': comment['id'],
+        'message': comment['message'],
+        'created_at': comment['created_at'],
+        'actor': {
+            'name': comment['actor_name'],
+            'login': comment['actor_login'],
+        },
+    }), 201
+
+
+@app.get('/api/repairs/similar')
+@require_user
+def api_similar_repairs():
+    club = str(request.args.get('club') or '').strip()
+    if club not in ZONE_COUNTS:
+        raise ValueError('Выберите клуб')
+    try:
+        item_id = int(request.args.get('item_id'))
+        location_ids = [
+            int(value) for value in
+            str(request.args.get('location_ids') or '').split(',') if value
+        ]
+    except (TypeError, ValueError) as error:
+        raise ValueError('Выберите оборудование и место') from error
+    if not location_ids or len(location_ids) > 20:
+        raise ValueError('Выберите оборудование и место')
+    return jsonify(similar_repairs_payload(
+        DB_PATH, club, item_id, location_ids,
+    ))
 
 
 @app.get('/api/problems/<int:task_id>/photo')

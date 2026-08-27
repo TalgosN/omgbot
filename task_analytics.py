@@ -43,6 +43,22 @@ def _create_schema(conn):
         '''CREATE INDEX IF NOT EXISTS idx_task_events_task
            ON task_events(task_id, event_type, event_at)'''
     )
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS task_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            actor_chatid TEXT,
+            actor_login TEXT,
+            actor_name TEXT
+        )'''
+    )
+    conn.execute(
+        '''CREATE INDEX IF NOT EXISTS idx_task_comments_task
+           ON task_comments(task_id, created_at, id)'''
+    )
 
 
 def initialize_task_analytics_schema(db_path='db/omgbot.sql'):
@@ -122,6 +138,53 @@ def task_activity_payload(conn, task_id):
         {
             'event_type': row['event_type'],
             'event_at': row['event_at'],
+            'actor': (
+                {
+                    'name': row['actor_name'],
+                    'login': row['actor_login'],
+                }
+                if row['actor_name'] or row['actor_login'] else None
+            ),
+        }
+        for row in rows
+    ]
+
+
+def add_task_comment(conn, task_id, message, actor=None, created_at=None):
+    _create_schema(conn)
+    current = created_at or datetime.now(MOSCOW)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MOSCOW)
+    actor = actor or {}
+    cursor = conn.execute(
+        '''INSERT INTO task_comments(
+               task_id, message, created_at,
+               actor_chatid, actor_login, actor_name
+           ) VALUES (?, ?, ?, ?, ?, ?)''',
+        (
+            task_id,
+            message,
+            current.isoformat(timespec='seconds'),
+            str(actor.get('chatid') or '') or None,
+            str(actor.get('login') or '') or None,
+            str(actor.get('name') or '') or None,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def task_comments_payload(conn, task_id):
+    _create_schema(conn)
+    rows = conn.execute(
+        '''SELECT id, message, created_at, actor_login, actor_name
+           FROM task_comments WHERE task_id=? ORDER BY created_at, id''',
+        (task_id,),
+    ).fetchall()
+    return [
+        {
+            'id': row['id'],
+            'message': row['message'],
+            'created_at': row['created_at'],
             'actor': (
                 {
                     'name': row['actor_name'],

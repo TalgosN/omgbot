@@ -172,6 +172,19 @@ button.equipment-timeline-entry { width:100%; cursor:pointer; }
 .location-option input:checked + span { border-color: var(--purple); color: var(--purple) !important; background: var(--lavender); box-shadow: inset 0 0 0 1px var(--purple); }
 .generated-title { padding:10px; border-radius:12px; background:var(--surface-2); }
 .generated-title strong { display: block; font-size: 9px; line-height: 1.45; }
+.similar-repairs { display:grid; gap:8px; margin-top:10px; padding:11px; border:1px solid rgba(255,209,102,.3); border-radius:14px; background:rgba(255,209,102,.07); }
+.similar-repairs-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.similar-repairs-head > div { display:grid; gap:3px; }
+.similar-repairs-head strong { color:var(--warning); font-size:10px; }
+.similar-repairs-head span { color:var(--muted); font-size:7px; }
+.similar-repairs-head > b { display:grid; min-width:24px; height:24px; place-items:center; border-radius:999px; color:#1d1020; background:var(--warning); font-size:8px; }
+.similar-repair-list { display:grid; gap:6px; }
+.similar-repair-card { display:grid; width:100%; min-width:0; gap:5px; padding:10px; border:1px solid rgba(255,209,102,.2); border-radius:12px; color:var(--ink); text-align:left; background:var(--surface-2); cursor:pointer; }
+.similar-repair-card > span,.task-comment header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.similar-repair-card b { color:var(--warning); font-size:7px; }
+.similar-repair-card time,.similar-repair-card small { color:var(--muted); font-size:7px; }
+.similar-repair-card strong { overflow:hidden; font-size:9px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+.similar-repair-card p { display:-webkit-box; margin:0; overflow:hidden; color:var(--muted); font-size:8px; line-height:1.45; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .repair-identity { display: grid; gap: 4px; padding: 14px; border-radius: 16px; color: white; background: linear-gradient(145deg, var(--purple), var(--purple-dark)); }
 .repair-identity span { font-size: 7px; font-weight: 700; opacity: .72; }
 .repair-identity strong { font-size: 13px; }
@@ -186,6 +199,17 @@ button.equipment-timeline-entry { width:100%; cursor:pointer; }
 .task-activity-row span,.task-activity-row time { color:var(--muted); font-size:7px; font-style:normal; }
 .task-activity-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .task-activity-row time { text-align:right; white-space:nowrap; }
+.task-comments { display:grid; gap:8px; margin-top:12px; padding:13px; border:1px solid var(--line); border-radius:15px; background:var(--surface-2); }
+.task-comment-list { display:grid; gap:7px; }
+.task-comment { padding:10px; border:1px solid rgba(216,122,255,.18); border-radius:12px; background:rgba(162,77,225,.07); }
+.task-comment header strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.task-comment header time { flex:none; color:var(--muted); font-size:7px; }
+.task-comment p { margin:6px 0 0; font-size:9px; line-height:1.5; white-space:pre-wrap; }
+.task-comments-empty { margin:0; color:var(--muted); font-size:8px; }
+.task-comment-form { display:grid; gap:7px; margin-top:3px; padding-top:9px; border-top:1px solid var(--line); }
+.task-comment-form label { margin:0; }
+.task-comment-form textarea { width:100%; min-height:72px; color:var(--ink); border:1px solid var(--line); border-radius:12px; outline:none; background:rgba(31,12,59,.76); }
+.task-comment-form .action-button { width:100%; }
 .history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: var(--muted); font-size: 8px; font-weight: 700; }
 .history-head b { display: grid; min-width: 22px; height: 22px; place-items: center; border-radius: 999px; color: var(--purple); background: var(--lavender); }
 .history-entry { width:100%; margin-bottom:6px; padding:11px; border:1px solid var(--line); border-radius:13px; color:var(--ink); text-align:left; background:var(--surface-2); cursor:pointer; }

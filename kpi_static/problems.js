@@ -13,6 +13,7 @@ const state = {
   problemRecordingStartedAt: 0, problemPointerActive: false,
   problemHoldTriggered: false, problemDiscardRecording: false,
   problemCameraReturnToForm: false,
+  similarRepairTimer: null, similarRepairRequest: 0,
 };
 tg?.ready();
 tg?.expand();
@@ -289,6 +290,48 @@ function updateRepairTitle() {
   $('#repairTitlePreview').textContent = title;
   $('#createTitle').value = item && locations.length ? title.slice(0, 50) : '';
 }
+function clearSimilarRepairs() {
+  clearTimeout(state.similarRepairTimer);
+  state.similarRepairRequest += 1;
+  $('#similarRepairs').classList.add('hidden');
+  $('#similarRepairList').innerHTML = '';
+  $('#similarRepairCount').textContent = '';
+}
+async function loadSimilarRepairs() {
+  const club = $('#createClub').value;
+  const itemId = Number($('#repairItem').value);
+  const locations = selectedRepairLocations();
+  if ($('#createType').value !== 'Ремонт' || !club || !itemId || !locations.length) {
+    clearSimilarRepairs();
+    return;
+  }
+  const requestId = ++state.similarRepairRequest;
+  const params = new URLSearchParams({
+    club,
+    item_id: String(itemId),
+    location_ids: locations.map((location) => location.id).join(','),
+  });
+  try {
+    const payload = await api(`/api/repairs/similar?${params}`);
+    if (requestId !== state.similarRepairRequest) return;
+    $('#similarRepairs').classList.toggle('hidden', !payload.tasks.length);
+    $('#similarRepairCount').textContent = payload.tasks.length;
+    $('#similarRepairList').innerHTML = payload.tasks.map((task) => `
+      <button class="similar-repair-card" type="button" data-similar-task="${task.id}">
+        <span><b>№${task.id} · ${escapeHtml(task.status)}</b><time>${dateLabel(task.date)}</time></span>
+        <strong>${escapeHtml(task.title)}</strong>
+        <small>${task.locations.map((location) => escapeHtml(location.name)).join(' · ')}</small>
+        <p>${escapeHtml(String(task.description || '').slice(0, 160))}</p>
+      </button>
+    `).join('');
+  } catch (_error) {
+    if (requestId === state.similarRepairRequest) clearSimilarRepairs();
+  }
+}
+function scheduleSimilarRepairs() {
+  clearTimeout(state.similarRepairTimer);
+  state.similarRepairTimer = setTimeout(loadSimilarRepairs, 180);
+}
 function renderRepairCatalog() {
   const catalog = state.repairCatalog;
   $('#repairItem').innerHTML = `<option value="">Выберите оборудование</option>${catalog.items.filter((item) => item.active).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('')}`;
@@ -310,6 +353,7 @@ function renderRepairCatalog() {
 }
 async function loadRepairCatalog(club = $('#createClub').value, includeInactive = false) {
   if (!club) return;
+  clearSimilarRepairs();
   state.repairCatalog = await api(`/api/repairs/catalog?club=${encodeURIComponent(club)}${includeInactive ? '&include_inactive=1' : ''}`);
   renderRepairCatalog();
 }
@@ -356,6 +400,7 @@ async function updateCreateFields() {
   $('#createTitle').required = !repair;
   $('#repairItem').required = repair;
   if (repair && $('#createClub').value) await loadRepairCatalog();
+  else clearSimilarRepairs();
 }
 
 function renderList() {
@@ -680,6 +725,25 @@ async function openTask(taskId) {
           </div>`;
         }).join('')}
       </section>` : '';
+    const comments = `
+      <section class="task-comments">
+        <div class="history-head"><span>Комментарии по работе</span><b>${task.comments?.length || 0}</b></div>
+        <div class="task-comment-list">
+          ${(task.comments || []).map((comment) => {
+            const author = comment.actor
+              ? (comment.actor.name || comment.actor.login || 'Сотрудник')
+              : 'Сотрудник';
+            return `<article class="task-comment">
+              <header><strong>${escapeHtml(author)}</strong><time>${dateTimeLabel(comment.created_at)}</time></header>
+              <p>${escapeHtml(comment.message)}</p>
+            </article>`;
+          }).join('') || '<p class="task-comments-empty">Комментариев пока нет</p>'}
+        </div>
+        ${state.meta.can_process ? `<form id="taskCommentForm" class="task-comment-form">
+          <label><span>Новый комментарий</span><textarea name="message" maxlength="1000" required rows="3" placeholder="Например, заменили кабель — устройство проверяем"></textarea></label>
+          <button class="action-button" type="submit">Добавить комментарий</button>
+        </form>` : ''}
+      </section>`;
     const history = repair ? `
       <section class="repair-history"><div class="history-head"><span>История оборудования</span><b>${repair.history.length}</b></div>
         ${repair.history.map((entry) => `<button type="button" class="history-entry" data-history-task="${entry.task_id}">
@@ -694,6 +758,7 @@ async function openTask(taskId) {
       ${task.has_photo ? '<div id="detailPhoto" class="empty-card">Загрузка фото…</div>' : ''}
       ${task.has_video ? '<div id="detailVideo" class="empty-card">Загрузка видео…</div>' : ''}
       ${activity}
+      ${comments}
       <div class="detail-feedback"><span>История решения</span><p>${escapeHtml(task.feedback || 'Ожидает решения…')}</p></div>
       ${history}
       ${actions ? `<div class="detail-actions">${actions}</div>` : ''}
@@ -826,9 +891,15 @@ $('#problemShutter').addEventListener('pointercancel', (event) => {
 $('#problemShutter').addEventListener('contextmenu', (event) => event.preventDefault());
 $('#createType').addEventListener('change', () => updateCreateFields().catch((error) => toast(error.message, true)));
 $('#createClub').addEventListener('change', () => updateCreateFields().catch((error) => toast(error.message, true)));
-$('#repairItem').addEventListener('change', () => { updateRepairDetails(); updateRepairTitle(); });
+$('#repairItem').addEventListener('change', () => { updateRepairDetails(); updateRepairTitle(); scheduleSimilarRepairs(); });
 $('#repairDetail').addEventListener('change', updateRepairTitle);
-$('#repairLocations').addEventListener('change', updateRepairTitle);
+$('#repairLocations').addEventListener('change', () => { updateRepairTitle(); scheduleSimilarRepairs(); });
+$('#similarRepairList').addEventListener('click', async (event) => {
+  const task = event.target.closest('[data-similar-task]');
+  if (!task) return;
+  $('#createDialog').close();
+  await openTask(Number(task.dataset.similarTask));
+});
 document.addEventListener('click', (event) => {
   if (event.target.closest('.close-dialog')) event.target.closest('dialog')?.close();
 });
@@ -892,6 +963,26 @@ $('#detailDialog').addEventListener('click', async (event) => {
   $('#actionMessage').value = '';
   $('#messageSubmit').textContent = action === 'solution' ? 'Отправить на проверку' : 'Вернуть в работу';
   $('#messageDialog').showModal();
+});
+
+$('#detailDialog').addEventListener('submit', async (event) => {
+  if (event.target.id !== 'taskCommentForm' || !state.selected) return;
+  event.preventDefault();
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
+  const taskId = state.selected.id;
+  button.disabled = true;
+  try {
+    await api(`/api/problems/${taskId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ message: new FormData(event.target).get('message') }),
+    });
+    $('#detailDialog').close();
+    await openTask(taskId);
+    toast('Комментарий добавлен');
+  } catch (error) {
+    toast(error.message, true);
+    button.disabled = false;
+  }
 });
 
 $('#equipmentDialog').addEventListener('click', async (event) => {

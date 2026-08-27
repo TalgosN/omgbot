@@ -619,6 +619,58 @@ def repair_payload(conn, task_id):
     }
 
 
+def similar_repairs_payload(db_path, club, item_id, location_ids, limit=8):
+    initialize_repair_schema(db_path)
+    location_ids = list(dict.fromkeys(int(value) for value in location_ids))
+    if not club or not item_id or not location_ids:
+        return {'tasks': []}
+    placeholders = ','.join('?' for _ in location_ids)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            f'''SELECT DISTINCT tasks.ID, tasks.dtrep, tasks.title,
+                               tasks.status, tasks.desc,
+                               items.name item_name,
+                               details.name detail_name
+                FROM tasks
+                JOIN repair_cases cases ON cases.task_id=tasks.ID
+                JOIN repair_item_types items ON items.id=cases.item_type_id
+                LEFT JOIN repair_item_details details ON details.id=cases.detail_id
+                JOIN repair_case_locations links ON links.task_id=tasks.ID
+                WHERE tasks.club=? AND cases.item_type_id=?
+                  AND links.location_id IN ({placeholders})
+                  AND tasks.status IN ('В работе', 'На проверке')
+                ORDER BY date(tasks.dtrep) DESC, tasks.ID DESC
+                LIMIT ?''',
+            (club, item_id, *location_ids, limit),
+        ).fetchall()
+        tasks = []
+        for row in rows:
+            locations = conn.execute(
+                '''SELECT locations.id, locations.name
+                   FROM repair_case_locations links
+                   JOIN repair_locations locations
+                     ON locations.id=links.location_id
+                   WHERE links.task_id=?
+                   ORDER BY locations.sort_order, locations.name''',
+                (row['ID'],),
+            ).fetchall()
+            tasks.append({
+                'id': row['ID'],
+                'date': row['dtrep'],
+                'title': row['title'],
+                'status': row['status'],
+                'description': row['desc'],
+                'item_name': row['item_name'],
+                'detail_name': row['detail_name'],
+                'locations': [dict(location) for location in locations],
+            })
+        return {'tasks': tasks}
+    finally:
+        conn.close()
+
+
 def add_repair_event(conn, task_id, event_type, message=None):
     if not conn.execute('SELECT 1 FROM repair_cases WHERE task_id=?', (task_id,)).fetchone():
         return

@@ -1915,6 +1915,147 @@ class KpiWebTest(unittest.TestCase):
         self.assertIn('Снова выключился', row[2])
         self.assertEqual(events, [('solution',), ('returned',)])
 
+    def test_problem_comments_are_stored_for_roles_one_to_three(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   );
+                   INSERT INTO tasks (
+                       dtrep, type, club, title, desc, status
+                   ) VALUES (
+                       '2026-08-27', 'Ремонт', 'Марьино',
+                       'VR-шлем — 2 зона', 'Не включается', 'В работе'
+                   );'''
+            )
+            conn.commit()
+            conn.close()
+
+            responses = []
+            notify = Mock()
+            for role in (1, 2, 3):
+                with (
+                    patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                    patch.object(kpi_web, 'get_user', return_value=user(role)),
+                    patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                    patch.object(kpi_web, '_send_problem_notification', notify),
+                ):
+                    responses.append(self.client.post(
+                        '/api/problems/1/comments',
+                        headers=self.headers,
+                        json={'message': f'Комментарий роли {role}'},
+                    ))
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+            ):
+                forbidden = self.client.post(
+                    '/api/problems/1/comments',
+                    headers=self.headers,
+                    json={'message': 'Комментарий сотрудника'},
+                )
+                detail = self.client.get(
+                    '/api/problems/1', headers=self.headers,
+                )
+
+            conn = sqlite3.connect(db_path)
+            status = conn.execute(
+                'SELECT status FROM tasks WHERE ID=1'
+            ).fetchone()[0]
+            stored = conn.execute(
+                '''SELECT message, actor_login, actor_name
+                   FROM task_comments ORDER BY id'''
+            ).fetchall()
+            conn.close()
+
+        self.assertTrue(all(response.status_code == 201 for response in responses))
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(status, 'В работе')
+        self.assertEqual(len(detail.get_json()['comments']), 3)
+        self.assertEqual(stored[0], ('Комментарий роли 1', '@tester', 'Тестер'))
+        notify.assert_not_called()
+
+    def test_similar_repairs_include_only_open_matching_equipment_and_location(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'tasks.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE tasks (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, type TEXT, club TEXT, title TEXT,
+                       photo BLOB, desc TEXT, status TEXT, dtfb TEXT,
+                       feedback TEXT
+                   )'''
+            )
+            conn.commit()
+            conn.close()
+            kpi_web.initialize_repair_schema(str(db_path))
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            helmet_id = conn.execute(
+                "SELECT id FROM repair_item_types WHERE name='VR-шлем'"
+            ).fetchone()[0]
+            controller_id = conn.execute(
+                "SELECT id FROM repair_item_types WHERE name='VR-контроллер'"
+            ).fetchone()[0]
+            locations = {
+                row['name']: row['id'] for row in conn.execute(
+                    '''SELECT id, name FROM repair_locations
+                       WHERE club='Марьино' AND name IN ('1 зона', '2 зона')'''
+                )
+            }
+            cases = (
+                ('VR-шлем — 1 зона', 'В работе', helmet_id, locations['1 зона']),
+                ('Старый шлем — 1 зона', 'Выполнено', helmet_id, locations['1 зона']),
+                ('Контроллер — 1 зона', 'В работе', controller_id, locations['1 зона']),
+                ('VR-шлем — 2 зона', 'На проверке', helmet_id, locations['2 зона']),
+            )
+            with conn:
+                for title, status, item_id, location_id in cases:
+                    cursor = conn.execute(
+                        '''INSERT INTO tasks(
+                               dtrep, type, club, title, desc, status
+                           ) VALUES (
+                               '2026-08-27', 'Ремонт', 'Марьино',
+                               ?, 'Проверка похожих заявок', ?
+                           )''',
+                        (title, status),
+                    )
+                    kpi_web.create_repair_case(
+                        conn, cursor.lastrowid, 'Марьино', item_id, None,
+                        [location_id],
+                    )
+            conn.close()
+
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+            ):
+                response = self.client.get(
+                    '/api/repairs/similar',
+                    headers=self.headers,
+                    query_string={
+                        'club': 'Марьино',
+                        'item_id': helmet_id,
+                        'location_ids': locations['1 зона'],
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        tasks = response.get_json()['tasks']
+        self.assertEqual([task['id'] for task in tasks], [1])
+        self.assertEqual(tasks[0]['locations'][0]['name'], '1 зона')
+
     def test_all_active_users_can_read_every_employee_kpi(self):
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
