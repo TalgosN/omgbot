@@ -75,6 +75,7 @@ from repair_catalog import (
     replace_equipment_unit,
     similar_repairs_payload,
 )
+from records import build_records_dashboard
 from shift_config_store import (
     ACTIONS as SHIFT_ACTIONS,
     MAX_PHOTO_QUESTIONS,
@@ -2391,6 +2392,11 @@ def problems_index():
     return send_from_directory(STATIC_DIR, 'problems.html')
 
 
+@app.get('/records')
+def records_index():
+    return send_from_directory(STATIC_DIR, 'records.html')
+
+
 @app.get('/shift-config')
 def shift_config_index():
     return send_from_directory(STATIC_DIR, 'shift_config.html')
@@ -2858,6 +2864,15 @@ def api_problems_meta():
         'can_edit_repair_catalog': int(g.kpi_user['status']) >= ROLE_MANAGER,
         'repair_clubs': list(ZONE_COUNTS),
     })
+
+
+@app.get('/api/records')
+@require_user
+def api_records():
+    return jsonify(build_records_dashboard(
+        DB_PATH,
+        str(g.kpi_user.get('login') or ''),
+    ))
 
 
 @app.get('/api/problems/analytics')

@@ -162,6 +162,13 @@ def schedule_func(bot): # Не забудь передать bot!
     schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks, bot=bot)
     schedule.every().day.at("09:20:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
 
+    from records import start_records_refresh
+    schedule.every(5).minutes.do(
+        start_records_refresh,
+        bot=bot,
+        main_chat_id=CHATS['main_group'],
+    )
+
     from backup import run_scheduled_backup
     schedule.every().day.at("03:00:00", 'Europe/Moscow').do(
         run_scheduled_backup,
@@ -212,6 +219,11 @@ def schedule_func(bot): # Не забудь передать bot!
     # Запускаем проверку каждую минуту. 
     # Она внутри себя сама разберется, во сколько кого открывать.
     schedule.every(1).minutes.do(check_dynamic_events, bot)
+
+    start_records_refresh(
+        bot=bot,
+        main_chat_id=CHATS['main_group'],
+    )
 
     # Вечный цикл
     while True:

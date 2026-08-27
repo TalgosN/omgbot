@@ -102,6 +102,7 @@ button, input, select, textarea { font: inherit; }
 .module-open { align-self:center; color:rgba(255,255,255,.92); font-size:9px; font-weight:800; white-space:nowrap; }
 .kpi-module { background: linear-gradient(145deg, #7046d9, #3e238d); }
 .problem-module { background: linear-gradient(145deg, #a24de1, #6e2ea7); }
+.records-module { background:radial-gradient(circle at 92% 12%,rgba(255,230,165,.25),transparent 8rem),linear-gradient(145deg,#76502a,#3d274f); }
 .shift-module { background: linear-gradient(145deg, #21a99b, #106c68); }
 .management-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .management-grid .summary-tile { padding: 13px 10px; box-shadow: none; }

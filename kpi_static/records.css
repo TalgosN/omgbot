@@ -1,0 +1,78 @@
+:root { --records-bg:#0e0818; --records-card:#1b1129; --records-card-2:#241535; --records-line:rgba(255,255,255,.1); --gold:#f6bd4b; --gold-soft:#ffe4a3; --bronze:#d18a57; --silver:#c8d1df; }
+* { box-sizing:border-box; }
+html { min-height:100%; background:var(--records-bg); }
+body { min-height:100vh; margin:0; color:#fff7e7; background:radial-gradient(circle at 85% 4%,rgba(246,189,75,.17),transparent 19rem),radial-gradient(circle at 0 42%,rgba(135,83,200,.13),transparent 24rem),linear-gradient(180deg,#160d25 0,#0e0818 58%,#09050f 100%); }
+body::before { position:fixed; inset:0; z-index:0; pointer-events:none; background-image:linear-gradient(rgba(246,189,75,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(246,189,75,.035) 1px,transparent 1px); background-size:29px 29px; content:""; mask-image:linear-gradient(to bottom,black,transparent 86%); }
+body::after { position:fixed; inset:12px 0 auto; z-index:0; overflow:hidden; color:rgba(255,226,158,.09); font-size:17px; letter-spacing:28px; line-height:3.8; pointer-events:none; content:"✦ ★ ✧ ✦ ★ ✧ ✦ ★ ✧ ✦ ★ ✧ ✦ ★ ✧"; transform:rotate(-7deg) scale(1.15); }
+button { font-family:inherit; }
+.records-shell { position:relative; z-index:1; width:min(100%,820px); margin:0 auto; padding:calc(18px + env(safe-area-inset-top)) 16px 58px; }
+.records-header { display:flex; min-width:0; align-items:flex-start; justify-content:space-between; gap:12px; }
+.records-title { min-width:0; }
+.records-title .eyebrow { overflow:hidden; color:#c49e5b; text-overflow:ellipsis; white-space:nowrap; }
+.records-title h1 { margin:4px 0 0; font-family:Furore,"Russo One",sans-serif; font-size:clamp(26px,7.6vw,44px); font-weight:400; letter-spacing:.025em; line-height:1; text-shadow:0 0 30px rgba(246,189,75,.29); }
+.records-header .user-badge { flex:none; border-color:rgba(246,189,75,.18); color:#d8bd88; background:rgba(35,22,50,.78); }
+.records-hero { position:relative; display:grid; min-height:174px; margin:20px 0 12px; padding:20px; grid-template-columns:minmax(0,1fr) auto; align-content:space-between; gap:12px; overflow:hidden; border:1px solid rgba(246,189,75,.26); border-radius:24px; background:radial-gradient(circle at 92% 10%,rgba(255,218,126,.25),transparent 10rem),linear-gradient(145deg,rgba(92,50,120,.92),rgba(34,18,51,.96)); box-shadow:0 24px 60px rgba(0,0,0,.3); }
+.records-hero::after { position:absolute; right:-27px; bottom:-55px; width:160px; height:160px; border:1px solid rgba(246,189,75,.13); border-radius:50%; content:""; box-shadow:0 0 0 24px rgba(246,189,75,.035),0 0 0 48px rgba(246,189,75,.02); }
+.records-hero > div:first-child { position:relative; z-index:1; }
+.records-hero .eyebrow { color:#e2bf78; }
+.records-hero h2 { margin:6px 0 7px; font-size:29px; }
+.records-hero p:last-child { max-width:360px; margin:0; color:rgba(255,247,231,.68); font-size:9px; line-height:1.55; }
+.records-trophy { position:relative; z-index:1; display:grid; width:63px; height:63px; place-items:center; border:1px solid rgba(255,234,180,.28); border-radius:20px; background:rgba(255,255,255,.08); box-shadow:inset 0 0 25px rgba(246,189,75,.12); font-size:32px; transform:rotate(4deg); }
+.medal-summary { position:relative; z-index:1; display:grid; grid-column:1/-1; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.medal-summary div { display:flex; min-height:38px; padding:0 9px; align-items:center; justify-content:space-between; gap:5px; border:1px solid rgba(255,255,255,.09); border-radius:12px; background:rgba(15,8,24,.32); }
+.medal-summary span { font-size:14px; }
+.medal-summary b { font-size:10px; }
+.records-tabs { display:grid; margin:0 0 17px; padding:4px; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; border:1px solid var(--records-line); border-radius:16px; background:rgba(26,15,40,.83); }
+.records-tabs button { min-height:42px; border:0; border-radius:12px; color:#9c8eac; background:transparent; font-size:10px; font-weight:800; cursor:pointer; }
+.records-tabs button.active { color:#2c1a05; background:linear-gradient(145deg,#ffd978,#e9a932); box-shadow:0 7px 18px rgba(210,144,30,.22); }
+.records-view[hidden] { display:none !important; }
+.records-section-head { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin:0 2px 11px; }
+.records-section-head h2,.records-section-head p { margin:0; }
+.records-section-head h2 { margin-top:4px; font-size:20px; }
+.records-section-head .eyebrow { color:#9d7dba; }
+.records-section-head > span { color:#8c7d99; font-size:8px; font-weight:750; }
+.record-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.record-card { position:relative; display:grid; min-width:0; min-height:144px; padding:14px; align-content:space-between; gap:14px; overflow:hidden; border:1px solid var(--records-line); border-radius:18px; background:linear-gradient(150deg,rgba(57,32,77,.92),rgba(25,14,39,.96)); box-shadow:0 14px 34px rgba(0,0,0,.18); }
+.record-card:first-child { grid-column:1/-1; min-height:156px; border-color:rgba(246,189,75,.3); background:radial-gradient(circle at 100% 0,rgba(246,189,75,.18),transparent 11rem),linear-gradient(145deg,#402458,#20132e); }
+.record-card::after { position:absolute; top:10px; right:12px; color:rgba(246,189,75,.18); font-size:23px; content:"★"; }
+.record-card small,.record-card strong,.record-card b,.record-card span { display:block; }
+.record-card small { padding-right:25px; color:#ab9bb7; font-size:8px; font-weight:750; line-height:1.4; }
+.record-card b { color:var(--gold); font-family:Furore,"Russo One",sans-serif; font-size:clamp(20px,7vw,31px); font-weight:400; }
+.record-holder { min-width:0; }
+.record-holder strong { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.record-holder span { margin-top:4px; overflow:hidden; color:#8f809b; font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+.records-loading,.records-empty { grid-column:1/-1; padding:18px; border:1px dashed var(--records-line); border-radius:17px; color:#94859f; font-size:9px; text-align:center; }
+.archive-section { margin-top:15px; padding:13px; border:1px solid rgba(190,190,200,.12); border-radius:18px; background:rgba(80,75,88,.09); filter:saturate(.25); }
+.archive-section summary { display:flex; align-items:center; justify-content:space-between; color:#a19ba7; font-size:10px; font-weight:800; cursor:pointer; list-style:none; }
+.archive-section summary::-webkit-details-marker { display:none; }
+.archive-section summary b { display:grid; min-width:23px; height:23px; place-items:center; border-radius:999px; background:rgba(255,255,255,.08); font-size:8px; }
+.archive-section > p { margin:10px 0; color:#77717d; font-size:8px; line-height:1.5; }
+.archive-grid .record-card { min-height:126px; background:rgba(46,42,51,.65); box-shadow:none; }
+.archive-grid .record-card:first-child { grid-column:auto; min-height:126px; }
+.archive-grid .record-card b { color:#aaa5ad; font-size:18px; }
+.achievement-categories { display:grid; gap:20px; }
+.achievement-category h3 { margin:0 2px 9px; color:#e4d6ee; font-size:14px; }
+.achievement-grid { display:grid; gap:8px; }
+.achievement-card { --tier-color:#665b70; --tier-border:rgba(102,91,112,.32); --tier-bg:rgba(102,91,112,.08); position:relative; display:grid; min-width:0; padding:14px; grid-template-columns:42px minmax(0,1fr); gap:11px; overflow:hidden; border:1px solid var(--tier-border); border-radius:18px; background:linear-gradient(145deg,var(--tier-bg),var(--records-card)); }
+.achievement-card.bronze { --tier-color:var(--bronze); --tier-border:rgba(209,138,87,.32); --tier-bg:rgba(209,138,87,.09); }
+.achievement-card.silver { --tier-color:var(--silver); --tier-border:rgba(200,209,223,.28); --tier-bg:rgba(200,209,223,.08); }
+.achievement-card.gold { --tier-color:var(--gold); --tier-border:rgba(246,189,75,.32); --tier-bg:rgba(246,189,75,.09); }
+.achievement-card.locked { opacity:.7; }
+.achievement-medal { display:grid; width:42px; height:42px; place-items:center; border:1px solid var(--tier-border); border-radius:14px; color:var(--tier-color); background:var(--tier-bg); font-size:20px; }
+.achievement-main { min-width:0; }
+.achievement-head { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:8px; }
+.achievement-head strong { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.achievement-head span { flex:none; color:var(--tier-color); font-size:7px; font-weight:800; text-transform:uppercase; }
+.achievement-main > p { margin:4px 0 9px; color:#91839c; font-size:8px; line-height:1.45; }
+.achievement-progress-head { display:flex; align-items:center; justify-content:space-between; gap:8px; color:#b8aebe; font-size:7px; }
+.achievement-progress-head b { color:#eee4f4; font-size:8px; }
+.achievement-track { height:6px; margin-top:6px; overflow:hidden; border-radius:999px; background:rgba(255,255,255,.07); }
+.achievement-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#7a45bd,var(--tier-color)); }
+.achievement-thresholds { display:flex; gap:4px; margin-top:8px; overflow-x:auto; scrollbar-width:none; }
+.achievement-thresholds::-webkit-scrollbar { display:none; }
+.achievement-thresholds span { flex:none; padding:4px 6px; border-radius:999px; color:#786d82; background:rgba(255,255,255,.045); font-size:6px; }
+.achievement-thresholds span.earned { color:var(--tier-color); background:var(--tier-bg); }
+.records-error { margin-top:15px; padding:14px; border:1px solid rgba(255,103,124,.22); border-radius:16px; color:#ff8799; background:rgba(255,103,124,.08); font-size:9px; }
+.records-toast { position:fixed; left:50%; bottom:22px; z-index:20; max-width:calc(100% - 32px); padding:11px 14px; border-radius:13px; color:#2d1d06; background:var(--gold); font-size:9px; opacity:0; pointer-events:none; transform:translate(-50%,10px); transition:.2s; }
+.records-toast.visible { opacity:1; transform:translate(-50%,0); }
+@media (min-width:700px) { .achievement-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .record-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } .record-card:first-child { grid-column:span 2; } }

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#120b20">
+  <title>OMG Records · OMG VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
+  <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
+  <link rel="stylesheet" href="/static/home.css">
+  <link rel="stylesheet" href="/static/records.css?v=20260827-1">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="records-shell">
+    <header class="records-header">
+      <div class="records-title">
+        <p id="recordsUserName" class="eyebrow">Команда OMG VR</p>
+        <h1>OMG RECORDS</h1>
+      </div>
+      <div id="recordsUserBadge" class="user-badge">Загрузка…</div>
+    </header>
+
+    <section class="records-hero">
+      <div>
+        <p class="eyebrow">Личная коллекция</p>
+        <h2><span id="earnedCount">—</span> из <span id="achievementCount">31</span></h2>
+        <p>Рекорды, достижения и немного заслуженного пафоса.</p>
+      </div>
+      <div class="records-trophy" aria-hidden="true">🏆</div>
+      <div id="medalSummary" class="medal-summary"></div>
+    </section>
+
+    <nav id="recordsTabs" class="records-tabs" aria-label="Разделы OMG Records">
+      <button class="active" type="button" data-view="records">Рекорды</button>
+      <button type="button" data-view="achievements">Ачивки</button>
+      <button type="button" data-view="mine">Мои</button>
+    </nav>
+
+    <section id="recordsView" class="records-view">
+      <div class="records-section-head"><div><p class="eyebrow">Действующая команда</p><h2>Зал славы</h2></div><span>За всё время</span></div>
+      <div id="recordGrid" class="record-grid"><div class="records-loading">Считаем рекорды…</div></div>
+      <details id="archiveSection" class="archive-section" hidden>
+        <summary><span>Архивные рекорды</span><b id="archiveCount"></b></summary>
+        <p>Бывшие сотрудники не участвуют в основном зале славы, но история остаётся на месте.</p>
+        <div id="archiveRecordGrid" class="record-grid archive-grid"></div>
+      </details>
+    </section>
+
+    <section id="achievementsView" class="records-view" hidden>
+      <div class="records-section-head"><div><p class="eyebrow">Полная коллекция</p><h2>Все ачивки</h2></div><span>🥉 → 🥈 → 🥇</span></div>
+      <div id="achievementCategories" class="achievement-categories"></div>
+    </section>
+
+    <section id="mineView" class="records-view" hidden>
+      <div class="records-section-head"><div><p class="eyebrow">Уже получено</p><h2>Моя полка</h2></div><span id="mineCount"></span></div>
+      <div id="mineAchievements" class="achievement-grid"></div>
+    </section>
+
+    <div id="recordsError" class="records-error" hidden></div>
+  </main>
+  <div id="recordsToast" class="records-toast"></div>
+  <script src="/static/swipe_navigation.js"></script>
+  <script src="/static/records.js?v=20260827-1"></script>
+</body>
+</html>

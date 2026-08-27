@@ -99,7 +99,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_module_pages_load_shared_swipe_navigation(self):
-        for path in ('/kpi', '/problems', '/shift', '/shift-config'):
+        for path in ('/kpi', '/problems', '/records', '/shift', '/shift-config'):
             response = self.client.get(path)
             try:
                 self.assertEqual(response.status_code, 200)
@@ -117,6 +117,7 @@ class KpiWebTest(unittest.TestCase):
                 'public, max-age=300',
             )
             self.assertIn(b"navigate('/')", script.data)
+            self.assertIn(b"'/records'", script.data)
         finally:
             script.close()
 
@@ -125,6 +126,38 @@ class KpiWebTest(unittest.TestCase):
             self.assertEqual(page.headers['Cache-Control'], 'no-store')
         finally:
             page.close()
+
+        home = self.client.get('/')
+        try:
+            self.assertIn(b'href="/records"', home.data)
+            self.assertIn(b'OMG RECORDS', home.data)
+        finally:
+            home.close()
+
+    def test_records_api_is_available_to_every_active_role(self):
+        payload = {
+            'summary': {'earned': 0, 'total': 31},
+            'records': [],
+            'archive_records': [],
+            'categories': [],
+        }
+        for role in (0, 1, 2, 3):
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(role)),
+                patch.object(
+                    kpi_web,
+                    'build_records_dashboard',
+                    return_value=payload,
+                ) as dashboard,
+            ):
+                response = self.client.get(
+                    '/api/records', headers=self.headers,
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json(), payload)
+            dashboard.assert_called_once_with(kpi_web.DB_PATH, '@tester')
 
     def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
         response = self.client.get('/kpi')

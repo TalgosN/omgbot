@@ -2,6 +2,7 @@
   const modules = [
     '/kpi',
     '/problems',
+    '/records',
     '/shift',
   ];
   const ignoredTargets = [
