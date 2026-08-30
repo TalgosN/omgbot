@@ -17,6 +17,56 @@ CATEGORY_SEEDS = (
     ('certificates', '🎁', 'Сертификаты и полиграфия'),
     ('household', '🧰', 'Хозяйственные'),
 )
+PRODUCT_ALIAS_GROUPS = (
+    ('Adrenaline Energy Power синий', (
+        'Adrenaline Energy Power синий', 'Adrenaline Синий',
+    )),
+    ('Adrenaline Zero Sugar', (
+        'Adrenaline Zero Sugar', 'Adrenaline Белый',
+    )),
+    ('Adrenaline Ягодный', (
+        'Adrenaline Ягодный', 'Adrenaline Ягоды',
+    )),
+    ('Сок Любимый: Вишня-Черешня', (
+        'Сок вишня-черешня',
+        'Сок любимый: Вишня-Черешня',
+    )),
+    ('Сок Любимый: Земляничный', (
+        'Сок земляничный',
+        'Сок любимый: Земляничный',
+    )),
+    ('Сок Любимый: Яблочный', (
+        'Сок яблочный',
+        'Сок любимый: Яблочный',
+    )),
+    ('Салфетки влажные (в пачках)', (
+        'Салфетки влажные(в пачках)',
+        'Салфетки(влажные в пачках)',
+        'Салфетки(влажные)',
+    )),
+    ('Салфетки сухие (в пачках)', (
+        'Салфетки сухие(в пачках)',
+        'Салфетки(сухие в пачках)',
+        'Салфетки(сухие)',
+    )),
+    ('Средство для стекол', (
+        'Жидкость для стекол',
+        'Средство для стекла',
+        'Средство для стекол',
+    )),
+    ('Сертификаты ДР', (
+        'Сертификат ДР', 'Сертификаты ДР',
+    )),
+    ('Скотч малярный', (
+        'Малярная лента(скотч)', 'Скотч малярный',
+    )),
+    ('Средство для унитаза', (
+        'Доместос', 'Средство для унитаза',
+    )),
+    ('Жидкое мыло', (
+        'Крем-мыло', 'Средство для рук', 'Жидкое мыло',
+    )),
+)
 _initialized_paths = set()
 _schema_lock = threading.Lock()
 
@@ -25,6 +75,20 @@ def normalize_product_name(value):
     normalized = str(value or '').strip().lower().replace('ё', 'е')
     normalized = re.sub(r'[^a-zа-я0-9]+', ' ', normalized)
     return ' '.join(normalized.split())
+
+
+_PRODUCT_ALIAS_LOOKUP = {
+    normalize_product_name(alias): canonical
+    for canonical, aliases in PRODUCT_ALIAS_GROUPS
+    for alias in aliases
+}
+
+
+def canonical_product_identity(value):
+    raw_name = str(value or '').strip()
+    normalized = normalize_product_name(raw_name)
+    canonical = _PRODUCT_ALIAS_LOOKUP.get(normalized, raw_name)
+    return canonical, normalize_product_name(canonical)
 
 
 def _category_slug(name):
@@ -67,6 +131,77 @@ def allowed_consumable_clubs():
 
 def _columns(conn, table):
     return {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+
+
+def _merge_catalog_aliases(conn):
+    for canonical_name, aliases in PRODUCT_ALIAS_GROUPS:
+        canonical_normalized = normalize_product_name(canonical_name)
+        alias_names = {
+            normalize_product_name(alias)
+            for alias in aliases
+        }
+        placeholders = ','.join('?' for _ in alias_names)
+        products = conn.execute(
+            f'''SELECT * FROM consumable_products
+                WHERE normalized_name IN ({placeholders})
+                ORDER BY CASE WHEN normalized_name=? THEN 0 ELSE 1 END, id''',
+            (*alias_names, canonical_normalized),
+        ).fetchall()
+        if not products:
+            continue
+
+        target = products[0]
+        for source in products[1:]:
+            overlapping_clubs = conn.execute(
+                '''SELECT source.club
+                   FROM consumables source
+                   JOIN consumables target ON target.club=source.club
+                   WHERE source.product_id=? AND target.product_id=?''',
+                (source['id'], target['id']),
+            ).fetchall()
+            if overlapping_clubs:
+                clubs = ', '.join(row['club'] for row in overlapping_clubs)
+                raise RuntimeError(
+                    f'Cannot merge duplicate consumables in the same club: '
+                    f'{canonical_name} ({clubs})'
+                )
+            if target['photo'] is None and source['photo'] is not None:
+                conn.execute(
+                    '''UPDATE consumable_products
+                       SET photo=?, photo_mime=?, photo_updated_at=?
+                       WHERE id=?''',
+                    (
+                        source['photo'], source['photo_mime'],
+                        source['photo_updated_at'], target['id'],
+                    ),
+                )
+                target = conn.execute(
+                    'SELECT * FROM consumable_products WHERE id=?',
+                    (target['id'],),
+                ).fetchone()
+            conn.execute(
+                '''UPDATE consumables SET product_id=?, name=?
+                   WHERE product_id=?''',
+                (target['id'], canonical_name, source['id']),
+            )
+            conn.execute(
+                'UPDATE consumable_events SET product_id=? WHERE product_id=?',
+                (target['id'], source['id']),
+            )
+            conn.execute(
+                'DELETE FROM consumable_products WHERE id=?',
+                (source['id'],),
+            )
+
+        conn.execute(
+            '''UPDATE consumable_products
+               SET name=?, normalized_name=? WHERE id=?''',
+            (canonical_name, canonical_normalized, target['id']),
+        )
+        conn.execute(
+            'UPDATE consumables SET name=? WHERE product_id=?',
+            (canonical_name, target['id']),
+        )
 
 
 def initialize_consumables_schema(db_path):
@@ -179,7 +314,7 @@ def initialize_consumables_schema(db_path):
             for row in rows:
                 if row['product_id']:
                     continue
-                normalized = normalize_product_name(row['name'])
+                product_name, normalized = canonical_product_identity(row['name'])
                 if not normalized:
                     normalized = f'item-{row["id"]}'
                 product = conn.execute(
@@ -196,15 +331,16 @@ def initialize_consumables_schema(db_path):
                                 category_source, created_at, created_by)
                            VALUES (?, ?, ?, 'auto', ?, 'migration')''',
                         (
-                            str(row['name']).strip(), normalized,
-                            category_ids[_category_slug(row['name'])], _now(),
+                            product_name, normalized,
+                            category_ids[_category_slug(product_name)], _now(),
                         ),
                     )
                     product_id = cursor.lastrowid
                 conn.execute(
-                    'UPDATE consumables SET product_id=? WHERE id=?',
-                    (product_id, row['id']),
+                    'UPDATE consumables SET product_id=?, name=? WHERE id=?',
+                    (product_id, product_name, row['id']),
                 )
+            _merge_catalog_aliases(conn)
             for product in conn.execute(
                 '''SELECT id, name FROM consumable_products
                    WHERE category_source='auto' '''
@@ -405,10 +541,10 @@ def add_inventory_item(
     clubs = allowed_consumable_clubs()
     if club not in clubs:
         raise ValueError('Выберите клуб из списка')
-    name = str(name or '').strip()
-    normalized = normalize_product_name(name)
-    if len(name) < 2 or not normalized:
+    raw_name = str(name or '').strip()
+    if len(raw_name) < 2 or not normalize_product_name(raw_name):
         raise ValueError('Укажите название товара')
+    name, normalized = canonical_product_identity(raw_name)
     quantity = int(quantity)
     min_limit = int(min_limit)
     if quantity < 0 or min_limit < 0:
