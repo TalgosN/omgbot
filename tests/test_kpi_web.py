@@ -1213,6 +1213,156 @@ class KpiWebTest(unittest.TestCase):
         finally:
             shift_css.close()
 
+    def test_shift_week_schedule_supports_personal_team_and_free_views(self):
+        schedule = {
+            'ok': True,
+            'days': [{
+                'date': '2026-08-10',
+                'locations': [{
+                    'title': 'Марьино OMG Shift',
+                    'shifts': [
+                        {
+                            'employee': 'Тестер', 'telegram': '@tester',
+                            'start': '10:00', 'end': '22:00',
+                        },
+                        {
+                            'employee': 'СВОБОДНАЯ СМЕНА',
+                            'start': '12:00', 'end': '18:00',
+                        },
+                    ],
+                }],
+            }],
+        }
+        with (
+            patch.object(
+                kpi_web, '_shift_schedule_range', return_value=schedule,
+            ),
+            patch.object(kpi_web, 'get_clubs', return_value={
+                'Марьино': {'shift_name': 'Марьино OMG Shift'},
+            }),
+        ):
+            payload = kpi_web._shift_week_payload(
+                '@tester', '2026-08-12',
+            )
+
+        self.assertEqual(payload['week_start'], '2026-08-10')
+        self.assertEqual(payload['week_end'], '2026-08-16')
+        self.assertEqual(payload['source'], 'omg_shift')
+        shifts = payload['days'][0]['locations'][0]['shifts']
+        self.assertTrue(shifts[0]['is_mine'])
+        self.assertTrue(shifts[1]['is_free'])
+        self.assertEqual(
+            payload['days'][0]['locations'][0]['club'], 'Марьино',
+        )
+
+    def test_shift_history_combines_app_and_legacy_bot_runs_without_duplicates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'shift-history.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                '''CREATE TABLE activity (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, login TEXT, club TEXT, action TEXT
+                   )'''
+            )
+            conn.execute(
+                '''INSERT INTO activity (dtrep, login, club, action)
+                   VALUES ('2026-08-29 10:01:00', '@tester', 'Марьино',
+                           '✅ Открыть смену')'''
+            )
+            conn.execute(
+                '''INSERT INTO activity (dtrep, login, club, action)
+                   VALUES ('2026-08-28 22:10:00', '@tester', 'Марьино',
+                           '🚫 Закрыть смену')'''
+            )
+            conn.commit()
+            conn.close()
+
+            with patch.object(kpi_web, 'DB_PATH', str(db_path)):
+                kpi_web._initialize_shift_report_schema(str(db_path))
+                conn = sqlite3.connect(db_path)
+                conn.execute(
+                    '''INSERT INTO shift_webapp_runs (
+                           id, login, chatid, club, action, shift_date,
+                           scenario_version, variant_index, started_at,
+                           finished_at, completed_at, activity_id,
+                           answers_json, scenario_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        'run-history-1', '@tester', '1001', 'Марьино',
+                        'open', '2026-08-29', 'v1', 0,
+                        '2026-08-29 10:00:00', '2026-08-29 10:05:00',
+                        '2026-08-29 10:05:00', 1,
+                        json.dumps({'q1': '1500'}, ensure_ascii=False),
+                        json.dumps({'questions': [{
+                            'id': 'q1', 'text': 'Наличка',
+                        }]}, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                conn.close()
+                history = kpi_web._shift_history('@tester')
+
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]['source'], 'app')
+        self.assertEqual(history[0]['answers'], [{
+            'question': 'Наличка', 'answer': '1500',
+        }])
+        self.assertEqual(history[1]['source'], 'bot')
+        self.assertEqual(history[1]['action'], 'close')
+
+    def test_shift_overview_and_schedule_endpoints_return_module_data(self):
+        overview = [{
+            'club': 'Дмитровка', 'reports': {}, 'bookings': {'count': 0},
+        }]
+        history = [{'id': 'run-1', 'club': 'Дмитровка'}]
+        schedule = {
+            'week_start': '2026-08-24', 'week_end': '2026-08-30',
+            'source': 'omg_shift', 'warning': None, 'days': [],
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(
+                kpi_web, '_moscow_today', return_value=date(2026, 8, 30),
+            ),
+            patch.object(
+                kpi_web, '_today_shift_contexts', return_value=overview,
+            ),
+            patch.object(kpi_web, '_shift_history', return_value=history),
+        ):
+            response = self.client.get(
+                '/api/shift/overview', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['today'], overview)
+        self.assertEqual(response.get_json()['history'], history)
+
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(
+                kpi_web, '_shift_week_payload', return_value=schedule,
+            ) as build,
+        ):
+            response = self.client.get(
+                '/api/shift/schedule?date=2026-08-27', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), schedule)
+        build.assert_called_once_with('@tester', '2026-08-27')
+
+        page = self.client.get('/shift')
+        try:
+            self.assertIn(b'id="scheduleTabs"', page.data)
+            self.assertIn(b'data-view="free"', page.data)
+            self.assertIn(b'id="shiftHistory"', page.data)
+            self.assertIn(b'id="shiftToday"', page.data)
+        finally:
+            page.close()
+
     def test_owner_is_excluded_from_active_kpi_employees(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / 'roles.db'

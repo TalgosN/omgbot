@@ -837,6 +837,155 @@ def _upcoming_shifts(login, limit=3):
     ]
 
 
+def _shift_schedule_range(date_from, date_to):
+    from rasp import fetch_schedule_range_from_api
+
+    return fetch_schedule_range_from_api(date_from, date_to)
+
+
+def _shift_schedule_club_name(source_name):
+    normalized = str(source_name or '').strip().casefold()
+    for club_name, settings in get_clubs().items():
+        aliases = {
+            str(club_name).strip().casefold(),
+            str(settings.get('shift_name') or '').strip().casefold(),
+        }
+        if normalized in aliases:
+            return club_name
+    return str(source_name or '').strip() or 'Без клуба'
+
+
+def _shift_login_key(value):
+    return str(value or '').strip().lstrip('@').casefold()
+
+
+def _local_shift_week(login, week_start, week_end):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            '''
+            SELECT date(substr(sh.dt_shift, 1, 10)) AS shift_date,
+                   sh.club, sh.shift_start, sh.shift_end,
+                   ROUND(COALESCE(sh.dur, 0), 1) AS duration,
+                   COALESCE(NULLIF(employee.nick_name, ''),
+                            trim(COALESCE(employee.first_name, '') || ' ' ||
+                                 COALESCE(employee.second_name, '')),
+                            sh.shift_login, 'Сотрудник') AS employee_name,
+                   COALESCE(employee.login, sh.shift_login) AS employee_login
+            FROM shifts sh
+            LEFT JOIN users employee ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(employee.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=employee.second_name
+                AND sh.shift_first_name=employee.first_name
+            )
+            WHERE date(substr(sh.dt_shift, 1, 10))
+                  BETWEEN date(?) AND date(?)
+            ORDER BY date(substr(sh.dt_shift, 1, 10)), sh.club,
+                     sh.shift_start, employee_name
+            ''',
+            (week_start, week_end),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    days = {}
+    for row in rows:
+        day = days.setdefault(row['shift_date'], {})
+        club = _shift_schedule_club_name(row['club'])
+        location = day.setdefault(club, [])
+        employee_login = str(row['employee_login'] or '').strip()
+        location.append({
+            'employee': str(row['employee_name'] or '').strip() or 'Сотрудник',
+            'telegram': employee_login,
+            'start': row['shift_start'],
+            'end': row['shift_end'],
+            'duration': float(row['duration'] or 0),
+            'is_free': False,
+            'is_mine': _shift_login_key(employee_login) == _shift_login_key(login),
+        })
+    return days
+
+
+def _shift_week_payload(login, selected_date=None):
+    try:
+        anchor = datetime.strptime(
+            str(selected_date or _moscow_today().isoformat()), '%Y-%m-%d',
+        ).date()
+    except ValueError as error:
+        raise ValueError('Дата расписания должна быть в формате YYYY-MM-DD') from error
+    week_start = anchor - timedelta(days=anchor.weekday())
+    week_end = week_start + timedelta(days=6)
+    source = 'omg_shift'
+    warning = None
+    grouped = {}
+    response = _shift_schedule_range(
+        week_start.isoformat(), week_end.isoformat(),
+    )
+    if isinstance(response, dict) and response.get('ok'):
+        for raw_day in response.get('days', []):
+            day_date = str(raw_day.get('date') or '')
+            day = grouped.setdefault(day_date, {})
+            for raw_location in raw_day.get('locations', []):
+                club = _shift_schedule_club_name(raw_location.get('title'))
+                shifts = day.setdefault(club, [])
+                for raw_shift in raw_location.get('shifts', []):
+                    employee = str(
+                        raw_shift.get('employee') or 'СВОБОДНАЯ СМЕНА'
+                    ).strip()
+                    employee_login = str(
+                        raw_shift.get('telegram') or ''
+                    ).strip()
+                    is_free = (
+                        not employee
+                        or 'свободн' in employee.casefold()
+                    )
+                    shifts.append({
+                        'employee': employee or 'СВОБОДНАЯ СМЕНА',
+                        'telegram': employee_login,
+                        'start': raw_shift.get('start'),
+                        'end': raw_shift.get('end'),
+                        'duration': raw_shift.get('duration'),
+                        'is_free': is_free,
+                        'is_mine': (
+                            _shift_login_key(employee_login)
+                            == _shift_login_key(login)
+                        ),
+                    })
+    else:
+        source = 'local_cache'
+        warning = (
+            'OMG Shift временно недоступен — показано локальное расписание '
+            'без свободных смен.'
+        )
+        grouped = _local_shift_week(
+            login, week_start.isoformat(), week_end.isoformat(),
+        )
+
+    days = []
+    current = week_start
+    while current <= week_end:
+        locations = [
+            {'club': club, 'shifts': shifts}
+            for club, shifts in sorted(
+                grouped.get(current.isoformat(), {}).items(),
+                key=lambda item: item[0].casefold(),
+            )
+        ]
+        days.append({'date': current.isoformat(), 'locations': locations})
+        current += timedelta(days=1)
+    return {
+        'week_start': week_start.isoformat(),
+        'week_end': week_end.isoformat(),
+        'source': source,
+        'warning': warning,
+        'days': days,
+    }
+
+
 def _shift_clock_minutes(value):
     match = re.match(r'^(\d{1,2}):(\d{2})', str(value or '').strip())
     if not match:
@@ -937,6 +1086,7 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
                        main_message TEXT,
                        main_sent_at TEXT,
                        activity_id INTEGER,
+                       scenario_json TEXT,
                        sheet_synced_at TEXT,
                        completed_at TEXT
                    )'''
@@ -954,6 +1104,10 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
                 conn.execute(
                     'ALTER TABLE shift_webapp_runs '
                     'ADD COLUMN cleanliness_sent_at TEXT'
+                )
+            if 'scenario_json' not in columns:
+                conn.execute(
+                    'ALTER TABLE shift_webapp_runs ADD COLUMN scenario_json TEXT'
                 )
     finally:
         conn.close()
@@ -1198,8 +1352,9 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
             conn.execute(
                 '''INSERT INTO shift_webapp_runs (
                        id, login, chatid, club, action, shift_date,
-                       scenario_version, variant_index, started_at, early_close
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       scenario_version, variant_index, started_at, early_close,
+                       scenario_json
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     run_id,
                     actor_login,
@@ -1211,6 +1366,12 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
                     scenario['variant_index'],
                     started_at,
                     int(early_close),
+                    json.dumps({
+                        'questions': scenario.get('questions', []),
+                        'cleanliness_questions': scenario.get(
+                            'cleanliness_questions', []
+                        ),
+                    }, ensure_ascii=False),
                 ),
             )
             conn.commit()
@@ -1319,6 +1480,244 @@ def _today_shift_clubs(login):
     finally:
         conn.close()
     return [row[0] for row in rows]
+
+
+def _shift_run_state(run):
+    if run.get('completed_at'):
+        return 'completed'
+    if run.get('finished_at'):
+        return 'sending'
+    return 'in_progress'
+
+
+def _shift_report_action(value):
+    normalized = _normalize_legacy_text(value)
+    for action_code, action_label in SHIFT_ACTIONS.items():
+        if normalized == action_label:
+            return action_code
+    return None
+
+
+def _shift_run_answers(run):
+    try:
+        answers = json.loads(run.get('answers_json') or '{}')
+    except (TypeError, json.JSONDecodeError):
+        answers = {}
+    try:
+        scenario = json.loads(run.get('scenario_json') or '{}')
+    except (TypeError, json.JSONDecodeError):
+        scenario = {}
+    questions = {
+        str(question.get('id')): str(question.get('text') or '')
+        for question in scenario.get('questions', [])
+        if isinstance(question, dict)
+    }
+    return [
+        {
+            'question': questions.get(str(question_id)) or f'Ответ {index}',
+            'answer': str(answer),
+        }
+        for index, (question_id, answer) in enumerate(answers.items(), 1)
+    ]
+
+
+def _shift_run_payload(run, source='app'):
+    action = str(run.get('action') or '')
+    started_at = run.get('started_at') or run.get('dtrep')
+    result = {
+        'id': run.get('id'),
+        'source': source,
+        'date': run.get('shift_date') or str(started_at or '')[:10],
+        'club': run.get('club'),
+        'action': action,
+        'action_label': (
+            'Открытие' if action == 'open' else 'Закрытие'
+        ),
+        'state': 'completed' if source == 'bot' else _shift_run_state(run),
+        'started_at': started_at,
+        'finished_at': run.get('finished_at'),
+        'completed_at': run.get('completed_at') or (
+            started_at if source == 'bot' else None
+        ),
+        'early_close': bool(run.get('early_close')),
+        'report_sent': source == 'bot' or bool(run.get('report_sent_at')),
+        'cleanliness_sent': bool(run.get('cleanliness_sent_at')),
+        'photo_count': int(run.get('photo_count') or 0),
+        'cleanliness_photo_count': int(
+            run.get('cleanliness_photo_count') or 0
+        ),
+        'answers': _shift_run_answers(run) if source == 'app' else [],
+    }
+    if action == 'open' and started_at:
+        try:
+            started = datetime.strptime(
+                str(started_at), '%Y-%m-%d %H:%M:%S',
+            ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
+            club = get_clubs().get(str(run.get('club') or ''))
+            result['late_minutes'] = (
+                _shift_report_late_minutes(club, started) if club else 0
+            )
+        except ValueError:
+            result['late_minutes'] = 0
+    else:
+        result['late_minutes'] = 0
+    return result
+
+
+def _shift_history(login, limit=30):
+    _initialize_shift_report_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        web_runs = [
+            dict(row) for row in conn.execute(
+                '''SELECT * FROM shift_webapp_runs
+                   WHERE lower(login)=lower(?)
+                   ORDER BY datetime(started_at) DESC LIMIT ?''',
+                (login, max(limit * 2, 50)),
+            ).fetchall()
+        ]
+        linked_activity_ids = {
+            int(row['activity_id'])
+            for row in web_runs if row.get('activity_id')
+        }
+        activity_rows = [
+            dict(row) for row in conn.execute(
+                '''SELECT ID AS id, dtrep, club, action FROM activity
+                   WHERE lower(login)=lower(?)
+                   ORDER BY datetime(dtrep) DESC LIMIT ?''',
+                (login, max(limit * 3, 90)),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    history = [_shift_run_payload(run) for run in web_runs]
+    for row in activity_rows:
+        if int(row['id']) in linked_activity_ids:
+            continue
+        action = _shift_report_action(row.get('action'))
+        if not action:
+            continue
+        row['action'] = action
+        history.append(_shift_run_payload(row, source='bot'))
+    history.sort(
+        key=lambda item: str(item.get('started_at') or ''), reverse=True,
+    )
+    return history[:limit]
+
+
+def _today_shift_report_map(login, shift_date):
+    reports = {}
+    for item in _shift_history(login, limit=80):
+        if item['date'] != shift_date:
+            continue
+        key = (str(item['club']), item['action'])
+        current = reports.get(key)
+        if current is None or (
+            current['state'] != 'completed' and item['state'] == 'completed'
+        ):
+            reports[key] = item
+    return reports
+
+
+def _shift_people_by_club(shift_date, clubs):
+    if not clubs:
+        return {}
+    placeholders = ','.join('?' for _ in clubs)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            f'''
+            SELECT sh.club,
+                   COALESCE(NULLIF(employee.nick_name, ''),
+                            NULLIF(employee.first_name, ''),
+                            employee.login, sh.shift_login)
+            FROM shifts sh
+            LEFT JOIN users employee ON (
+                sh.shift_login IS NOT NULL
+                AND lower(sh.shift_login)=lower(employee.login)
+            ) OR (
+                sh.shift_login IS NULL
+                AND sh.shift_second_name=employee.second_name
+                AND sh.shift_first_name=employee.first_name
+            )
+            WHERE date(substr(sh.dt_shift, 1, 10))=date(?)
+              AND sh.club IN ({placeholders})
+            GROUP BY sh.club, employee.login, employee.first_name,
+                     employee.nick_name, sh.shift_login
+            ORDER BY sh.club, employee.ID
+            ''',
+            (shift_date, *clubs),
+        ).fetchall()
+    finally:
+        conn.close()
+    result = {}
+    for club, name in rows:
+        if name and name not in result.setdefault(club, []):
+            result[club].append(name)
+    return result
+
+
+def _today_shift_contexts(login):
+    today = _moscow_today().isoformat()
+    shifts = [
+        shift for shift in _upcoming_shifts(login, limit=50)
+        if shift.get('date') == today
+    ]
+    if not shifts:
+        return []
+    clubs = list(dict.fromkeys(str(shift['club']) for shift in shifts))
+    club_settings = get_clubs()
+    physical_clubs = set(BUKZA_CLUB_CODES.values())
+    booking_groups = {
+        group['club']: group
+        for group in _club_booking_groups(
+            [club for club in clubs if club in physical_clubs],
+            _moscow_today(),
+        )
+    }
+    report_map = _today_shift_report_map(login, today)
+    people = _shift_people_by_club(today, clubs)
+    placeholders = ','.join('?' for _ in clubs)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        statuses = dict(conn.execute(
+            f'SELECT club, status FROM clubs WHERE club IN ({placeholders})',
+            clubs,
+        ).fetchall())
+    finally:
+        conn.close()
+
+    contexts = []
+    for shift in shifts:
+        club = str(shift['club'])
+        questions = club_settings.get(club, {}).get('questions', {})
+        reports = {}
+        for action in SHIFT_ACTIONS:
+            reports[action] = report_map.get((club, action), {
+                'action': action,
+                'action_label': 'Открытие' if action == 'open' else 'Закрытие',
+                'state': 'not_started',
+            })
+        contexts.append({
+            **shift,
+            'club_status': _normalize_legacy_text(statuses.get(club) or ''),
+            'on_shift': people.get(club, []),
+            'report_available': any(
+                questions.get(action_label)
+                for action_label in SHIFT_ACTIONS.values()
+            ),
+            'bookings_available': club in physical_clubs,
+            'bookings': booking_groups.get(club, {
+                'club': club,
+                'count': 0,
+                'participants': 0,
+                'bookings': [],
+            }),
+            'reports': reports,
+        })
+    return contexts
 
 
 def _public_booking(order, include_order=False):
@@ -2703,6 +3102,7 @@ def api_shift():
         ),
         'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
+        'can_select_report_club': role == ROLE_OWNER,
         'camera_test_available': bool(
             TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
         ),
@@ -2711,6 +3111,25 @@ def api_shift():
         ),
         'employee_dashboard': dashboard,
     })
+
+
+@app.get('/api/shift/overview')
+@require_user
+def api_shift_overview():
+    login = _actor_login()
+    return jsonify({
+        'date': _moscow_today().isoformat(),
+        'today': _today_shift_contexts(login),
+        'history': _shift_history(login),
+    })
+
+
+@app.get('/api/shift/schedule')
+@require_user
+def api_shift_schedule():
+    return jsonify(_shift_week_payload(
+        _actor_login(), request.args.get('date'),
+    ))
 
 
 @app.get('/api/shift-test/scenario')
