@@ -1,4 +1,4 @@
-:root { --records-bg:#0e0818; --records-card:#1b1129; --records-card-2:#241535; --records-line:rgba(255,255,255,.1); --gold:#f6bd4b; --gold-soft:#ffe4a3; --bronze:#d18a57; --silver:#c8d1df; }
+:root { --records-bg:#0e0818; --records-card:#1b1129; --records-card-2:#241535; --records-line:rgba(255,255,255,.1); --gold:#f6bd4b; --gold-soft:#ffe4a3; --bronze:#d18a57; --silver:#c8d1df; --diamond:#74e7ff; }
 * { box-sizing:border-box; }
 html { min-height:100%; background:var(--records-bg); }
 body { min-height:100vh; margin:0; color:#fff7e7; background:radial-gradient(circle at 85% 4%,rgba(246,189,75,.17),transparent 19rem),radial-gradient(circle at 0 42%,rgba(135,83,200,.13),transparent 24rem),linear-gradient(180deg,#160d25 0,#0e0818 58%,#09050f 100%); }
@@ -18,11 +18,12 @@ button { font-family:inherit; }
 .records-hero h2 { margin:6px 0 7px; font-size:29px; }
 .records-hero p:last-child { max-width:360px; margin:0; color:rgba(255,247,231,.68); font-size:9px; line-height:1.55; }
 .records-trophy { position:relative; z-index:1; display:grid; width:63px; height:63px; place-items:center; border:1px solid rgba(255,234,180,.28); border-radius:20px; background:rgba(255,255,255,.08); box-shadow:inset 0 0 25px rgba(246,189,75,.12); font-size:32px; transform:rotate(4deg); }
-.medal-summary { position:relative; z-index:1; display:grid; grid-column:1/-1; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.medal-summary { position:relative; z-index:1; display:grid; grid-column:1/-1; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; }
 .medal-summary div { display:flex; min-height:38px; padding:0 9px; align-items:center; justify-content:space-between; gap:5px; border:1px solid rgba(255,255,255,.09); border-radius:12px; background:rgba(15,8,24,.32); }
 .medal-summary span { font-size:14px; }
 .medal-summary b { font-size:10px; }
 .records-tabs { display:grid; margin:0 0 17px; padding:4px; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; border:1px solid var(--records-line); border-radius:16px; background:rgba(26,15,40,.83); }
+.records-tabs.has-team { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .records-tabs button { min-height:42px; border:0; border-radius:12px; color:#9c8eac; background:transparent; font-size:10px; font-weight:800; cursor:pointer; }
 .records-tabs button.active { color:#2c1a05; background:linear-gradient(145deg,#ffd978,#e9a932); box-shadow:0 7px 18px rgba(210,144,30,.22); }
 .records-view[hidden] { display:none !important; }
@@ -57,6 +58,7 @@ button { font-family:inherit; }
 .achievement-card.bronze { --tier-color:var(--bronze); --tier-border:rgba(209,138,87,.32); --tier-bg:rgba(209,138,87,.09); }
 .achievement-card.silver { --tier-color:var(--silver); --tier-border:rgba(200,209,223,.28); --tier-bg:rgba(200,209,223,.08); }
 .achievement-card.gold { --tier-color:var(--gold); --tier-border:rgba(246,189,75,.32); --tier-bg:rgba(246,189,75,.09); }
+.achievement-card.diamond { --tier-color:var(--diamond); --tier-border:rgba(116,231,255,.36); --tier-bg:rgba(69,187,226,.11); }
 .achievement-card.locked { opacity:.7; }
 .achievement-medal { display:grid; width:42px; height:42px; place-items:center; border:1px solid var(--tier-border); border-radius:14px; color:var(--tier-color); background:var(--tier-bg); font-size:20px; }
 .achievement-main { min-width:0; }
@@ -72,7 +74,35 @@ button { font-family:inherit; }
 .achievement-thresholds::-webkit-scrollbar { display:none; }
 .achievement-thresholds span { flex:none; padding:4px 6px; border-radius:999px; color:#786d82; background:rgba(255,255,255,.045); font-size:6px; }
 .achievement-thresholds span.earned { color:var(--tier-color); background:var(--tier-bg); }
+.team-summary { display:grid; margin-bottom:10px; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.team-summary div { min-width:0; padding:12px; border:1px solid rgba(246,189,75,.14); border-radius:15px; background:linear-gradient(145deg,rgba(69,39,91,.82),rgba(27,17,41,.92)); }
+.team-summary span,.team-summary b { display:block; }
+.team-summary span { overflow:hidden; color:#9f91aa; font-size:7px; font-weight:750; text-overflow:ellipsis; white-space:nowrap; }
+.team-summary b { margin-top:5px; color:#f5d58d; font-size:20px; }
+.team-controls { display:grid; margin-bottom:10px; grid-template-columns:minmax(0,1fr) minmax(120px,.55fr); gap:7px; }
+.team-controls label { display:block; min-width:0; }
+.team-controls label > span { display:block; margin:0 0 5px 3px; color:#8f809b; font-size:7px; font-weight:750; }
+.team-controls input,.team-controls select { width:100%; min-height:40px; padding:0 11px; border:1px solid var(--records-line); border-radius:12px; outline:0; color:#f7edf9; background:rgba(27,16,41,.88); font-family:inherit; font-size:9px; font-weight:700; }
+.team-controls input:focus,.team-controls select:focus { border-color:rgba(116,231,255,.4); box-shadow:0 0 0 3px rgba(116,231,255,.07); }
+.team-controls select { appearance:none; background-image:linear-gradient(45deg,transparent 50%,#b69bc5 50%),linear-gradient(135deg,#b69bc5 50%,transparent 50%); background-position:calc(100% - 14px) 17px,calc(100% - 10px) 17px; background-repeat:no-repeat; background-size:4px 4px; }
+.team-list { display:grid; gap:7px; }
+.team-member { display:grid; width:100%; min-width:0; padding:12px; grid-template-columns:minmax(0,1fr) auto; gap:9px 12px; border:1px solid var(--records-line); border-radius:16px; color:#f9f1fb; background:linear-gradient(145deg,rgba(55,31,73,.9),rgba(25,15,38,.94)); text-align:left; cursor:pointer; }
+.team-member.selected { border-color:rgba(116,231,255,.35); box-shadow:inset 0 0 24px rgba(116,231,255,.055); }
+.team-member-name,.team-member-total span,.team-member-total b { display:block; }
+.team-member-name { min-width:0; }
+.team-member-name strong { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.team-member-name strong em { margin-right:6px; color:#f6bd4b; font-size:8px; font-style:normal; }
+.team-member-name span { display:block; margin-top:4px; overflow:hidden; color:#8f809b; font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+.team-member-total { text-align:right; }
+.team-member-total b { color:#f5d58d; font-size:12px; }
+.team-member-total span { margin-top:3px; color:#8f809b; font-size:6px; }
+.team-progress { grid-column:1/-1; height:4px; overflow:hidden; border-radius:999px; background:rgba(255,255,255,.06); }
+.team-progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#8051c4,#f6bd4b,#74e7ff); }
+.team-medals { display:flex; grid-column:1/-1; flex-wrap:wrap; gap:5px; }
+.team-medals span { padding:4px 7px; border-radius:999px; color:#a99bb2; background:rgba(255,255,255,.045); font-size:7px; font-weight:750; }
+.team-archive { margin-top:11px; }
+.team-archive .team-list { margin-top:11px; }
 .records-error { margin-top:15px; padding:14px; border:1px solid rgba(255,103,124,.22); border-radius:16px; color:#ff8799; background:rgba(255,103,124,.08); font-size:9px; }
 .records-toast { position:fixed; left:50%; bottom:22px; z-index:20; max-width:calc(100% - 32px); padding:11px 14px; border-radius:13px; color:#2d1d06; background:var(--gold); font-size:9px; opacity:0; pointer-events:none; transform:translate(-50%,10px); transition:.2s; }
 .records-toast.visible { opacity:1; transform:translate(-50%,0); }
-@media (min-width:700px) { .achievement-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .record-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } .record-card:first-child { grid-column:span 2; } }
+@media (min-width:700px) { .achievement-grid,.team-list { grid-template-columns:repeat(2,minmax(0,1fr)); } .record-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } .record-card:first-child { grid-column:span 2; } }

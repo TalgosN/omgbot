@@ -80,10 +80,67 @@ function renderAchievements() {
     </section>
   `).join('');
   const earned = state.data.categories.flatMap((category) => category.achievements).filter((item) => item.level > 0);
+  const ownShelf = state.data.user.login === state.data.viewer?.login;
+  $('#mineTab').textContent = ownShelf ? 'Мои' : 'Полка';
+  $('#mineEyebrow').textContent = ownShelf ? 'Уже получено' : state.data.user.name;
+  $('#mineTitle').textContent = ownShelf ? 'Моя полка' : 'Достижения сотрудника';
   $('#mineCount').textContent = `${earned.length} получено`;
   $('#mineAchievements').innerHTML = earned.length
     ? earned.sort((left, right) => right.level - left.level).map(achievementCard).join('')
     : '<div class="records-empty">Первая ачивка уже близко</div>';
+}
+
+function teamMemberCard(member, rank = null) {
+  const selected = member.login === state.data.user.login;
+  const progress = member.total ? Math.round((member.score / (member.total * 4)) * 100) : 0;
+  return `<button class="team-member ${selected ? 'selected' : ''}" type="button" data-login="${escapeHtml(member.login)}">
+    <span class="team-member-name"><strong>${rank ? `<em>#${rank}</em>` : ''}${escapeHtml(member.name)}</strong><span>${escapeHtml(member.login)}</span></span>
+    <span class="team-member-total"><b>${member.earned}/${member.total}</b><span>ачивок</span></span>
+    <span class="team-progress"><i style="width:${progress}%"></i></span>
+    <span class="team-medals"><span>🥉 ${member.bronze}</span><span>🥈 ${member.silver}</span><span>🥇 ${member.gold}</span><span>💎 ${member.diamond}</span></span>
+  </button>`;
+}
+
+function teamComparator(sort) {
+  const fields = sort === 'diamond'
+    ? ['diamond', 'gold', 'score']
+    : sort === 'gold'
+      ? ['gold', 'diamond', 'score']
+      : ['score', 'diamond', 'gold'];
+  return (left, right) => {
+    for (const field of fields) {
+      if (right[field] !== left[field]) return right[field] - left[field];
+    }
+    return left.name.localeCompare(right.name, 'ru');
+  };
+}
+
+function renderTeam() {
+  const canManage = Boolean(state.data.can_manage);
+  $('#teamTab').hidden = !canManage;
+  $('#recordsTabs').classList.toggle('has-team', canManage);
+  if (!canManage) return;
+
+  const members = state.data.team || [];
+  const active = members.filter((member) => member.active);
+  $('#teamSummary').innerHTML = `
+    <div><span>В команде</span><b>${active.length}</b></div>
+    <div><span>Золотых уровней</span><b>${active.reduce((sum, member) => sum + member.gold, 0)}</b></div>
+    <div><span>Алмазных уровней</span><b>${active.reduce((sum, member) => sum + member.diamond, 0)}</b></div>`;
+
+  const query = $('#teamSearch').value.trim().toLocaleLowerCase('ru');
+  const comparator = teamComparator($('#teamSort').value);
+  const visible = members.filter((member) => (
+    !query || `${member.name} ${member.login}`.toLocaleLowerCase('ru').includes(query)
+  ));
+  const activeVisible = visible.filter((member) => member.active).sort(comparator);
+  const archiveVisible = visible.filter((member) => !member.active).sort(comparator);
+  $('#teamList').innerHTML = activeVisible.length
+    ? activeVisible.map((member, index) => teamMemberCard(member, index + 1)).join('')
+    : '<div class="records-empty">Сотрудники не найдены</div>';
+  $('#teamArchive').hidden = !archiveVisible.length;
+  $('#teamArchiveCount').textContent = archiveVisible.length;
+  $('#teamArchiveList').innerHTML = archiveVisible.map((member) => teamMemberCard(member)).join('');
 }
 
 function renderSummary() {
@@ -95,7 +152,8 @@ function renderSummary() {
   $('#medalSummary').innerHTML = `
     <div><span>🥉</span><b>${summary.bronze}</b></div>
     <div><span>🥈</span><b>${summary.silver}</b></div>
-    <div><span>🥇</span><b>${summary.gold}</b></div>`;
+    <div><span>🥇</span><b>${summary.gold}</b></div>
+    <div><span>💎</span><b>${summary.diamond}</b></div>`;
 }
 
 function switchView(view) {
@@ -106,6 +164,7 @@ function switchView(view) {
   $('#recordsView').hidden = view !== 'records';
   $('#achievementsView').hidden = view !== 'achievements';
   $('#mineView').hidden = view !== 'mine';
+  $('#teamView').hidden = view !== 'team';
 }
 
 $('#recordsTabs').addEventListener('click', (event) => {
@@ -113,17 +172,36 @@ $('#recordsTabs').addEventListener('click', (event) => {
   if (button) switchView(button.dataset.view);
 });
 
-async function init() {
+$('#teamSearch').addEventListener('input', renderTeam);
+$('#teamSort').addEventListener('change', renderTeam);
+$('#teamView').addEventListener('click', async (event) => {
+  const member = event.target.closest('[data-login]');
+  if (!member) return;
+  await loadDashboard(member.dataset.login);
+  switchView('mine');
+});
+
+function renderDashboard() {
+  renderSummary();
+  renderRecords();
+  renderAchievements();
+  renderTeam();
+}
+
+async function loadDashboard(login = '') {
+  $('#recordsError').hidden = true;
+  const query = login ? `?login=${encodeURIComponent(login)}` : '';
   try {
-    state.data = await api('/api/records');
-    renderSummary();
-    renderRecords();
-    renderAchievements();
+    state.data = await api(`/api/records${query}`);
+    renderDashboard();
   } catch (error) {
-    $('#recordGrid').innerHTML = '';
     $('#recordsError').hidden = false;
     $('#recordsError').textContent = error.message;
   }
+}
+
+async function init() {
+  await loadDashboard();
 }
 
 init();

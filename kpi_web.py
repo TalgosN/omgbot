@@ -115,6 +115,16 @@ CAMERA_TEST_RECIPIENT_CHAT_ID = str(
     os.getenv('CAMERA_TEST_RECIPIENT_CHAT_ID') or CHATS.get('me') or ''
 ).strip()
 CAMERA_TEST_COOLDOWN_SECONDS = 8
+CLEANLINESS_PHOTO_LABELS = (
+    'Лаунж',
+    'Ресепшен',
+    'Туалет — общий план',
+    'Раковина',
+    'Унитаз',
+    'Бэк',
+    'Зеркало в туалете',
+)
+CLEANLINESS_MARYINO_LABELS = ('Лаунж', 'Ресепшен', 'Бэк')
 ANALYTICS_CACHE_SECONDS = 60
 KPI_CACHE_SECONDS = 60
 _analytics_cache = {}
@@ -129,7 +139,7 @@ _shift_report_test_sent_at = {}
 _shift_report_test_lock = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
-app.config['MAX_CONTENT_LENGTH'] = 22 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 48 * 1024 * 1024
 initialize_bukza_schema(DB_PATH)
 initialize_shift_time_schema(DB_PATH)
 
@@ -920,6 +930,8 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
                        finished_at TEXT,
                        answers_json TEXT,
                        photo_count INTEGER,
+                       cleanliness_photo_count INTEGER,
+                       cleanliness_sent_at TEXT,
                        report_sent_at TEXT,
                        warning_sent_at TEXT,
                        main_message TEXT,
@@ -929,6 +941,20 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
                        completed_at TEXT
                    )'''
             )
+            columns = {
+                row[1]
+                for row in conn.execute('PRAGMA table_info(shift_webapp_runs)')
+            }
+            if 'cleanliness_photo_count' not in columns:
+                conn.execute(
+                    'ALTER TABLE shift_webapp_runs '
+                    'ADD COLUMN cleanliness_photo_count INTEGER'
+                )
+            if 'cleanliness_sent_at' not in columns:
+                conn.execute(
+                    'ALTER TABLE shift_webapp_runs '
+                    'ADD COLUMN cleanliness_sent_at TEXT'
+                )
     finally:
         conn.close()
 
@@ -971,6 +997,36 @@ def _shift_report_late_minutes(club, started_at):
         microsecond=0,
     )
     return max(0, int((started_at - target).total_seconds() / 60))
+
+
+def _shift_cleanliness_questions(action, club_name):
+    if action != 'close':
+        return []
+    labels = (
+        CLEANLINESS_MARYINO_LABELS
+        if str(club_name).strip().casefold() == 'марьино'
+        else CLEANLINESS_PHOTO_LABELS
+    )
+    return [
+        {
+            'id': f'cleanliness{index}',
+            'position': index,
+            'text': label,
+            'type': 'photo',
+        }
+        for index, label in enumerate(labels, 1)
+    ]
+
+
+def _is_legacy_cleanliness_screenshot(action, question):
+    if action != 'close' or not isinstance(question, dict):
+        return False
+    text = str(question.get('text') or '').casefold().replace('ё', 'е')
+    return (
+        'скрин' in text
+        and 'отчет' in text
+        and 'чистот' in text
+    )
 
 
 def _shift_report_test_scenario(
@@ -1021,7 +1077,11 @@ def _shift_report_test_scenario(
         if selected_index < 0 or selected_index >= len(variants):
             raise ValueError('Сохранённый набор сценария больше недоступен')
 
-    raw_questions = variants[selected_index]
+    raw_questions = [
+        question
+        for question in variants[selected_index]
+        if not _is_legacy_cleanliness_screenshot(action, question)
+    ]
     questions = [
         {
             'id': f'q{index}',
@@ -1041,12 +1101,14 @@ def _shift_report_test_scenario(
         raise ValueError('В сценарии больше десяти фото-вопросов')
 
     checklist = [question['checklist'] for question in questions if question['checklist']]
+    cleanliness_questions = _shift_cleanliness_questions(action, club_name)
     version_payload = {
         'club': club_name,
         'action': action,
         'variant_index': selected_index,
         'checklist': checklist,
         'questions': questions,
+        'cleanliness_questions': cleanliness_questions,
     }
     version = hashlib.sha256(json.dumps(
         version_payload,
@@ -1065,6 +1127,7 @@ def _shift_report_test_scenario(
         'version': version,
         'checklist': checklist,
         'questions': questions,
+        'cleanliness_questions': cleanliness_questions,
         'early_close': _shift_report_is_early_close(action, club, now=now),
         'user_login': _actor_login(),
         'user_name': (
@@ -1529,39 +1592,65 @@ def _shift_report_test_data(scenario, payload):
             raise ValueError(f"Для вопроса «{question['text']}» нужно указать целое число")
         answers[question_id] = value
 
-    raw_photo_ids = payload.get('photo_ids')
-    if not isinstance(raw_photo_ids, list):
-        raise ValueError('Список фотографий передан неверно')
-    expected_photo_ids = [question['id'] for question in photo_questions]
-    photo_ids = [str(value) for value in raw_photo_ids]
-    if photo_ids != expected_photo_ids:
-        raise ValueError('Нужно приложить по одной фотографии к каждому фото-вопросу')
-
-    uploads = request.files.getlist('photos')
-    if len(uploads) != len(photo_questions):
-        raise ValueError('Количество фотографий не совпадает со сценарием')
     allowed_types = {'image/jpeg', 'image/png', 'image/webp'}
-    photos = []
     total_size = 0
-    for upload, question in zip(uploads, photo_questions):
-        mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
-        if mimetype not in allowed_types:
-            raise ValueError('Фотографии должны быть в формате JPEG, PNG или WebP')
-        content = upload.read(3 * 1024 * 1024 + 1)
-        if not content:
-            raise ValueError('Получена пустая фотография')
-        if len(content) > 3 * 1024 * 1024:
-            raise ValueError('Каждая фотография должна быть не больше 3 МБ')
-        total_size += len(content)
-        if total_size > 20 * 1024 * 1024:
-            raise ValueError('Общий размер фотографий должен быть не больше 20 МБ')
-        extension = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}[mimetype]
-        photos.append({
-            'content': content,
-            'filename': f"{question['id']}.{extension}",
-            'question': question,
-        })
-    return answers, photos
+
+    def parse_photos(payload_key, upload_key, questions, report_name):
+        nonlocal total_size
+        raw_ids = payload.get(payload_key, [])
+        if not isinstance(raw_ids, list):
+            raise ValueError(f'Список фотографий «{report_name}» передан неверно')
+        expected_ids = [question['id'] for question in questions]
+        if [str(value) for value in raw_ids] != expected_ids:
+            raise ValueError(
+                f'Нужно приложить по одной фотографии '
+                f'к каждому пункту «{report_name}»'
+            )
+        uploads = request.files.getlist(upload_key)
+        if len(uploads) != len(questions):
+            raise ValueError(
+                f'Количество фотографий «{report_name}» '
+                'не совпадает со сценарием'
+            )
+        parsed = []
+        for upload, question in zip(uploads, questions):
+            mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
+            if mimetype not in allowed_types:
+                raise ValueError(
+                    'Фотографии должны быть в формате JPEG, PNG или WebP'
+                )
+            content = upload.read(3 * 1024 * 1024 + 1)
+            if not content:
+                raise ValueError('Получена пустая фотография')
+            if len(content) > 3 * 1024 * 1024:
+                raise ValueError('Каждая фотография должна быть не больше 3 МБ')
+            total_size += len(content)
+            if total_size > 40 * 1024 * 1024:
+                raise ValueError(
+                    'Общий размер фотографий должен быть не больше 40 МБ'
+                )
+            extension = {
+                'image/jpeg': 'jpg',
+                'image/png': 'png',
+                'image/webp': 'webp',
+            }[mimetype]
+            parsed.append({
+                'content': content,
+                'filename': f"{question['id']}.{extension}",
+                'question': question,
+            })
+        return parsed
+
+    cleanliness_photos = parse_photos(
+        'cleanliness_photo_ids',
+        'cleanliness_photos',
+        scenario.get('cleanliness_questions', []),
+        'отчёт о чистоте',
+    )
+    photos = parse_photos(
+        'photo_ids', 'photos', photo_questions, 'отчёт о смене',
+    )
+    return answers, photos, cleanliness_photos
 
 
 def _shift_report_test_messages(scenario, answers):
@@ -1703,7 +1792,54 @@ def _send_shift_report_test(scenario, answers, photos, chat_id=None):
     return bot
 
 
-def _complete_shift_report_run(scenario, payload, answers, photos):
+def _send_shift_cleanliness_report(scenario, photos):
+    if not photos:
+        return
+    bot = _notification_bot()
+    if not bot:
+        raise RuntimeError('Телеграм-бот временно недоступен')
+    caption = (
+        f'✨ <b>Отчёт о чистоте · '
+        f'{html.escape(str(scenario["club"]))}</b>'
+    )
+    if len(photos) == 1:
+        media_file = io.BytesIO(photos[0]['content'])
+        media_file.name = photos[0]['filename']
+        bot.send_photo(
+            CHATS['main_group'],
+            media_file,
+            caption=caption,
+            parse_mode='HTML',
+        )
+        return
+
+    media = []
+    for index, photo in enumerate(photos):
+        media_file = io.BytesIO(photo['content'])
+        media_file.name = photo['filename']
+        media.append(telebot.types.InputMediaPhoto(
+            media_file,
+            caption=caption if index == 0 else None,
+            parse_mode='HTML' if index == 0 else None,
+        ))
+    try:
+        bot.send_media_group(CHATS['main_group'], media=media)
+    except Exception as error:
+        print(f'Альбом чистоты не отправлен группой: {error}')
+        for index, photo in enumerate(photos):
+            media_file = io.BytesIO(photo['content'])
+            media_file.name = photo['filename']
+            bot.send_photo(
+                CHATS['main_group'],
+                media_file,
+                caption=caption if index == 0 else None,
+                parse_mode='HTML' if index == 0 else None,
+            )
+
+
+def _complete_shift_report_run(
+    scenario, payload, answers, photos, cleanliness_photos,
+):
     run_id = str(payload.get('run_id') or '')
     if not re.fullmatch(r'[A-Za-z0-9._:-]{8,180}', run_id):
         raise ValueError('Сначала начните открытие или закрытие смены')
@@ -1753,6 +1889,7 @@ def _complete_shift_report_run(scenario, payload, answers, photos):
             ),
             answers_json=json.dumps(answers, ensure_ascii=False),
             photo_count=len(photos),
+            cleanliness_photo_count=len(cleanliness_photos),
         )
 
     started_at = datetime.strptime(
@@ -1769,6 +1906,12 @@ def _complete_shift_report_run(scenario, payload, answers, photos):
     report_scenario = dict(scenario)
     report_scenario['started_at'] = run['started_at']
     report_scenario['finished_at'] = run['finished_at']
+
+    if cleanliness_photos and not run.get('cleanliness_sent_at'):
+        _send_shift_cleanliness_report(report_scenario, cleanliness_photos)
+        mark(cleanliness_sent_at=datetime.now(ZoneInfo('Europe/Moscow')).strftime(
+            '%Y-%m-%d %H:%M:%S'
+        ))
 
     if not run.get('report_sent_at'):
         _send_shift_report_test(
@@ -2652,7 +2795,9 @@ def api_shift_test_submit():
         variant_index=payload.get('variant_index'),
         requested_club=str(payload.get('club') or '').strip() or None,
     )
-    answers, photos = _shift_report_test_data(scenario, payload)
+    answers, photos, cleanliness_photos = _shift_report_test_data(
+        scenario, payload,
+    )
 
     actor = f'{_actor_login()}:{action}'
     now = time.monotonic()
@@ -2663,7 +2808,9 @@ def api_shift_test_submit():
                 'error': 'Подождите несколько секунд перед повторной отправкой.'
             }), 429
     try:
-        result = _complete_shift_report_run(scenario, payload, answers, photos)
+        result = _complete_shift_report_run(
+            scenario, payload, answers, photos, cleanliness_photos,
+        )
     except Exception as error:
         print(f'Ошибка завершения отчёта смены: {error}')
         return jsonify({
@@ -2676,6 +2823,7 @@ def api_shift_test_submit():
         'completed': result['completed'],
         'already_completed': result['already_completed'],
         'photos': len(photos),
+        'cleanliness_photos': len(cleanliness_photos),
     })
 
 
@@ -2869,9 +3017,16 @@ def api_problems_meta():
 @app.get('/api/records')
 @require_user
 def api_records():
+    viewer_login = str(g.kpi_user.get('login') or '')
+    can_manage = int(g.kpi_user['status']) >= ROLE_MANAGER
+    selected_login = viewer_login
+    if can_manage and request.args.get('login'):
+        selected_login = str(request.args['login'])
     return jsonify(build_records_dashboard(
         DB_PATH,
-        str(g.kpi_user.get('login') or ''),
+        selected_login,
+        viewer_login=viewer_login,
+        can_manage=can_manage,
     ))
 
 

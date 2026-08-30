@@ -206,6 +206,51 @@ class RecordsTest(unittest.TestCase):
             state['archive_records'][0]['holders'][0]['login'], '@archive',
         )
 
+    def test_catalog_v2_replaces_old_unlocks_without_notifications(self):
+        bot = Mock()
+        records.initialize_records_schema(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''INSERT INTO records_meta(key, value, updated_at)
+               VALUES ('catalog_version', '1', datetime('now'))'''
+        )
+        conn.execute(
+            '''INSERT INTO records_achievement_unlocks(
+                   employee_login, achievement_key, tier, value,
+                   unlocked_at, source, notified_at
+               ) VALUES (
+                   '@active', 'shifts', 3, 12,
+                   datetime('now'), 'progress', datetime('now')
+               )'''
+        )
+        conn.commit()
+        conn.close()
+
+        records.refresh_records_achievements(
+            self.db_path,
+            bot=bot,
+            main_chat_id='-100-main',
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        shift_unlocks = conn.execute(
+            '''SELECT COUNT(*) FROM records_achievement_unlocks
+               WHERE employee_login='@active' AND achievement_key='shifts' ''',
+        ).fetchone()[0]
+        version = conn.execute(
+            "SELECT value FROM records_meta WHERE key='catalog_version'"
+        ).fetchone()[0]
+        pending = conn.execute(
+            '''SELECT COUNT(*) FROM records_achievement_unlocks
+               WHERE notified_at IS NULL'''
+        ).fetchone()[0]
+        conn.close()
+
+        self.assertEqual(shift_unlocks, 0)
+        self.assertEqual(version, '2')
+        self.assertEqual(pending, 0)
+        bot.send_message.assert_not_called()
+
     def test_new_tier_sends_one_message_only_to_configured_main_group(self):
         bot = Mock()
         records.refresh_records_achievements(
@@ -295,6 +340,64 @@ class RecordsTest(unittest.TestCase):
         )
         self.assertNotIn('@tiny', [holder['login'] for holder in kpi_record['holders']])
 
+    def test_future_shifts_do_not_count_towards_achievements(self):
+        future = (date.today() + timedelta(days=7)).isoformat()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            '''INSERT INTO shifts(
+                   shift_second_name, shift_first_name, dt_shift, club,
+                   dur, source, shift_login
+               ) VALUES ('', '', ?, 'Марьино', 600, 'test', '@active')''',
+            (future,),
+        )
+        conn.commit()
+        conn.close()
+
+        state = records.calculate_records_state(self.db_path)
+
+        self.assertEqual(state['stats']['@active']['shifts'], 12)
+
+    def test_touring_levels_require_enough_shifts_in_each_club(self):
+        shift_date = (date.today() - timedelta(days=1)).isoformat()
+        clubs = tuple(records.PHYSICAL_KPI_CLUBS)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("DELETE FROM shifts WHERE shift_login='@active'")
+        conn.executemany(
+            '''INSERT INTO shifts(
+                   shift_second_name, shift_first_name, dt_shift, club,
+                   dur, source, shift_login
+               ) VALUES ('', '', ?, ?, 60, 'test', '@active')''',
+            [(shift_date, club) for club in clubs[:4]],
+        )
+        conn.commit()
+        conn.close()
+
+        state = records.calculate_records_state(self.db_path)
+        values = state['stats']['@active']
+        achievement = records.ACHIEVEMENTS_BY_KEY['clubs']
+        self.assertEqual(records._achievement_level(achievement, values), 3)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany(
+            '''INSERT INTO shifts(
+                   shift_second_name, shift_first_name, dt_shift, club,
+                   dur, source, shift_login
+               ) VALUES ('', '', ?, ?, ?, 'test', '@active')''',
+            [
+                *((shift_date, club, 60) for club in clubs[:4]),
+                (shift_date, clubs[4], 120),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        state = records.calculate_records_state(self.db_path)
+        values = state['stats']['@active']
+        payload = records._achievement_payload(achievement, values, 0)
+        self.assertEqual(payload['level'], 4)
+        self.assertEqual(payload['tier']['key'], 'diamond')
+        self.assertEqual(len(payload['thresholds']), 4)
+
     def test_dashboard_contains_all_achievement_families(self):
         dashboard = records.build_records_dashboard(
             self.db_path, '@active',
@@ -307,8 +410,28 @@ class RecordsTest(unittest.TestCase):
 
         self.assertEqual(len(achievements), 31)
         self.assertEqual(dashboard['summary']['total'], 31)
+        self.assertIn('diamond', dashboard['summary'])
+        self.assertFalse(dashboard['can_manage'])
+        self.assertIsNone(dashboard['team'])
         self.assertTrue(any(item['key'] == 'created_repairs' for item in achievements))
         self.assertTrue(dashboard['archive_records'])
+
+    def test_manager_dashboard_contains_team_and_selected_employee(self):
+        dashboard = records.build_records_dashboard(
+            self.db_path,
+            '@archive',
+            viewer_login='@active',
+            can_manage=True,
+        )
+
+        self.assertEqual(dashboard['user']['login'], '@archive')
+        self.assertEqual(dashboard['viewer']['login'], '@active')
+        self.assertTrue(dashboard['can_manage'])
+        self.assertEqual(
+            {member['login'] for member in dashboard['team']},
+            {'@active', '@archive'},
+        )
+        self.assertTrue(all(member['total'] == 31 for member in dashboard['team']))
 
     def test_dashboard_reuses_fresh_background_snapshot(self):
         records.refresh_records_achievements(self.db_path)

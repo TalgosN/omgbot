@@ -1,8 +1,8 @@
 const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const DRAFT_SCHEMA = 2;
-const DRAFT_PREFIX = 'omg-shift-report-draft-v2:';
+const DRAFT_SCHEMA = 3;
+const DRAFT_PREFIX = 'omg-shift-report-draft-v3:';
 const PHOTO_DATABASE = 'omg-shift-test';
 const PHOTO_STORE = 'photos';
 const MAX_PHOTO_BYTES = 1.8 * 1024 * 1024;
@@ -191,13 +191,44 @@ function textQuestions() {
   return runtime.scenario.questions.filter((question) => question.type !== 'photo');
 }
 
-function photoQuestions() {
+function shiftPhotoQuestions() {
   return runtime.scenario.questions.filter((question) => question.type === 'photo');
 }
 
+function cleanlinessQuestions() {
+  return runtime.scenario.cleanliness_questions || [];
+}
+
+function isCleanlinessPhase() {
+  return runtime.draft?.photo_phase === 'cleanliness';
+}
+
+function photoQuestions() {
+  return isCleanlinessPhase() ? cleanlinessQuestions() : shiftPhotoQuestions();
+}
+
+function currentPhotoIds() {
+  return isCleanlinessPhase()
+    ? runtime.draft.cleanliness_photo_ids
+    : runtime.draft.photo_ids;
+}
+
 function setStage(stageId) {
-  ['loadingCard', 'errorCard', 'ownerClubStage', 'checklistStage', 'questionStage', 'photoStage', 'batchOrderStage', 'batchReviewStage', 'reviewStage', 'successStage']
+  ['loadingCard', 'errorCard', 'ownerClubStage', 'cleanlinessIntroStage', 'cleanlinessTransitionStage', 'checklistStage', 'questionStage', 'photoStage', 'batchOrderStage', 'batchReviewStage', 'reviewStage', 'successStage']
     .forEach((id) => { $(`#${id}`).hidden = id !== stageId; });
+}
+
+function setWorkflowStep(step) {
+  if (runtime.scenario?.action !== 'close') return;
+  document.body.dataset.workflowStep = step;
+  $$('[data-workflow-step]').forEach((element) => {
+    const position = element.dataset.workflowStep;
+    element.classList.toggle('active', position === step);
+    element.classList.toggle(
+      'completed',
+      position === 'cleanliness' && step === 'closing',
+    );
+  });
 }
 
 function renderOwnerClubSelection(selection) {
@@ -218,7 +249,7 @@ function renderOwnerClubSelection(selection) {
         runtime.scenario = await fetchScenario(null, clubName);
         setPageCopy();
         createDraft();
-        renderChecklist();
+        renderInitialStage();
       } catch (error) {
         toast(error.message, true);
         button.classList.remove('loading');
@@ -236,6 +267,9 @@ function setPageCopy() {
   $('#pageDescription').textContent = `${runtime.scenario.club} · ${formatDate(runtime.scenario.shift.date)} · набор ${runtime.scenario.variant_label}`;
   $$('[data-club]').forEach((element) => { element.textContent = runtime.scenario.club; });
   $('#variantLabel').textContent = `Набор ${runtime.scenario.variant_label}`;
+  $('#closingWorkflow').hidden = !closing;
+  $('#shiftReviewStep').textContent = closing ? '🌙 Этап 2' : 'Отчёт о смене';
+  $('#shiftReviewTitle').textContent = closing ? 'Закрытие' : 'Открытие';
 }
 
 function formatDate(value) {
@@ -243,13 +277,44 @@ function formatDate(value) {
   return year && month && day ? `${day}.${month}.${year}` : value;
 }
 
+function renderCleanlinessIntro() {
+  const questions = cleanlinessQuestions();
+  $('#cleanlinessChecklist').innerHTML = questions
+    .map((question) => `<li>${escapeHtml(question.text)}</li>`)
+    .join('');
+  runtime.draft.stage = 'cleanliness_intro';
+  runtime.draft.photo_phase = 'cleanliness';
+  runtime.draft.photo_index = runtime.draft.cleanliness_photo_ids.length;
+  saveDraft();
+  setWorkflowStep('cleanliness');
+  setStage('cleanlinessIntroStage');
+}
+
+function renderCleanlinessTransition() {
+  stopCamera();
+  runtime.draft.stage = 'cleanliness_transition';
+  runtime.draft.photo_phase = 'cleanliness';
+  saveDraft();
+  setWorkflowStep('closing');
+  setStage('cleanlinessTransitionStage');
+}
+
 function renderChecklist() {
   const items = runtime.scenario.checklist;
   $('#checklistList').innerHTML = items.length
     ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')
     : '<li class="empty">Дополнительного чек-листа для этого набора нет</li>';
+  const closing = runtime.scenario.action === 'close';
+  $('#checklistEyebrow').textContent = closing ? '🌙 Этап 2 из 2 · Закрытие' : 'Перед началом';
+  $('#checklistTitle').textContent = closing ? 'Чек-лист закрытия' : 'Чек-лист смены';
+  $('#checklistDescription').textContent = closing
+    ? 'Чистота готова. Проверьте пункты и завершите закрытие клуба.'
+    : 'Проверьте пункты, затем переходите к вопросам.';
+  $('#startQuestions').textContent = closing ? 'Начать закрытие' : 'Всё понятно — начать';
   runtime.draft.stage = 'checklist';
+  runtime.draft.photo_phase = 'shift';
   saveDraft();
+  if (closing) setWorkflowStep('closing');
   setStage('checklistStage');
 }
 
@@ -265,11 +330,12 @@ function renderQuestion() {
   const index = editingIndex >= 0 ? editingIndex : Math.max(0, runtime.draft.text_index);
   const question = questions[index];
   runtime.draft.stage = 'questions';
+  runtime.draft.photo_phase = 'shift';
   runtime.draft.text_index = index;
   saveDraft();
   $('#questionProgress').textContent = editingIndex >= 0
     ? 'Изменение ответа'
-    : `Вопрос ${index + 1} из ${questions.length}`;
+    : `${runtime.scenario.action === 'close' ? '🌙 Закрытие · ' : ''}вопрос ${index + 1} из ${questions.length}`;
   $('#questionProgressBar').style.width = `${((index + 1) / questions.length) * 100}%`;
   $('#questionLabel').textContent = question.text;
   const input = $('#questionAnswer');
@@ -289,12 +355,25 @@ function renderQuestion() {
 }
 
 function startPhotoPhase() {
+  runtime.draft.photo_phase = 'shift';
   runtime.draft.stage = 'photos';
   runtime.draft.photo_index = Math.min(
     runtime.draft.photo_ids.length,
-    photoQuestions().length,
+    shiftPhotoQuestions().length,
   );
   saveDraft();
+  renderPhotoReady();
+}
+
+function startCleanlinessPhotoPhase() {
+  runtime.draft.photo_phase = 'cleanliness';
+  runtime.draft.stage = 'photos';
+  runtime.draft.photo_index = Math.min(
+    runtime.draft.cleanliness_photo_ids.length,
+    cleanlinessQuestions().length,
+  );
+  saveDraft();
+  setWorkflowStep('cleanliness');
   renderPhotoReady();
 }
 
@@ -304,14 +383,29 @@ function renderPhotoReady(reason = '') {
     !questions.length
     || (!runtime.retakeQuestionId && runtime.draft.photo_index >= questions.length)
   ) {
-    renderReview();
+    finishPhotoPhase();
     return;
   }
   const question = runtime.retakeQuestionId
     ? questions.find((item) => item.id === runtime.retakeQuestionId)
     : questions[runtime.draft.photo_index];
   const index = questions.findIndex((item) => item.id === question.id);
-  $('#photoProgress').textContent = `Фото ${index + 1} из ${questions.length}`;
+  const cleanliness = isCleanlinessPhase();
+  const phaseLabel = cleanliness
+    ? '✨ Чистота'
+    : runtime.scenario.action === 'close'
+      ? '🌙 Закрытие'
+      : '🌅 Открытие';
+  if (runtime.scenario.action === 'close') {
+    setWorkflowStep(cleanliness ? 'cleanliness' : 'closing');
+  }
+  $('#photoStage').classList.toggle('cleanliness-card', cleanliness);
+  $('#photoStageEyebrow').textContent = cleanliness
+    ? '✨ Этап 1 из 2 · Чистота'
+    : runtime.scenario.action === 'close'
+      ? '🌙 Этап 2 из 2 · Закрытие'
+      : 'Серия фотографий';
+  $('#photoProgress').textContent = `${phaseLabel} · фото ${index + 1} из ${questions.length}`;
   $('#photoStageTitle').textContent = runtime.retakeQuestionId
     ? 'Переснять фотографию'
     : runtime.draft.photo_index ? 'Продолжить серию' : 'Камера готова';
@@ -347,8 +441,14 @@ function clearBatchSelection() {
 function renderBatchOrder() {
   clearBatchSelection();
   const questions = photoQuestions();
+  const photoIds = currentPhotoIds();
+  $('#batchOrderEyebrow').textContent = isCleanlinessPhase()
+    ? '✨ Этап 1 из 2 · Чистота'
+    : runtime.scenario.action === 'close'
+      ? '🌙 Этап 2 из 2 · Закрытие'
+      : 'Перед выбором фотографий';
   $('#batchQuestionList').innerHTML = questions.map((question, index) => {
-    const completed = runtime.draft.photo_ids.includes(question.id);
+    const completed = photoIds.includes(question.id);
     const current = !completed && index === runtime.draft.photo_index;
     const className = completed ? 'completed' : current ? 'current' : 'pending';
     return `<li class="${className}"><i>${completed ? '✓' : index + 1}</i><span>${escapeHtml(question.text)}</span></li>`;
@@ -360,6 +460,11 @@ function renderBatchOrder() {
 function renderBatchReview() {
   releaseBatchReviewUrls();
   const questions = photoQuestions();
+  $('#batchReviewEyebrow').textContent = isCleanlinessPhase()
+    ? '✨ Этап 1 из 2 · Чистота'
+    : runtime.scenario.action === 'close'
+      ? '🌙 Этап 2 из 2 · Закрытие'
+      : 'Перед сохранением';
   $('#batchReviewProgress').textContent = `${runtime.batchItems.length} фото · проверьте порядок`;
   $('#confirmBatchPhotos').textContent = `Сохранить ${runtime.batchItems.length} фото`;
   $('#batchReviewList').innerHTML = runtime.batchItems.map((item, index) => {
@@ -389,7 +494,13 @@ function updateCameraInstruction() {
     ? questions.find((item) => item.id === runtime.retakeQuestionId)
     : questions[runtime.draft.photo_index];
   const index = questions.findIndex((item) => item.id === question.id);
-  $('#cameraProgress').textContent = `Фото ${index + 1} из ${questions.length}`;
+  $('#cameraStage').classList.toggle('cleanliness-camera', isCleanlinessPhase());
+  const phaseLabel = isCleanlinessPhase()
+    ? '✨ Чистота'
+    : runtime.scenario.action === 'close'
+      ? '🌙 Закрытие'
+      : '🌅 Открытие';
+  $('#cameraProgress').textContent = `${phaseLabel} · фото ${index + 1} из ${questions.length}`;
   $('#cameraQuestion').textContent = question.text;
 }
 
@@ -544,13 +655,18 @@ async function saveCapturedPhoto(blob) {
     return 'review';
   }
 
-  if (!runtime.draft.photo_ids.includes(question.id)) {
-    runtime.draft.photo_ids.push(question.id);
+  const photoIds = currentPhotoIds();
+  if (!photoIds.includes(question.id)) {
+    photoIds.push(question.id);
   }
   runtime.draft.photo_index += 1;
   saveDraft();
   if (runtime.draft.photo_index >= questions.length) {
     stopCamera();
+    if (isCleanlinessPhase()) {
+      renderCleanlinessTransition();
+      return 'transition';
+    }
     await renderReview();
     return 'review';
   } else if (runtime.stream) {
@@ -562,6 +678,11 @@ async function saveCapturedPhoto(blob) {
   }
 }
 
+function finishPhotoPhase() {
+  if (isCleanlinessPhase()) renderCleanlinessTransition();
+  else renderReview();
+}
+
 function releaseReviewUrls() {
   runtime.reviewUrls.forEach((url) => URL.revokeObjectURL(url));
   runtime.reviewUrls = [];
@@ -571,7 +692,9 @@ async function renderReview() {
   stopCamera();
   runtime.editingAnswerQuestionId = null;
   runtime.draft.stage = 'review';
+  runtime.draft.photo_phase = 'shift';
   saveDraft();
+  if (runtime.scenario.action === 'close') setWorkflowStep('closing');
   const questions = textQuestions();
   $('#answerReview').innerHTML = questions.length
     ? questions.map((question) => `
@@ -584,46 +707,86 @@ async function renderReview() {
   $('#editAnswers').hidden = !questions.length;
 
   releaseReviewUrls();
-  const photoItems = [];
-  for (const question of photoQuestions()) {
-    const record = await getPhoto(question.id);
-    if (!record?.blob) continue;
-    const url = URL.createObjectURL(record.blob);
-    runtime.reviewUrls.push(url);
-    photoItems.push(`
-      <article>
-        <img src="${url}" alt="${escapeHtml(question.text)}">
-        <div><span>${escapeHtml(question.text)}</span><button type="button" data-retake="${question.id}">Переснять</button></div>
-      </article>
-    `);
+
+  async function renderPhotoReview(questionsToRender, selector, phase) {
+    const photoItems = [];
+    for (const question of questionsToRender) {
+      const record = await getPhoto(question.id);
+      if (!record?.blob) continue;
+      const url = URL.createObjectURL(record.blob);
+      runtime.reviewUrls.push(url);
+      photoItems.push(`
+        <article>
+          <img src="${url}" alt="${escapeHtml(question.text)}">
+          <div><span>${escapeHtml(question.text)}</span><button type="button" data-retake="${question.id}" data-retake-phase="${phase}">Переснять</button></div>
+        </article>
+      `);
+    }
+    $(selector).innerHTML = photoItems.length
+      ? photoItems.join('')
+      : '<div class="empty-review">В этом сценарии нет фотографий</div>';
   }
-  $('#photoReview').innerHTML = photoItems.length
-    ? photoItems.join('')
-    : '<div class="empty-review">В этом сценарии нет фотографий</div>';
+
+  const closing = runtime.scenario.action === 'close';
+  $('#cleanlinessReviewSection').hidden = !closing;
+  if (closing) {
+    await renderPhotoReview(
+      cleanlinessQuestions(), '#cleanlinessPhotoReview', 'cleanliness',
+    );
+  }
+  await renderPhotoReview(shiftPhotoQuestions(), '#photoReview', 'shift');
   setStage('reviewStage');
 }
 
 async function repairDraftPhotos() {
-  const questions = photoQuestions();
-  const validIds = [];
-  for (const question of questions) {
-    if (!runtime.draft.photo_ids.includes(question.id)) break;
-    const record = await getPhoto(question.id);
-    if (!record?.blob) break;
-    validIds.push(question.id);
+  async function validPhotoIds(questions, storedIds) {
+    const validIds = [];
+    for (const question of questions) {
+      if (!storedIds.includes(question.id)) break;
+      const record = await getPhoto(question.id);
+      if (!record?.blob) break;
+      validIds.push(question.id);
+    }
+    return validIds;
   }
-  runtime.draft.photo_ids = validIds;
-  runtime.draft.photo_index = validIds.length;
-  if (runtime.draft.stage === 'review' && validIds.length !== questions.length) {
+
+  runtime.draft.cleanliness_photo_ids = await validPhotoIds(
+    cleanlinessQuestions(), runtime.draft.cleanliness_photo_ids,
+  );
+  runtime.draft.photo_ids = await validPhotoIds(
+    shiftPhotoQuestions(), runtime.draft.photo_ids,
+  );
+  if (
+    runtime.scenario.action === 'close'
+    && runtime.draft.stage !== 'cleanliness_intro'
+    && runtime.draft.cleanliness_photo_ids.length !== cleanlinessQuestions().length
+  ) {
     runtime.draft.stage = 'photos';
+    runtime.draft.photo_phase = 'cleanliness';
+  } else if (
+    runtime.draft.stage === 'review'
+    && runtime.draft.photo_ids.length !== shiftPhotoQuestions().length
+  ) {
+    runtime.draft.stage = 'photos';
+    runtime.draft.photo_phase = 'shift';
+  }
+  if (runtime.draft.stage === 'photos') {
+    runtime.draft.photo_index = currentPhotoIds().length;
   }
   saveDraft();
 }
 
 function renderSavedStage() {
-  if (runtime.draft.stage === 'questions') renderQuestion();
+  if (runtime.draft.stage === 'cleanliness_intro') renderCleanlinessIntro();
+  else if (runtime.draft.stage === 'cleanliness_transition') renderCleanlinessTransition();
+  else if (runtime.draft.stage === 'questions') renderQuestion();
   else if (runtime.draft.stage === 'photos') renderPhotoReady();
   else if (runtime.draft.stage === 'review') renderReview();
+  else renderChecklist();
+}
+
+function renderInitialStage() {
+  if (runtime.scenario.action === 'close') renderCleanlinessIntro();
   else renderChecklist();
 }
 
@@ -643,10 +806,12 @@ function createDraft() {
     variant_index: scenario.variant_index,
     version: scenario.version,
     stage: 'checklist',
+    photo_phase: scenario.action === 'close' ? 'cleanliness' : 'shift',
     text_index: 0,
     photo_index: 0,
     answers: {},
     photo_ids: [],
+    cleanliness_photo_ids: [],
     started_at: null,
     created_at: createdAt,
     updated_at: createdAt,
@@ -667,7 +832,9 @@ function compatibleDraft(draft) {
     && Number(draft.variant_index) === scenario.variant_index
     && draft.version === scenario.version
     && typeof draft.answers === 'object'
-    && Array.isArray(draft.photo_ids);
+    && Array.isArray(draft.photo_ids)
+    && Array.isArray(draft.cleanliness_photo_ids)
+    && ['cleanliness', 'shift'].includes(draft.photo_phase);
 }
 
 async function fetchScenario(variant = null, club = '') {
@@ -687,7 +854,7 @@ async function startFreshScenario() {
   runtime.scenario = response;
   setPageCopy();
   createDraft();
-  renderChecklist();
+  renderInitialStage();
 }
 
 function showError(error) {
@@ -701,6 +868,13 @@ function showError(error) {
 }
 
 function continueAfterStart() {
+  if (
+    runtime.scenario.action === 'close'
+    && runtime.draft.cleanliness_photo_ids.length < cleanlinessQuestions().length
+  ) {
+    startCleanlinessPhotoPhase();
+    return;
+  }
   runtime.draft.text_index = 0;
   if (textQuestions().length) renderQuestion();
   else startPhotoPhase();
@@ -711,7 +885,14 @@ async function beginShift(earlyConfirmed = false) {
     continueAfterStart();
     return;
   }
-  const button = $('#startQuestions');
+  const cleanlinessStart = runtime.scenario.action === 'close'
+    && runtime.draft.cleanliness_photo_ids.length < cleanlinessQuestions().length;
+  const button = cleanlinessStart ? $('#startCleanliness') : $('#startQuestions');
+  const idleLabel = cleanlinessStart
+    ? 'Начать отчёт о чистоте'
+    : runtime.scenario.action === 'close'
+      ? 'Начать закрытие'
+      : 'Всё понятно — начать';
   button.disabled = true;
   button.textContent = 'Начинаем…';
   try {
@@ -740,7 +921,7 @@ async function beginShift(earlyConfirmed = false) {
     }
   } finally {
     button.disabled = false;
-    button.textContent = 'Всё понятно — начать';
+    button.textContent = idleLabel;
   }
 }
 
@@ -758,8 +939,14 @@ async function submitReport() {
       run_id: runtime.draft.id,
       answers: runtime.draft.answers,
       photo_ids: runtime.draft.photo_ids,
+      cleanliness_photo_ids: runtime.draft.cleanliness_photo_ids,
     }));
-    for (const question of photoQuestions()) {
+    for (const question of cleanlinessQuestions()) {
+      const record = await getPhoto(question.id);
+      if (!record?.blob) throw new Error(`Не найдена фотография чистоты: ${question.text}`);
+      form.append('cleanliness_photos', record.blob, `${question.id}.jpg`);
+    }
+    for (const question of shiftPhotoQuestions()) {
       const record = await getPhoto(question.id);
       if (!record?.blob) throw new Error(`Не найдена фотография: ${question.text}`);
       form.append('photos', record.blob, `${question.id}.jpg`);
@@ -777,6 +964,8 @@ async function submitReport() {
   }
 }
 
+$('#startCleanliness').addEventListener('click', () => beginShift());
+$('#continueToClosing').addEventListener('click', renderChecklist);
 $('#startQuestions').addEventListener('click', () => beginShift());
 $('#cancelEarlyClose').addEventListener('click', () => {
   $('#earlyCloseDialog').close();
@@ -845,6 +1034,8 @@ $('#systemPhoto').addEventListener('change', async (event) => {
     } else if (outcome === 'photo') {
       setPhotoProcessing(true, 'Фото сохранено · следующий пункт', true);
       await wait(700);
+    } else if (outcome === 'transition') {
+      toast('Фотографии чистоты готовы');
     } else {
       toast('Фотография заменена');
     }
@@ -945,8 +1136,9 @@ $('#confirmBatchPhotos').addEventListener('click', async () => {
     for (let index = 0; index < runtime.batchItems.length; index += 1) {
       const question = questions[runtime.draft.photo_index];
       await putPhoto(question.id, runtime.batchItems[index].blob);
-      if (!runtime.draft.photo_ids.includes(question.id)) {
-        runtime.draft.photo_ids.push(question.id);
+      const photoIds = currentPhotoIds();
+      if (!photoIds.includes(question.id)) {
+        photoIds.push(question.id);
       }
       runtime.draft.photo_index += 1;
       saved += 1;
@@ -955,7 +1147,7 @@ $('#confirmBatchPhotos').addEventListener('click', async () => {
     }
     clearBatchSelection();
     tg?.HapticFeedback?.notificationOccurred('success');
-    if (runtime.draft.photo_index >= questions.length) await renderReview();
+    if (runtime.draft.photo_index >= questions.length) finishPhotoPhase();
     else renderPhotoReady(`${saved} фото сохранено. Продолжайте со следующего пункта.`);
   } catch (error) {
     clearBatchSelection();
@@ -968,12 +1160,17 @@ $('#confirmBatchPhotos').addEventListener('click', async () => {
   }
 });
 
-$('#photoReview').addEventListener('click', (event) => {
+function retakePhoto(event) {
   const button = event.target.closest('[data-retake]');
   if (!button) return;
+  runtime.draft.photo_phase = button.dataset.retakePhase;
+  runtime.draft.photo_index = currentPhotoIds().length;
   runtime.retakeQuestionId = button.dataset.retake;
   renderPhotoReady();
-});
+}
+
+$('#photoReview').addEventListener('click', retakePhoto);
+$('#cleanlinessPhotoReview').addEventListener('click', retakePhoto);
 
 $('#answerReview').addEventListener('click', (event) => {
   const button = event.target.closest('[data-edit-answer]');
@@ -1014,8 +1211,12 @@ $('#discardDraft').addEventListener('click', async () => {
       runtime.draft.photo_index = 0;
       runtime.draft.answers = {};
       runtime.draft.photo_ids = [];
+      runtime.draft.cleanliness_photo_ids = [];
+      runtime.draft.photo_phase = runtime.scenario.action === 'close'
+        ? 'cleanliness'
+        : 'shift';
       saveDraft();
-      renderChecklist();
+      renderInitialStage();
       toast('Черновик очищен. Начало смены сохранено.');
     } else {
       await deleteDraft();
@@ -1082,14 +1283,15 @@ async function initialize() {
   if (!compatibleDraft(localDraft)) {
     if (localDraft) await deleteDraft(localDraft);
     createDraft();
-    renderChecklist();
+    renderInitialStage();
     return;
   }
 
   runtime.draft = localDraft;
   await repairDraftPhotos();
   const answered = Object.keys(runtime.draft.answers).length;
-  const photos = runtime.draft.photo_ids.length;
+  const photos = runtime.draft.photo_ids.length
+    + runtime.draft.cleanliness_photo_ids.length;
   $('#resumeDescription').textContent = `${runtime.scenario.club}: ответов ${answered}, фотографий ${photos}. Черновик хранится только на этом устройстве.`;
   $('#discardDraft').hidden = false;
   $('#resumeDialog').showModal();

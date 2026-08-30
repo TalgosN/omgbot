@@ -28,8 +28,30 @@ button { color:inherit; cursor:pointer; }
 .eyebrow { margin:0 0 5px; color:#89dfd4; font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; }
 .test-intro h1 { margin:0; font-family:Furore,"Russo One",sans-serif; font-size:clamp(30px,9vw,48px); font-weight:400; line-height:1; letter-spacing:.022em; text-shadow:0 0 28px rgba(77,224,199,.4); }
 .test-intro > p:last-child { max-width:520px; margin:10px 0 0; color:var(--muted); font-size:10px; line-height:1.55; }
+.closing-workflow { display:grid; margin:-4px 0 14px; grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr); align-items:center; gap:6px; }
+.closing-workflow > div { display:grid; min-height:62px; padding:10px 11px; grid-template-columns:30px minmax(0,1fr); grid-template-rows:auto auto; column-gap:9px; align-items:center; border:1px solid rgba(255,255,255,.09); border-radius:16px; color:#829f9d; background:rgba(3,27,34,.42); transition:.2s ease; }
+.closing-workflow > div > i { display:grid; width:30px; height:30px; grid-row:1/3; place-items:center; border-radius:10px; background:rgba(255,255,255,.05); font-style:normal; }
+.closing-workflow span { font-size:7px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+.closing-workflow strong { align-self:start; font-size:10px; }
+.closing-workflow > b { color:rgba(255,255,255,.22); font-size:14px; text-align:center; }
+.closing-workflow > div.active[data-workflow-step="cleanliness"] { border-color:rgba(77,224,199,.36); color:#dcfff9; background:rgba(33,184,168,.13); box-shadow:0 10px 30px rgba(33,184,168,.1); }
+.closing-workflow > div.active[data-workflow-step="closing"] { border-color:rgba(133,145,255,.4); color:#eef0ff; background:rgba(83,103,216,.2); box-shadow:0 10px 30px rgba(83,103,216,.14); }
+.closing-workflow > div.completed { color:#96c9c1; }
+.closing-workflow > div.completed > i { color:#052c32; background:#77efb4; }
 .state-card,.stage-card { border:1px solid var(--line); border-radius:22px; background:var(--card); box-shadow:0 20px 52px rgba(0,0,0,.26); backdrop-filter:blur(16px); }
 .stage-card { padding:17px; }
+.cleanliness-card { border-color:rgba(77,224,199,.32); background:radial-gradient(circle at 100% 0,rgba(77,224,199,.14),transparent 16rem),var(--card); }
+.cleanliness-list li::before { color:#052c32; background:#77efb4; }
+#startCleanliness { width:100%; }
+.cleanliness-transition { padding:25px 20px; border-color:rgba(133,145,255,.31); text-align:center; background:radial-gradient(circle at 50% 0,rgba(83,103,216,.25),transparent 18rem),var(--card); }
+.cleanliness-transition > span { color:#77efb4; font-size:8px; font-weight:850; letter-spacing:.09em; text-transform:uppercase; }
+.transition-icon { display:grid; width:58px; height:58px; margin:17px auto 13px; place-items:center; border:1px solid rgba(133,145,255,.34); border-radius:19px; background:rgba(83,103,216,.2); font-size:25px; }
+.cleanliness-transition h2 { margin:0; font-size:23px; }
+.cleanliness-transition p { margin:8px 0 18px; color:var(--muted); font-size:10px; line-height:1.55; }
+.closing-button { width:100%; min-height:50px; border:0; border-radius:14px; color:white; background:linear-gradient(145deg,#6879e8,#3547ad); box-shadow:0 12px 30px rgba(83,103,216,.22); font-size:11px; font-weight:800; }
+body[data-workflow-step="closing"] { background:radial-gradient(circle at 92% 2%,rgba(83,103,216,.35),transparent 25rem),radial-gradient(circle at -8% 45%,rgba(33,184,168,.14),transparent 26rem),linear-gradient(180deg,#111b3c 0%,var(--bg) 68%); }
+body[data-workflow-step="closing"] .primary-button { background:linear-gradient(145deg,#6879e8,#3547ad); box-shadow:0 12px 30px rgba(83,103,216,.2); }
+body[data-workflow-step="closing"] .progress-track i { background:linear-gradient(90deg,#6879e8,#9faaff); }
 .loading-card { display:flex; min-height:90px; padding:18px; align-items:center; justify-content:center; gap:11px; color:var(--muted); font-size:10px; text-align:center; }
 .loading-card i { width:17px; height:17px; flex:none; border:2px solid rgba(77,224,199,.2); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
@@ -110,6 +132,14 @@ button { color:inherit; cursor:pointer; }
 .answer-review span { color:var(--muted); font-size:8px; line-height:1.4; }
 .answer-review strong { margin-top:5px; font-size:11px; line-height:1.45; white-space:pre-wrap; }
 .answer-review button { min-height:34px; padding:0 10px; border:0; border-radius:10px; color:#a7eee4; background:rgba(33,184,168,.11); font-size:8px; font-weight:800; }
+.report-review-section { margin-top:15px; padding:12px; border:1px solid rgba(133,145,255,.17); border-radius:17px; background:rgba(3,27,34,.34); }
+.report-review-section + .report-review-section { margin-top:10px; }
+.report-review-heading span { color:#9da8ff; font-size:7px; font-weight:850; letter-spacing:.09em; text-transform:uppercase; }
+.report-review-heading h3 { margin:4px 0 0; font-size:16px; }
+.report-review-section .answer-review { margin-top:11px; }
+.report-review-section .photo-review { margin-top:9px; }
+.cleanliness-review { border-color:rgba(77,224,199,.24); background:rgba(33,184,168,.06); }
+.cleanliness-review .report-review-heading span { color:#77efb4; }
 .photo-review { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
 .photo-review article { min-width:0; overflow:hidden; border:1px solid rgba(77,224,199,.14); border-radius:15px; background:rgba(3,27,34,.5); }
 .photo-review img { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; background:#01090b; }
@@ -124,6 +154,7 @@ button { color:inherit; cursor:pointer; }
 .camera-instruction { position:absolute; top:calc(var(--app-safe-top) + 14px); left:58px; right:58px; max-height:calc(var(--tg-viewport-stable-height,100dvh) - var(--app-safe-top) - 225px); overflow:auto; text-align:center; overscroll-behavior:contain; }
 .camera-instruction span,.camera-instruction strong,.camera-instruction small { display:block; }
 .camera-instruction span { color:#9ef3e7; font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.camera-stage:not(.cleanliness-camera) .camera-instruction span { color:#b8c0ff; }
 .camera-instruction strong { margin-top:8px; font-size:15px; line-height:1.38; }
 .camera-instruction small { margin-top:7px; color:rgba(255,255,255,.7); font-size:9px; }
 .close-camera { position:absolute; top:calc(var(--app-safe-top) + 10px); right:14px; width:40px; height:40px; border:1px solid rgba(255,255,255,.25); border-radius:14px; color:white; background:rgba(0,0,0,.4); font-size:24px; }

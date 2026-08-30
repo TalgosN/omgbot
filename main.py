@@ -655,13 +655,21 @@ def shift_flow_callback(call):
         )
     except Exception:
         pass
-    from openclose import check_club, func_today
+    from openclose import check_club, func_today, warn_legacy_shift_flow
     if call.data == 'shift_flow:cancel':
         func_today(message, bot)
         return
-    actions = {
+    legacy_actions = {
         'shift_flow:open:legacy': '✅ Открыть смену',
         'shift_flow:close:legacy': '🚫 Закрыть смену',
+    }
+    legacy_action = legacy_actions.get(call.data)
+    if legacy_action:
+        warn_legacy_shift_flow(message, legacy_action, bot)
+        return
+    actions = {
+        'shift_flow:open:legacy_confirmed': '✅ Открыть смену',
+        'shift_flow:close:legacy_confirmed': '🚫 Закрыть смену',
     }
     action = actions.get(call.data)
     if not action:

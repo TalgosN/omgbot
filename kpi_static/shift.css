@@ -23,7 +23,6 @@
 .shift-action.primary { background:linear-gradient(145deg,#2563eb,#1e3a8a); }
 .shift-action.management { background:linear-gradient(145deg,#21b8a8,#08766f); }
 .shift-action.taskboard { background:linear-gradient(145deg,#a24de1,#6e2ea7); }
-.shift-action.camera-test { background:linear-gradient(145deg,#ff7a5c,#bd385f); }
 .shift-action-icon { display:grid; width:42px; height:42px; flex:0 0 auto; place-items:center; border:1px solid rgba(255,255,255,.25); border-radius:14px; background:rgba(255,255,255,.11); font-size:19px; font-weight:800; }
 .shift-action div { min-width:0; }
 .shift-action small,.shift-action strong,.shift-action p { display:block; }

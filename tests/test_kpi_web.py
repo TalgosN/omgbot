@@ -129,8 +129,13 @@ class KpiWebTest(unittest.TestCase):
 
         home = self.client.get('/')
         try:
-            self.assertIn(b'href="/records"', home.data)
-            self.assertIn(b'OMG RECORDS', home.data)
+            home_html = home.get_data(as_text=True)
+            self.assertIn('href="/records"', home_html)
+            self.assertNotIn('<h2>OMG RECORDS</h2>', home_html)
+            self.assertLess(
+                home_html.index('<h2>SHIFT</h2>'),
+                home_html.index('<h2>RECORDS</h2>'),
+            )
         finally:
             home.close()
 
@@ -157,7 +162,35 @@ class KpiWebTest(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json(), payload)
-            dashboard.assert_called_once_with(kpi_web.DB_PATH, '@tester')
+            dashboard.assert_called_once_with(
+                kpi_web.DB_PATH,
+                '@tester',
+                viewer_login='@tester',
+                can_manage=role >= kpi_web.ROLE_MANAGER,
+            )
+
+    def test_only_managers_can_open_another_records_shelf(self):
+        for role, expected_login in ((1, '@tester'), (2, '@other')):
+            with (
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(role)),
+                patch.object(
+                    kpi_web,
+                    'build_records_dashboard',
+                    return_value={'categories': []},
+                ) as dashboard,
+            ):
+                response = self.client.get(
+                    '/api/records?login=@other', headers=self.headers,
+                )
+
+            self.assertEqual(response.status_code, 200)
+            dashboard.assert_called_once_with(
+                kpi_web.DB_PATH,
+                expected_login,
+                viewer_login='@tester',
+                can_manage=role >= kpi_web.ROLE_MANAGER,
+            )
 
     def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
         response = self.client.get('/kpi')
@@ -343,14 +376,14 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         calculate.assert_not_called()
 
-    def test_camera_prototype_is_linked_from_shift(self):
+    def test_shift_report_is_linked_without_camera_prototype(self):
         shift_response = self.client.get('/shift')
         camera_response = self.client.get('/camera-test')
         shift_test_response = self.client.get('/shift-report?action=open')
         try:
             self.assertEqual(shift_response.status_code, 200)
             shift_html = shift_response.get_data(as_text=True)
-            self.assertIn('id="openCameraTest"', shift_html)
+            self.assertNotIn('id="openCameraTest"', shift_html)
             self.assertIn('id="shiftReportTest"', shift_html)
             self.assertIn('/shift-report?action=open', shift_html)
             self.assertIn('/shift-report?action=close', shift_html)
@@ -364,6 +397,9 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn('id="ownerClubStage"', shift_test_html)
             self.assertIn('id="earlyCloseDialog"', shift_test_html)
             self.assertIn('id="checklistStage"', shift_test_html)
+            self.assertIn('id="closingWorkflow"', shift_test_html)
+            self.assertIn('id="cleanlinessIntroStage"', shift_test_html)
+            self.assertIn('id="cleanlinessTransitionStage"', shift_test_html)
             self.assertIn('id="questionStage"', shift_test_html)
             self.assertIn('id="cameraStage"', shift_test_html)
             self.assertIn('id="reviewStage"', shift_test_html)
@@ -443,6 +479,34 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(
             [question['type'] for question in payload['questions']],
             ['num', 'photo', 'photo'],
+        )
+        self.assertEqual(payload['cleanliness_questions'], [])
+
+    def test_close_cleanliness_points_are_fixed_and_maryino_has_no_toilet(self):
+        self.assertEqual(
+            [
+                question['text']
+                for question in kpi_web._shift_cleanliness_questions(
+                    'close', 'Ленинский',
+                )
+            ],
+            [
+                'Лаунж', 'Ресепшен', 'Туалет — общий план',
+                'Раковина', 'Унитаз', 'Бэк', 'Зеркало в туалете',
+            ],
+        )
+        self.assertEqual(
+            [
+                question['text']
+                for question in kpi_web._shift_cleanliness_questions(
+                    'close', 'Марьино',
+                )
+            ],
+            ['Лаунж', 'Ресепшен', 'Бэк'],
+        )
+        self.assertEqual(
+            kpi_web._shift_cleanliness_questions('open', 'Ленинский'),
+            [],
         )
 
     def test_shift_test_is_blocked_for_manager_when_today_shift_is_missing(self):
@@ -746,8 +810,163 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'indexedDB.open', script.data)
             self.assertIn(b'audio: false', script.data)
             self.assertIn(b"form.append('photos'", script.data)
+            self.assertIn(b"form.append('cleanliness_photos'", script.data)
         finally:
             script.close()
+
+    def test_cleanliness_album_is_sent_only_to_main_group(self):
+        bot = Mock()
+        questions = kpi_web._shift_cleanliness_questions(
+            'close', 'Ленинский',
+        )
+        photos = [
+            {
+                'content': f'jpeg-{index}'.encode(),
+                'filename': f'{question["id"]}.jpg',
+                'question': question,
+            }
+            for index, question in enumerate(questions, 1)
+        ]
+        with (
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.dict(kpi_web.CHATS, {
+                'reports': '-100-reports',
+                'main_group': '-100-main',
+            }),
+        ):
+            kpi_web._send_shift_cleanliness_report(
+                {'club': 'Ленинский'}, photos,
+            )
+
+        bot.send_media_group.assert_called_once()
+        self.assertEqual(bot.send_media_group.call_args.args[0], '-100-main')
+        album = bot.send_media_group.call_args.kwargs['media']
+        self.assertEqual(len(album), 7)
+        self.assertIn(
+            'Отчёт о чистоте · Ленинский', album[0].caption,
+        )
+        self.assertTrue(all(item.caption is None for item in album[1:]))
+        bot.send_photo.assert_not_called()
+        bot.send_message.assert_not_called()
+
+    def test_close_submission_sends_cleanliness_then_completes_shift(self):
+        today = kpi_web._moscow_today().isoformat()
+        clubs = {
+            'Ленинский': {
+                'shift_name': 'Ленинский',
+                'questions': {
+                    '🚫 Закрыть смену': [[
+                        {'text': 'Всё выключено?', 'type': 'text'},
+                        {
+                            'text': 'Пришли скрин с отчетом в рабочем чате '
+                                    'о чистоте',
+                            'type': 'photo',
+                        },
+                    ]],
+                },
+            },
+        }
+        shifts = [{
+            'date': today, 'club': 'Ленинский', 'duration': 12,
+            'start': '10:00', 'end': '22:00',
+        }]
+        bot = Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'cleanliness-close.sqlite3'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''CREATE TABLE clubs (club TEXT PRIMARY KEY, status TEXT);
+                   INSERT INTO clubs VALUES ('Ленинский', 'Открыт');
+                   CREATE TABLE activity (
+                       ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                       dtrep TEXT, login TEXT, club TEXT, action TEXT
+                   );'''
+            )
+            conn.commit()
+            conn.close()
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(0)),
+                patch.object(kpi_web, 'get_clubs', return_value=clubs),
+                patch.object(kpi_web, '_upcoming_shifts', return_value=shifts),
+                patch.object(kpi_web, '_shift_report_is_early_close', return_value=False),
+                patch.object(kpi_web, '_notification_bot', return_value=bot),
+                patch.object(kpi_web, 'refresh_club_status_dashboard', return_value=True),
+                patch.object(kpi_web, 'update_table_open'),
+                patch.object(kpi_web, '_shift_report_test_sent_at', {}),
+                patch.dict(kpi_web.CHATS, {
+                    'reports': '-100-reports',
+                    'main_group': '-100-main',
+                }),
+            ):
+                scenario = self.client.get(
+                    '/api/shift-test/scenario?action=close&variant=0',
+                    headers=self.headers,
+                ).get_json()
+                self.assertEqual(
+                    [question['text'] for question in scenario['questions']],
+                    ['Всё выключено?'],
+                )
+                run_id = f'{today}:close:cleanliness-run'
+                start = self.client.post(
+                    '/api/shift-test/start',
+                    headers=self.headers,
+                    json={
+                        'run_id': run_id,
+                        'action': 'close',
+                        'club': 'Ленинский',
+                        'variant_index': 0,
+                        'version': scenario['version'],
+                    },
+                )
+                cleanliness = scenario['cleanliness_questions']
+                response = self.client.post(
+                    '/api/shift-test/submit',
+                    headers=self.headers,
+                    data={
+                        'report': json.dumps({
+                            'run_id': run_id,
+                            'action': 'close',
+                            'club': 'Ленинский',
+                            'variant_index': 0,
+                            'version': scenario['version'],
+                            'answers': {'q1': 'Да'},
+                            'photo_ids': [],
+                            'cleanliness_photo_ids': [
+                                question['id'] for question in cleanliness
+                            ],
+                        }),
+                        'cleanliness_photos': [
+                            (
+                                BytesIO(f'jpeg-{index}'.encode()),
+                                f'{question["id"]}.jpg',
+                                'image/jpeg',
+                            )
+                            for index, question in enumerate(cleanliness, 1)
+                        ],
+                    },
+                )
+                conn = sqlite3.connect(db_path)
+                run = conn.execute(
+                    '''SELECT cleanliness_photo_count, cleanliness_sent_at,
+                              report_sent_at, completed_at
+                       FROM shift_webapp_runs WHERE id=?''',
+                    (run_id,),
+                ).fetchone()
+                conn.close()
+
+        self.assertEqual(start.status_code, 200)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['cleanliness_photos'], 7)
+        self.assertEqual(response.get_json()['photos'], 0)
+        self.assertEqual(run[0], 7)
+        self.assertTrue(all(run[1:]))
+        bot.send_media_group.assert_called_once()
+        self.assertEqual(bot.send_media_group.call_args.args[0], '-100-main')
+        sent_chats = [call.args[0] for call in bot.send_message.call_args_list]
+        self.assertIn('-100-reports', sent_chats)
+        self.assertIn('-100-main', sent_chats)
 
     def test_shift_test_sends_one_photo_without_invalid_one_item_album(self):
         bot = Mock()

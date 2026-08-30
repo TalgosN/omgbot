@@ -16,13 +16,20 @@ from kpi_calculator import (
 DB_PATH = 'db/omgbot.sql'
 MOSCOW = ZoneInfo('Europe/Moscow')
 ACTIVE_STATUSES = {0, 1, 2, 3}
-CATALOG_VERSION = '1'
+CATALOG_VERSION = '2'
 CACHE_MAX_AGE_SECONDS = 15 * 60
 _refresh_lock = threading.Lock()
 TIERS = (
     {'level': 1, 'key': 'bronze', 'label': 'Бронза', 'icon': '🥉'},
     {'level': 2, 'key': 'silver', 'label': 'Серебро', 'icon': '🥈'},
     {'level': 3, 'key': 'gold', 'label': 'Золото', 'icon': '🥇'},
+    {'level': 4, 'key': 'diamond', 'label': 'Алмаз', 'icon': '💎'},
+)
+TOURING_REQUIREMENTS = (
+    {'clubs': 2, 'shifts': 3, 'label': '2 клуба · по 3 смены'},
+    {'clubs': 3, 'shifts': 5, 'label': '3 клуба · по 5 смен'},
+    {'clubs': 4, 'shifts': 10, 'label': '4 клуба · по 10 смен'},
+    {'clubs': 5, 'shifts': 20, 'label': '5 клубов · по 20 смен'},
 )
 CATEGORIES = (
     ('career', 'Смены и стаж'),
@@ -46,37 +53,37 @@ def _achievement(key, category, title, description, thresholds, kind='count'):
 
 
 ACHIEVEMENTS = (
-    _achievement('shifts', 'career', 'Человек-смена', 'Смены за всё время', (10, 50, 100), 'shifts'),
-    _achievement('hours', 'career', 'Счётчик моточасов', 'Часы на сменах', (60, 300, 600), 'hours'),
-    _achievement('active_months', 'career', 'Старожил', 'Месяцы хотя бы с одной сменой', (3, 12, 24), 'months'),
-    _achievement('clubs', 'career', 'Гастролёр', 'Физические клубы, в которых были смены', (2, 4, 5), 'clubs'),
-    _achievement('weekend_shifts', 'career', 'Уикенд-команда', 'Смены по субботам и воскресеньям', (10, 30, 75), 'shifts'),
-    _achievement('kpi_peak', 'kpi', 'Соточка', 'Лучший KPI за завершённый месяц', (1, 1.2, 1.5), 'percent'),
-    _achievement('kpi_streak', 'kpi', 'Стабильная машина', 'Месяцы подряд с KPI от 100%', (2, 3, 6), 'months'),
-    _achievement('podiums', 'kpi', 'На пьедестале', 'Завершённые месяцы в топ-3', (1, 3, 6), 'months'),
-    _achievement('first_places', 'kpi', 'Главный герой месяца', 'Первые места за завершённый месяц', (1, 3, 5), 'months'),
-    _achievement('universal_metrics', 'kpi', 'Швейцарский нож', 'Разные основные показатели в одном месяце', (4, 5, 6), 'metrics'),
-    _achievement('clean_streak', 'kpi', 'Чистая игра', 'Месяцы подряд без активных штрафов', (3, 6, 12), 'months'),
-    _achievement('stream_months', 'kpi', 'В эфире', 'Завершённые месяцы со стримом', (1, 3, 6), 'months'),
-    _achievement('custom_goals', 'kpi', 'Побочная миссия', 'Полностью выполненные дополнительные KPI-цели', (1, 3, 6), 'count'),
-    _achievement('reviews', 'metrics', 'Пятизвёздочный', 'Полученные отзывы', (10, 50, 100), 'count'),
-    _achievement('forms', 'metrics', 'Анкетолог', 'Зачётные анкеты по формуле KPI', (25, 100, 250), 'count'),
-    _achievement('extensions', 'metrics', 'Ещё часик?', 'Продления игр', (10, 50, 100), 'count'),
-    _achievement('certificates', 'metrics', 'Даритель впечатлений', 'Оформленные сертификаты', (5, 25, 75), 'count'),
-    _achievement('subscriptions', 'metrics', 'Абонемент на успех', 'Оформленные абонементы', (1, 5, 10), 'count'),
-    _achievement('initiatives', 'metrics', 'Есть идейка', 'Принятые инициативы', (1, 5, 10), 'count'),
-    _achievement('birthdays', 'metrics', 'Король праздника', 'Проведённые дни рождения', (10, 50, 100), 'count'),
-    _achievement('solved_tasks', 'taskboard', 'Решала', 'Заявки, решение которых подтвердили', (5, 25, 100), 'count'),
-    _achievement('solved_repairs', 'taskboard', 'Я починил', 'Подтверждённые решения ремонтов', (1, 10, 50), 'count'),
-    _achievement('first_try', 'taskboard', 'С первого раза', 'Решения без возврата в работу', (5, 25, 100), 'count'),
-    _achievement('fast_solutions', 'taskboard', 'До завтра', 'Решения в течение 24 часов', (1, 10, 50), 'count'),
-    _achievement('replacements', 'taskboard', 'Обновочка', 'Замены оборудования на новое', (1, 5, 15), 'count'),
-    _achievement('created_repairs', 'taskboard', 'Не прошёл мимо', 'Созданные ремонтные заявки', (1, 10, 50), 'count'),
-    _achievement('useful_repairs', 'taskboard', 'Точно в цель', 'Созданные ремонты, которые были выполнены', (1, 10, 30), 'count'),
-    _achievement('shift_reports', 'shift', 'По протоколу', 'Отправленные отчёты открытия и закрытия', (10, 50, 100), 'count'),
-    _achievement('punctual_opens', 'shift', 'Минута в минуту', 'Открытия без опоздания больше пяти минут', (10, 50, 100), 'count'),
-    _achievement('collector', 'meta', 'Коллекционер', 'Разные семейства с полученной бронзой', (5, 12, 20), 'count'),
-    _achievement('record_holder', 'meta', 'Рекордсмен', 'Категории, в которых установлен рекорд', (1, 3, 5), 'count'),
+    _achievement('shifts', 'career', 'Человек-смена', 'Смены за всё время', (50, 200, 500, 1000), 'shifts'),
+    _achievement('hours', 'career', 'Счётчик моточасов', 'Часы на сменах', (300, 1200, 3000, 6000), 'hours'),
+    _achievement('active_months', 'career', 'Старожил', 'Месяцы хотя бы с одной сменой', (6, 12, 18, 36), 'months'),
+    _achievement('clubs', 'career', 'Гастролёр', 'Опыт работы в разных физических клубах', (2, 3, 4, 5), 'clubs'),
+    _achievement('weekend_shifts', 'career', 'Уикенд-команда', 'Смены по субботам и воскресеньям', (30, 100, 200, 400), 'shifts'),
+    _achievement('kpi_peak', 'kpi', 'Соточка', 'Лучший KPI за завершённый месяц', (1, 1.2, 1.5, 3), 'percent'),
+    _achievement('kpi_streak', 'kpi', 'Стабильная машина', 'Месяцы подряд с KPI от 100%', (2, 3, 6, 12), 'months'),
+    _achievement('podiums', 'kpi', 'На пьедестале', 'Завершённые месяцы в топ-3', (1, 3, 6, 12), 'months'),
+    _achievement('first_places', 'kpi', 'Главный герой месяца', 'Первые места за завершённый месяц', (1, 3, 5, 10), 'months'),
+    _achievement('universal_metrics', 'kpi', 'Швейцарский нож', 'Разные основные показатели в одном месяце', (3, 4, 5, 6), 'metrics'),
+    _achievement('clean_streak', 'kpi', 'Чистая игра', 'Месяцы подряд без активных штрафов', (6, 12, 18, 36), 'months'),
+    _achievement('stream_months', 'kpi', 'В эфире', 'Завершённые месяцы со стримом', (1, 3, 6, 12), 'months'),
+    _achievement('custom_goals', 'kpi', 'Побочная миссия', 'Полностью выполненные дополнительные KPI-цели', (1, 3, 6, 12), 'count'),
+    _achievement('reviews', 'metrics', 'Пятизвёздочный', 'Полученные отзывы', (10, 50, 100, 200), 'count'),
+    _achievement('forms', 'metrics', 'Анкетолог', 'Зачётные анкеты по формуле KPI', (25, 100, 250, 500), 'count'),
+    _achievement('extensions', 'metrics', 'Ещё часик?', 'Продления игр', (10, 50, 100, 200), 'count'),
+    _achievement('certificates', 'metrics', 'Даритель впечатлений', 'Оформленные сертификаты', (5, 25, 75, 150), 'count'),
+    _achievement('subscriptions', 'metrics', 'Абонемент на успех', 'Оформленные абонементы', (1, 5, 10, 20), 'count'),
+    _achievement('initiatives', 'metrics', 'Есть идейка', 'Принятые инициативы', (1, 5, 10, 20), 'count'),
+    _achievement('birthdays', 'metrics', 'Король праздника', 'Проведённые дни рождения', (10, 50, 100, 200), 'count'),
+    _achievement('solved_tasks', 'taskboard', 'Решала', 'Заявки, решение которых подтвердили', (5, 25, 100, 200), 'count'),
+    _achievement('solved_repairs', 'taskboard', 'Я починил', 'Подтверждённые решения ремонтов', (1, 10, 50, 100), 'count'),
+    _achievement('first_try', 'taskboard', 'С первого раза', 'Решения без возврата в работу', (5, 25, 100, 200), 'count'),
+    _achievement('fast_solutions', 'taskboard', 'До завтра', 'Решения в течение 24 часов', (1, 10, 50, 100), 'count'),
+    _achievement('replacements', 'taskboard', 'Обновочка', 'Замены оборудования на новое', (1, 5, 15, 30), 'count'),
+    _achievement('created_repairs', 'taskboard', 'Не прошёл мимо', 'Созданные ремонтные заявки', (1, 10, 50, 100), 'count'),
+    _achievement('useful_repairs', 'taskboard', 'Точно в цель', 'Созданные ремонты, которые были выполнены', (1, 10, 30, 60), 'count'),
+    _achievement('shift_reports', 'shift', 'По протоколу', 'Отправленные отчёты открытия и закрытия', (10, 50, 100, 200), 'count'),
+    _achievement('punctual_opens', 'shift', 'Минута в минуту', 'Открытия без опоздания больше пяти минут', (10, 50, 100, 200), 'count'),
+    _achievement('collector', 'meta', 'Коллекционер', 'Разные семейства с полученной бронзой', (8, 16, 24, 29), 'count'),
+    _achievement('record_holder', 'meta', 'Рекордсмен', 'Категории, в которых установлен рекорд', (1, 3, 5, 10), 'count'),
 )
 ACHIEVEMENTS_BY_KEY = {item['key']: item for item in ACHIEVEMENTS}
 
@@ -223,6 +230,7 @@ def _people(conn):
 def _new_stats():
     result = {item['key']: 0.0 for item in ACHIEVEMENTS}
     result['monthly_shifts_peak'] = 0.0
+    result['club_shift_units'] = {}
     result['contexts'] = {}
     result['_active_months'] = set()
     result['_clubs'] = set()
@@ -257,7 +265,10 @@ def _collect_shifts(conn, people, name_logins, stats):
     rows = conn.execute(
         '''SELECT shift_login, shift_second_name, shift_first_name,
                   date(substr(dt_shift, 1, 10)), club, dur
-           FROM shifts WHERE date(substr(dt_shift, 1, 10)) IS NOT NULL'''
+           FROM shifts
+           WHERE date(substr(dt_shift, 1, 10)) IS NOT NULL
+             AND date(substr(dt_shift, 1, 10))<=date(?)''',
+        (datetime.now(MOSCOW).date().isoformat(),),
     ).fetchall()
     earliest = None
     for raw_login, second_name, first_name, raw_date, club, duration in rows:
@@ -279,6 +290,9 @@ def _collect_shifts(conn, people, name_logins, stats):
         stats[login]['_active_months'].add(raw_date[:7])
         if club in PHYSICAL_KPI_CLUBS:
             stats[login]['_clubs'].add(club)
+            stats[login]['club_shift_units'][club] = (
+                stats[login]['club_shift_units'].get(club, 0.0) + units
+            )
         if shift_date.weekday() >= 5:
             stats[login]['weekend_shifts'] += units
         earliest = min(earliest, shift_date) if earliest else shift_date
@@ -546,6 +560,25 @@ def _level(value, thresholds):
     return result
 
 
+def _touring_level(values):
+    shift_units = values.get('club_shift_units') or {}
+    result = 0
+    for index, requirement in enumerate(TOURING_REQUIREMENTS, 1):
+        qualified = sum(
+            float(units or 0) >= requirement['shifts']
+            for units in shift_units.values()
+        )
+        if qualified >= requirement['clubs']:
+            result = index
+    return result
+
+
+def _achievement_level(item, values):
+    if item['key'] == 'clubs':
+        return _touring_level(values)
+    return _level(values[item['key']], item['thresholds'])
+
+
 def _record_payloads(people, stats, active):
     records = []
     for key, title, kind in RECORDS:
@@ -597,7 +630,7 @@ def calculate_records_state(db_path=DB_PATH):
                 stats[holder['login']]['record_holder'] += 1
     for values in stats.values():
         values['collector'] = sum(
-            _level(values[item['key']], item['thresholds']) > 0
+            _achievement_level(item, values) > 0
             for item in ACHIEVEMENTS
             if item['category'] != 'meta'
         )
@@ -612,7 +645,7 @@ def calculate_records_state(db_path=DB_PATH):
 def _achievement_levels(state):
     return {
         (login, item['key']): (
-            _level(values[item['key']], item['thresholds']),
+            _achievement_level(item, values),
             values[item['key']],
         )
         for login, values in state['stats'].items()
@@ -639,12 +672,15 @@ def _cached_records_state(db_path, max_age=CACHE_MAX_AGE_SECONDS):
     initialize_records_schema(db_path)
     conn = sqlite3.connect(db_path)
     try:
+        version = conn.execute(
+            "SELECT value FROM records_meta WHERE key='catalog_version'"
+        ).fetchone()
         row = conn.execute(
             "SELECT payload_json, updated_at FROM records_cache WHERE key='dashboard'"
         ).fetchone()
     finally:
         conn.close()
-    if not row:
+    if not version or version[0] != CATALOG_VERSION or not row:
         return None
     try:
         updated_at = datetime.fromisoformat(row[1])
@@ -658,7 +694,15 @@ def _cached_records_state(db_path, max_age=CACHE_MAX_AGE_SECONDS):
 
 
 def _tier(level):
-    return TIERS[level - 1] if level else None
+    return TIERS[level - 1] if 0 < level <= len(TIERS) else None
+
+
+def _achievement_value_label(achievement, value, tier_number):
+    if achievement['key'] == 'clubs' and 0 < tier_number <= len(
+        TOURING_REQUIREMENTS
+    ):
+        return TOURING_REQUIREMENTS[tier_number - 1]['label']
+    return format_value(value, achievement['kind'])
 
 
 def _notification_text(items, state):
@@ -673,7 +717,9 @@ def _notification_text(items, state):
         lines.extend((
             f'{tier["icon"]} <b>{identity}</b>',
             f'{html.escape(achievement["title"])} · {tier["label"].lower()}',
-            html.escape(format_value(value, achievement['kind'])),
+            html.escape(_achievement_value_label(
+                achievement, value, tier_number,
+            )),
             '',
         ))
     return '\n'.join(lines).strip()
@@ -695,6 +741,8 @@ def refresh_records_achievements(
             "SELECT value FROM records_meta WHERE key='catalog_version'"
         ).fetchone()
         baseline = not current_version or current_version[0] != CATALOG_VERSION
+        if baseline:
+            conn.execute('DELETE FROM records_achievement_unlocks')
         conn.execute(
             '''INSERT INTO records_cache(key, payload_json, updated_at)
                VALUES ('dashboard', ?, ?)
@@ -790,24 +838,62 @@ def start_records_refresh(db_path=DB_PATH, bot=None, main_chat_id=None):
     return True
 
 
-def _achievement_payload(item, value, unlocked_level):
-    computed_level = _level(value, item['thresholds'])
-    level = max(unlocked_level, computed_level)
-    next_threshold = item['thresholds'][level] if level < 3 else None
-    previous_threshold = item['thresholds'][level - 1] if level else 0
-    if next_threshold is None:
-        progress = 1.0
-    elif next_threshold == previous_threshold:
-        progress = 0.0
+def _achievement_payload(item, values, unlocked_level):
+    value = values[item['key']]
+    computed_level = _achievement_level(item, values)
+    level = min(len(TIERS), max(unlocked_level, computed_level))
+    next_threshold = (
+        item['thresholds'][level] if level < len(TIERS) else None
+    )
+    if item['key'] == 'clubs':
+        requirements = TOURING_REQUIREMENTS
+        next_requirement = requirements[level] if level < len(TIERS) else None
+        current_requirement = next_requirement or requirements[-1]
+        shift_units = sorted(
+            (
+                float(units or 0)
+                for units in (values.get('club_shift_units') or {}).values()
+            ),
+            reverse=True,
+        )[:current_requirement['clubs']]
+        qualified = sum(
+            units >= current_requirement['shifts'] for units in shift_units
+        )
+        value_label = (
+            f'{qualified} из {current_requirement["clubs"]} клубов · '
+            f'по {current_requirement["shifts"]} смен'
+        )
+        next_label = next_requirement['label'] if next_requirement else None
+        progress = 1.0 if next_requirement is None else sum(
+            min(units / next_requirement['shifts'], 1.0)
+            for units in shift_units
+        ) / next_requirement['clubs']
+        threshold_payload = [
+            {
+                **tier,
+                'value': requirement['clubs'],
+                'value_label': requirement['label'],
+            }
+            for tier, requirement in zip(TIERS, requirements)
+        ]
     else:
-        progress = max(0.0, min(
-            1.0,
-            (float(value or 0) - previous_threshold)
-            / (next_threshold - previous_threshold),
-        ))
-    return {
-        **item,
-        'thresholds': [
+        previous_threshold = item['thresholds'][level - 1] if level else 0
+        if next_threshold is None:
+            progress = 1.0
+        elif next_threshold == previous_threshold:
+            progress = 0.0
+        else:
+            progress = max(0.0, min(
+                1.0,
+                (float(value or 0) - previous_threshold)
+                / (next_threshold - previous_threshold),
+            ))
+        value_label = format_value(value, item['kind'])
+        next_label = (
+            format_value(next_threshold, item['kind'])
+            if next_threshold is not None else None
+        )
+        threshold_payload = [
             {
                 **tier,
                 'value': item['thresholds'][tier['level'] - 1],
@@ -816,27 +902,57 @@ def _achievement_payload(item, value, unlocked_level):
                 ),
             }
             for tier in TIERS
-        ],
+        ]
+    return {
+        **item,
+        'thresholds': threshold_payload,
         'value': value,
-        'value_label': format_value(value, item['kind']),
+        'value_label': value_label,
         'level': level,
         'tier': _tier(level),
         'next_threshold': next_threshold,
-        'next_label': (
-            format_value(next_threshold, item['kind'])
-            if next_threshold is not None else None
-        ),
+        'next_label': next_label,
         'progress': progress,
     }
 
 
-def build_records_dashboard(db_path, current_login):
+def _team_member_payload(login, person, values):
+    levels = [
+        _achievement_level(item, values) for item in ACHIEVEMENTS
+    ]
+    return {
+        'login': login,
+        'name': person['name'],
+        'status': person['status'],
+        'active': person['active'],
+        'earned': sum(level > 0 for level in levels),
+        'total': len(levels),
+        'score': sum(levels),
+        'bronze': sum(level == 1 for level in levels),
+        'silver': sum(level == 2 for level in levels),
+        'gold': sum(level == 3 for level in levels),
+        'diamond': sum(level == 4 for level in levels),
+    }
+
+
+def build_records_dashboard(
+    db_path,
+    current_login,
+    viewer_login=None,
+    can_manage=False,
+):
     state = _cached_records_state(db_path)
     if state is None:
         state = refresh_records_achievements(db_path=db_path)
     login = _normalize_login(current_login)
+    viewer_login = _normalize_login(viewer_login) or login
     person = state['people'].get(login, {
         'login': login, 'name': login or 'Сотрудник', 'active': True,
+    })
+    viewer = state['people'].get(viewer_login, {
+        'login': viewer_login,
+        'name': viewer_login or 'Сотрудник',
+        'active': True,
     })
     values = state['stats'].get(login, _new_stats())
     conn = sqlite3.connect(db_path)
@@ -857,7 +973,7 @@ def build_records_dashboard(db_path, current_login):
         achievements = [
             _achievement_payload(
                 item,
-                values[item['key']],
+                values,
                 int(unlocked.get(item['key'], 0)),
             )
             for item in ACHIEVEMENTS
@@ -872,14 +988,29 @@ def build_records_dashboard(db_path, current_login):
     return {
         'generated_at': datetime.now(MOSCOW).isoformat(timespec='seconds'),
         'user': person,
+        'viewer': viewer,
+        'can_manage': bool(can_manage),
         'summary': {
             'earned': sum(item['level'] > 0 for item in all_payloads),
             'total': len(all_payloads),
             'bronze': sum(item['level'] == 1 for item in all_payloads),
             'silver': sum(item['level'] == 2 for item in all_payloads),
             'gold': sum(item['level'] == 3 for item in all_payloads),
+            'diamond': sum(item['level'] == 4 for item in all_payloads),
         },
         'records': state['records'],
         'archive_records': state['archive_records'],
         'categories': payload_by_category,
+        'team': (
+            [
+                _team_member_payload(
+                    employee_login,
+                    employee,
+                    state['stats'][employee_login],
+                )
+                for employee_login, employee in state['people'].items()
+                if employee.get('user_id') is not None
+            ]
+            if can_manage else None
+        ),
     }

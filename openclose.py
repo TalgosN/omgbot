@@ -198,6 +198,32 @@ def choose_shift_flow(message, action, bot):
     if not webapp_url:
         text += '\n\nMini App пока не подключён к HTTPS-адресу.'
     bot.send_message(message.chat.id, text, reply_markup=markup)
+
+
+def warn_legacy_shift_flow(message, action, bot):
+    action_code = 'open' if action == '✅ Открыть смену' else 'close'
+    from menu import _webapp_url
+
+    webapp_url = _webapp_url(f'shift-report?action={action_code}')
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if webapp_url:
+        markup.add(types.InlineKeyboardButton(
+            '📱 Открыть в приложении',
+            web_app=types.WebAppInfo(webapp_url),
+        ))
+    markup.add(types.InlineKeyboardButton(
+        '⌨️ Всё равно через бота',
+        callback_data=f'shift_flow:{action_code}:legacy_confirmed',
+    ))
+    bot.send_message(
+        message.chat.id,
+        '⚠️ <b>Переход на новый формат</b>\n\n'
+        'С 1 сентября будет перевод на открытие и закрытие '
+        'смен только через приложение.\n\n'
+        'Попробуй сейчас и напиши свои замечания.',
+        parse_mode='HTML',
+        reply_markup=markup,
+    )
         
 def do_report(message,bot):
     user = require_role(message, bot, ROLE_EMPLOYEE)

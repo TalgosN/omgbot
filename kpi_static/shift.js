@@ -3,7 +3,6 @@ const shiftActions = document.querySelector('#shiftActions');
 const externalLink = document.querySelector('#openExternalShift');
 const configLink = document.querySelector('#openShiftConfig');
 const reportProblemLink = document.querySelector('#reportProblem');
-const cameraTestLink = document.querySelector('#openCameraTest');
 const errorCard = document.querySelector('#shiftError');
 const shiftReportTest = document.querySelector('#shiftReportTest');
 
@@ -86,7 +85,6 @@ async function loadShift() {
 
   externalLink.href = payload.external_url;
   configLink.hidden = !payload.can_manage;
-  cameraTestLink.hidden = !payload.camera_test_available;
   renderEmployeeDashboard(payload.employee_dashboard);
   shiftActions.classList.toggle('manager', payload.can_manage);
   shiftActions.hidden = false;
