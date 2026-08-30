@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
   <link rel="stylesheet" href="/static/shift_config.css">
-  <link rel="stylesheet" href="/static/shift.css?v=20260830-2">
+  <link rel="stylesheet" href="/static/shift.css?v=20260830-3">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -43,6 +43,32 @@
         <a class="close" href="/shift-report?action=close"><span>↘</span><strong>Закрытие</strong></a>
       </div>
     </section>
+
+    <details id="shiftConsumables" class="shift-consumables">
+      <summary>
+        <span class="consumables-summary-icon">📦</span>
+        <span><small>Склад клуба</small><strong>Расходники</strong></span>
+        <b id="consumablesLowCount">—</b>
+      </summary>
+      <div class="consumables-body">
+        <div class="consumables-toolbar">
+          <label><span>Клуб</span><select id="consumablesClub"></select></label>
+          <button id="manageConsumableCategories" class="consumables-categories-button" type="button" hidden>Категории</button>
+          <button id="addConsumable" class="consumables-add" type="button" hidden>+ Добавить</button>
+        </div>
+        <div class="consumables-search-row">
+          <input id="consumablesSearch" type="search" placeholder="Найти товар" autocomplete="off">
+          <label id="consumablesArchiveLabel" class="archive-toggle" hidden>
+            <input id="consumablesArchived" type="checkbox"><span>Архив</span>
+          </label>
+        </div>
+        <div id="consumablesCategories" class="consumables-categories"></div>
+        <div id="consumablesStatus" class="consumables-status"></div>
+        <div id="consumablesList" class="consumables-list">
+          <div class="shift-empty">Загружаю остатки…</div>
+        </div>
+      </div>
+    </details>
 
     <section id="employeeShiftDashboard" class="shift-dashboard" hidden>
       <article id="nearestShift" class="nearest-shift"></article>
@@ -102,7 +128,17 @@
 
     <div id="shiftError" class="error-card" hidden></div>
   </main>
-  <script src="/static/shift.js?v=20260830-2"></script>
+  <div id="consumableModal" class="consumable-modal" hidden>
+    <div class="consumable-modal-backdrop" data-close-consumable-modal></div>
+    <section class="consumable-modal-card" role="dialog" aria-modal="true" aria-labelledby="consumableModalTitle">
+      <div class="consumable-modal-head">
+        <div><p class="eyebrow">Расходники</p><h2 id="consumableModalTitle"></h2></div>
+        <button type="button" aria-label="Закрыть" data-close-consumable-modal>×</button>
+      </div>
+      <div id="consumableModalBody"></div>
+    </section>
+  </div>
+  <script src="/static/shift.js?v=20260830-3"></script>
   <script src="/static/swipe_navigation.js"></script>
 </body>
 </html>

@@ -172,7 +172,21 @@ def sync_consumables_to_sheets():
     cur = conn.cursor()
     
     # Получаем остатки
-    cur.execute("SELECT * FROM consumables")
+    columns = {row[1] for row in cur.execute('PRAGMA table_info(consumables)')}
+    if 'product_id' in columns:
+        cur.execute(
+            '''SELECT c.*, p.name AS catalog_name, cat.name AS category_name,
+                      CASE WHEN p.photo IS NULL THEN 0 ELSE 1 END AS has_photo
+               FROM consumables c
+               LEFT JOIN consumable_products p ON p.id=c.product_id
+               LEFT JOIN consumable_categories cat ON cat.id=p.category_id
+               WHERE c.is_active=1'''
+        )
+    else:
+        cur.execute(
+            "SELECT *, name AS catalog_name, NULL AS category_name, "
+            "0 AS has_photo FROM consumables"
+        )
     all_items = cur.fetchall()
     
     # Получаем историю (последние 1000 записей, чтобы не перегружать таблицу)
@@ -196,10 +210,15 @@ def sync_consumables_to_sheets():
         except pygsheets.WorksheetNotFound:
             wks = sh.add_worksheet(title=club, rows=100, cols=10)
 
-        matrix = [["ID", "Название", "Остаток", "Минимум", "Статус"]]
+        matrix = [["ID", "Название", "Категория", "Фото", "Остаток", "Минимум", "Статус"]]
         for it in items:
             status = "🚨 НИЖЕ МИНИМУМА" if it['quantity'] <= it['min_limit'] else "✅ НОРМА"
-            matrix.append([it['id'], it['name'], it['quantity'], it['min_limit'], status])
+            matrix.append([
+                it['id'], it['catalog_name'] or it['name'],
+                it['category_name'] or '—',
+                '✅' if it['has_photo'] else '—',
+                it['quantity'], it['min_limit'], status,
+            ])
 
         wks.clear(start='A1')
         wks.update_values(crange='A1', values=matrix)
@@ -236,7 +255,11 @@ def auto_consumables_report(bot, target_chat_id):
     cur = conn.cursor()
     
     # Выбираем все позиции, где остаток <= минимума
-    cur.execute("SELECT * FROM consumables WHERE quantity <= min_limit")
+    columns = {row[1] for row in cur.execute('PRAGMA table_info(consumables)')}
+    active_filter = ' AND is_active=1' if 'is_active' in columns else ''
+    cur.execute(
+        f"SELECT * FROM consumables WHERE quantity <= min_limit{active_filter}"
+    )
     low_stock_items = cur.fetchall()
     cur.close()
     conn.close()

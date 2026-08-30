@@ -1213,6 +1213,70 @@ class KpiWebTest(unittest.TestCase):
         finally:
             shift_css.close()
 
+    def test_shift_consumables_are_visible_to_employee_but_managed_by_manager(self):
+        inventory = {
+            'clubs': ['Марьино'],
+            'selected_club': 'Марьино',
+            'categories': [],
+            'items': [],
+            'summary': {'active': 0, 'low': 0, 'archived': 0},
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(
+                kpi_web, 'inventory_payload', return_value=inventory,
+            ) as build,
+        ):
+            response = self.client.get(
+                '/api/shift/consumables?club=Марьино&archived=1',
+                headers=self.headers,
+            )
+            forbidden = self.client.post(
+                '/api/shift/consumables', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()['can_manage'])
+        build.assert_called_once_with(
+            kpi_web.DB_PATH, club='Марьино', include_archived=False,
+        )
+        self.assertEqual(forbidden.status_code, 403)
+
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(
+                kpi_web, 'add_inventory_item',
+                return_value={'created': True, 'item_id': 77},
+            ) as create,
+            patch.object(
+                kpi_web, '_sync_consumables_after_change', return_value=None,
+            ),
+        ):
+            created = self.client.post(
+                '/api/shift/consumables',
+                headers=self.headers,
+                data={
+                    'club': 'Марьино', 'name': 'Coca-Cola',
+                    'category_id': '2', 'quantity': '4', 'min_limit': '2',
+                },
+            )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.get_json()['item_id'], 77)
+        create.assert_called_once_with(
+            kpi_web.DB_PATH, 'Марьино', 'Coca-Cola', 2, 4, 2,
+            '@tester', photo=None, photo_mime=None,
+        )
+
+        page = self.client.get('/shift')
+        try:
+            self.assertIn(b'id="shiftConsumables"', page.data)
+            self.assertIn(b'id="consumablesClub"', page.data)
+        finally:
+            page.close()
+
     def test_shift_week_schedule_supports_personal_team_and_free_views(self):
         schedule = {
             'ok': True,

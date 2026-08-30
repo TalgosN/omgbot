@@ -119,6 +119,9 @@ def admin_func_handler(message, bot):
     elif a == '📊 KPI сотрудников':
         handle_monthly_kpi_report(message, bot)
 
+    elif a == '🎂 Тест поздравления':
+        birthday_test_prompt(message, bot)
+
     elif a == '📝 Сценарии смен':
         open_shift_config(message, bot)
         
@@ -218,11 +221,75 @@ def admin_extra_menu_handler(message, bot):
         '⚙️ Обновить настройки',
         '🔄 Сотрудники OMG Shift',
         '🩺 Статус систем',
+        '🎂 Тест поздравления',
         '📊 Тест недельного отчета',
         '📦 Тест отчета по расходникам',
     }:
         admin_func_handler(message, bot)
         return
+    admin_extra_menu(message, bot)
+
+
+def birthday_test_prompt(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('⬅️ Назад')
+    sent = bot.send_message(
+        message.chat.id,
+        'Отправь Telegram-тег активного сотрудника, например @username.\n\n'
+        'Поздравление придёт только сюда и не будет отмечено отправленным.',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(sent, birthday_test_generate, bot)
+
+
+def birthday_test_generate(message, bot):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    if message.text == '⬅️ Назад':
+        admin_extra_menu(message, bot)
+        return
+    login = str(message.text or '').strip()
+    if not re.fullmatch(r'@?[A-Za-z0-9_]{5,32}', login):
+        bot.send_message(message.chat.id, 'Нужен корректный Telegram-тег: @username.')
+        birthday_test_prompt(message, bot)
+        return
+    loading = bot.send_message(
+        message.chat.id,
+        '⏳ Считаю личный год и готовлю поздравление от Виарыча…',
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
+    try:
+        from birthday_greetings import build_birthday_preview
+
+        user, preview = build_birthday_preview(login)
+        try:
+            bot.delete_message(message.chat.id, loading.message_id)
+        except Exception:
+            pass
+        source_note = (
+            'OpenRouter'
+            if preview['source'] == 'openrouter'
+            else 'резервный шаблон — OpenRouter недоступен'
+        )
+        bot.send_message(
+            message.chat.id,
+            f'🧪 Тест для {user["login"]}\n'
+            f'Источник: {source_note}\n\n{preview["text"]}',
+        )
+    except Exception as error:
+        try:
+            bot.edit_message_text(
+                f'❌ Не удалось создать поздравление: {error}',
+                chat_id=message.chat.id,
+                message_id=loading.message_id,
+            )
+        except Exception:
+            bot.send_message(
+                message.chat.id,
+                f'❌ Не удалось создать поздравление: {error}',
+            )
     admin_extra_menu(message, bot)
 
 

@@ -169,6 +169,18 @@ def schedule_func(bot): # Не забудь передать bot!
         main_chat_id=CHATS['main_group'],
     )
 
+    from birthday_greetings import start_birthday_greetings_check
+    schedule.every().day.at("10:15:00", 'Europe/Moscow').do(
+        start_birthday_greetings_check,
+        bot,
+        CHATS['main_group'],
+    )
+    schedule.every(30).minutes.do(
+        start_birthday_greetings_check,
+        bot,
+        CHATS['main_group'],
+    )
+
     from backup import run_scheduled_backup
     schedule.every().day.at("03:00:00", 'Europe/Moscow').do(
         run_scheduled_backup,
@@ -224,6 +236,7 @@ def schedule_func(bot): # Не забудь передать bot!
         bot=bot,
         main_chat_id=CHATS['main_group'],
     )
+    start_birthday_greetings_check(bot, CHATS['main_group'])
 
     # Вечный цикл
     while True:
@@ -454,6 +467,8 @@ create_tables_KPI()
 initialize_kpi_calculation_schema()
 initialize_shift_time_schema()
 initialize_repair_schema()
+from birthday_greetings import initialize_birthday_schema
+initialize_birthday_schema()
 finalize_legacy_kpi_approval()
 kpi.initialize_hashtag_events()
 

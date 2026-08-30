@@ -28,6 +28,18 @@ from bukza import (
     upcoming_unpaid_orders,
 )
 from constants import CHATS, TELEGRAM_API_KEY, TEXTS, extra_tags, get_clubs, tags_main
+from consumables_catalog import (
+    add_category,
+    add_inventory_item,
+    initialize_consumables_schema,
+    inventory_payload,
+    item_history,
+    product_photo,
+    save_product_photo,
+    set_item_active,
+    update_item_settings,
+    update_quantity,
+)
 from group_membership import is_main_group_member
 from kpi_calculator import (
     active_kpi_employee_logins,
@@ -142,6 +154,7 @@ app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 48 * 1024 * 1024
 initialize_bukza_schema(DB_PATH)
 initialize_shift_time_schema(DB_PATH)
+initialize_consumables_schema(DB_PATH)
 
 
 def _clear_analytics_cache():
@@ -1903,6 +1916,65 @@ def _notification_bot():
     return telebot.TeleBot(TELEGRAM_API_KEY) if TELEGRAM_API_KEY else None
 
 
+def _read_consumable_photo(upload):
+    if not upload or not upload.filename:
+        return None, None
+    mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
+    if mimetype not in {'image/jpeg', 'image/png', 'image/webp'}:
+        raise ValueError('Фото товара должно быть в JPEG, PNG или WebP')
+    content = upload.read(3 * 1024 * 1024 + 1)
+    if len(content) > 3 * 1024 * 1024:
+        raise ValueError('Фото товара должно быть меньше 3 МБ')
+    if not content:
+        raise ValueError('Не удалось прочитать фото товара')
+    return content, mimetype
+
+
+def _consumable_integer(value, field_name):
+    if isinstance(value, bool):
+        raise ValueError(f'{field_name} должен быть целым числом')
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    raw = str(value or '').strip()
+    if not re.fullmatch(r'-?\d+', raw):
+        raise ValueError(f'{field_name} должен быть целым числом')
+    return int(raw)
+
+
+def _sync_consumables_after_change():
+    try:
+        from consumables import sync_consumables_to_sheets
+        result = sync_consumables_to_sheets()
+        return result if result and result != '✅' else None
+    except Exception as error:
+        print(f'Ошибка синхронизации расходников: {error}')
+        return 'Остаток сохранён, но Google Таблица пока не обновилась.'
+
+
+def _notify_consumable_low(item):
+    if not item.get('became_low') or not CHATS.get('reports'):
+        return None
+    bot = _notification_bot()
+    if not bot:
+        return 'Оповещение о низком остатке не отправлено.'
+    try:
+        bot.send_message(
+            CHATS['reports'],
+            '<b>⚠️ Заканчивается расходник</b>\n'
+            f'Клуб: <b>{html.escape(str(item["club"]))}</b>\n'
+            f'Позиция: <b>{html.escape(str(item["name"]))}</b>\n'
+            f'Остаток: <b>{item["quantity"]} шт.</b> '
+            f'(минимум: {item["min_limit"]})',
+            parse_mode='HTML',
+        )
+    except Exception as error:
+        print(f'Ошибка оповещения о расходниках: {error}')
+        return 'Остаток сохранён, но оповещение не отправлено.'
+    return None
+
+
 def _camera_test_caption(diagnostics, media_type, media_size):
     user = g.kpi_user
     name = (
@@ -3130,6 +3202,149 @@ def api_shift_schedule():
     return jsonify(_shift_week_payload(
         _actor_login(), request.args.get('date'),
     ))
+
+
+@app.get('/api/shift/consumables')
+@require_user
+def api_shift_consumables():
+    can_manage = int(g.kpi_user['status']) >= ROLE_MANAGER
+    include_archived = (
+        can_manage
+        and str(request.args.get('archived') or '').lower() in {'1', 'true'}
+    )
+    payload = inventory_payload(
+        DB_PATH,
+        club=request.args.get('club'),
+        include_archived=include_archived,
+    )
+    payload['can_manage'] = can_manage
+    return jsonify(payload)
+
+
+@app.post('/api/shift/consumables/<int:item_id>/quantity')
+@require_user
+def api_shift_consumable_quantity(item_id):
+    payload = request.get_json(silent=True) or {}
+    quantity = _consumable_integer(payload.get('quantity'), 'Остаток')
+    result = update_quantity(DB_PATH, item_id, quantity, _actor_login())
+    warnings = [
+        warning for warning in (
+            _notify_consumable_low(result),
+            _sync_consumables_after_change(),
+        ) if warning
+    ]
+    return jsonify({'updated': True, 'item': result, 'warnings': warnings})
+
+
+@app.post('/api/shift/consumables')
+@require_manager
+def api_shift_consumable_create():
+    photo, photo_mime = _read_consumable_photo(request.files.get('photo'))
+    category_id = _consumable_integer(
+        request.form.get('category_id'), 'Категория',
+    )
+    quantity = _consumable_integer(
+        request.form.get('quantity', 0), 'Остаток',
+    )
+    min_limit = _consumable_integer(
+        request.form.get('min_limit', 0), 'Минимум',
+    )
+    result = add_inventory_item(
+        DB_PATH,
+        request.form.get('club'),
+        request.form.get('name'),
+        category_id,
+        quantity,
+        min_limit,
+        _actor_login(),
+        photo=photo,
+        photo_mime=photo_mime,
+    )
+    if result.get('conflict'):
+        message = (
+            'Такая позиция уже есть в клубе.'
+            if result['conflict'] == 'active'
+            else 'Такая позиция есть в архиве. Восстановить её?'
+        )
+        return jsonify({**result, 'error': message}), 409
+    warning = _sync_consumables_after_change()
+    return jsonify({**result, 'warning': warning}), 201
+
+
+@app.post('/api/shift/consumables/categories')
+@require_manager
+def api_shift_consumable_category_create():
+    payload = request.get_json(silent=True) or {}
+    category = add_category(
+        DB_PATH, payload.get('name'), payload.get('emoji'), _actor_login(),
+    )
+    return jsonify({'created': True, 'category': category}), 201
+
+
+@app.patch('/api/shift/consumables/<int:item_id>')
+@require_manager
+def api_shift_consumable_settings(item_id):
+    payload = request.get_json(silent=True) or {}
+    min_limit = _consumable_integer(
+        payload.get('min_limit'), 'Минимум',
+    )
+    category_id = _consumable_integer(
+        payload.get('category_id'), 'Категория',
+    )
+    result = update_item_settings(
+        DB_PATH, item_id, min_limit, category_id, _actor_login(),
+    )
+    result['warning'] = _sync_consumables_after_change()
+    return jsonify(result)
+
+
+@app.post('/api/shift/consumables/<int:item_id>/archive')
+@require_manager
+def api_shift_consumable_archive(item_id):
+    payload = request.get_json(silent=True) or {}
+    result = set_item_active(
+        DB_PATH, item_id, False, _actor_login(), payload.get('reason'),
+    )
+    result['warning'] = _sync_consumables_after_change()
+    return jsonify(result)
+
+
+@app.post('/api/shift/consumables/<int:item_id>/restore')
+@require_manager
+def api_shift_consumable_restore(item_id):
+    result = set_item_active(DB_PATH, item_id, True, _actor_login())
+    result['warning'] = _sync_consumables_after_change()
+    return jsonify(result)
+
+
+@app.post('/api/shift/consumables/<int:item_id>/photo')
+@require_manager
+def api_shift_consumable_photo(item_id):
+    photo, photo_mime = _read_consumable_photo(request.files.get('photo'))
+    if not photo:
+        raise ValueError('Выберите фото товара')
+    result = save_product_photo(
+        DB_PATH, item_id, photo, photo_mime, _actor_login(),
+    )
+    result['warning'] = _sync_consumables_after_change()
+    return jsonify(result)
+
+
+@app.get('/api/shift/consumables/products/<int:product_id>/photo')
+@require_user
+def api_shift_consumable_product_photo(product_id):
+    row = product_photo(DB_PATH, product_id)
+    if not row:
+        return jsonify({'error': 'Фото товара не найдено'}), 404
+    media = io.BytesIO(row[0])
+    media.name = f'consumable-{product_id}'
+    return send_file(media, mimetype=row[1], max_age=300)
+
+
+@app.get('/api/shift/consumables/<int:item_id>/history')
+@require_user
+def api_shift_consumable_history(item_id):
+    return jsonify(item_history(DB_PATH, item_id))
 
 
 @app.get('/api/shift-test/scenario')

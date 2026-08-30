@@ -259,8 +259,17 @@ def account_settings(message, bot):
     user = require_role(message, bot, ROLE_EMPLOYEE)
     if not user:
         return
+    from birthday_greetings import birthday_public_enabled
+
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     buttons = list(funclist_acc)
+    employee_id = user.get('ID') if hasattr(user, 'get') else user['ID']
+    birthday_status = (
+        'включено'
+        if employee_id is None or birthday_public_enabled(employee_id)
+        else 'выключено'
+    )
+    buttons.insert(-1, f'🎂 Поздравление: {birthday_status}')
     if int(user['status']) >= ROLE_MANAGER:
         buttons.insert(-1, OTHER_STATS_BUTTON)
     markup.add(*buttons)
@@ -285,6 +294,21 @@ def func_acc(message, bot):
         sync_omg_identity_handler(message, bot)
     elif message.text == '📊 Статистика':
         stats_handler(message, bot)
+    elif str(message.text or '').startswith('🎂 Поздравление:'):
+        from birthday_greetings import toggle_birthday_public
+
+        user = get_user_by_chat_id(message.from_user.id)
+        if not user:
+            bot.send_message(message.chat.id, 'Профиль не найден.')
+            returnback(message, bot)
+            return
+        enabled = toggle_birthday_public(user['ID'])
+        bot.send_message(
+            message.chat.id,
+            'Публичное поздравление с днём рождения '
+            f'{"включено" if enabled else "выключено"}.',
+        )
+        account_settings(message, bot)
     elif message.text == OTHER_STATS_BUTTON:
         other_stats_prompt(message, bot)
     elif message.text == BACK_BUTTON:
