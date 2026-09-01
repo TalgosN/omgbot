@@ -1,10 +1,12 @@
 import argparse
 import html
+import json
 import os
 import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit, urlunsplit
 
 import pytz
 import requests
@@ -16,6 +18,10 @@ BUKZA_EMAIL = os.getenv('BUKZA_EMAIL', '').strip()
 BUKZA_PASSWORD = os.getenv('BUKZA_PASSWORD', '').strip()
 BUKZA_ACCESS_TOKEN = os.getenv('BUKZA_ACCESS_TOKEN', '').strip()
 BUKZA_SERVER_URL = os.getenv('BUKZA_SERVER_URL', '').strip().rstrip('/')
+BUKZA_SIGNIN_FILE = os.getenv(
+    'BUKZA_SIGNIN_FILE',
+    'key/bukza-signin.private.json',
+).strip()
 BUKZA_TABLE_ID = int(os.getenv('BUKZA_TABLE_ID', '154891'))
 BUKZA_PUBLIC_SERVER = os.getenv(
     'BUKZA_PUBLIC_SERVER',
@@ -48,6 +54,53 @@ def notification_period(today):
     return today, current_week_sunday + timedelta(weeks=2)
 
 
+def _normalize_server_url(value):
+    raw = str(value or '').strip()
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise RuntimeError('Bukza вернула некорректный serverUrl')
+    path = parsed.path.rstrip('/')
+    api_marker = path.casefold().find('/api/')
+    if api_marker >= 0:
+        path = path[:api_marker]
+    return urlunsplit((parsed.scheme, parsed.netloc, path, '', '')).rstrip('/')
+
+
+def _session_values(payload, source):
+    if not isinstance(payload, dict):
+        raise RuntimeError(f'{source} должен содержать JSON-объект')
+    token = str(payload.get('token') or '').strip()
+    server_url = str(payload.get('serverUrl') or '').strip()
+    if not token or not server_url:
+        raise RuntimeError(f'{source} должен содержать token и serverUrl')
+    if token.lower().startswith('bearer '):
+        token = token[7:].strip()
+    return _normalize_server_url(server_url), token
+
+
+def _file_session():
+    if not BUKZA_SIGNIN_FILE or not os.path.isfile(BUKZA_SIGNIN_FILE):
+        return None
+    try:
+        with open(BUKZA_SIGNIN_FILE, encoding='utf-8') as source:
+            payload = json.load(source)
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            f'Не удалось прочитать файл сессии Bukza {BUKZA_SIGNIN_FILE}'
+        ) from error
+    return _session_values(payload, 'Файл сессии Bukza')
+
+
+def _has_credentials():
+    return bool(
+        BUKZA_ACCESS_TOKEN
+        or BUKZA_SERVER_URL
+        or (BUKZA_SIGNIN_FILE and os.path.isfile(BUKZA_SIGNIN_FILE))
+        or BUKZA_EMAIL
+        or BUKZA_PASSWORD
+    )
+
+
 def _login():
     if BUKZA_ACCESS_TOKEN or BUKZA_SERVER_URL:
         if not BUKZA_ACCESS_TOKEN or not BUKZA_SERVER_URL:
@@ -55,10 +108,13 @@ def _login():
                 'Для ручной сессии Bukza одновременно нужны '
                 'BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL'
             )
-        token = BUKZA_ACCESS_TOKEN
-        if token.lower().startswith('bearer '):
-            token = token[7:].strip()
-        return BUKZA_SERVER_URL, token
+        return _session_values({
+            'token': BUKZA_ACCESS_TOKEN,
+            'serverUrl': BUKZA_SERVER_URL,
+        }, 'Ручная сессия Bukza')
+    file_session = _file_session()
+    if file_session:
+        return file_session
     if not BUKZA_EMAIL or not BUKZA_PASSWORD:
         raise RuntimeError(
             'Для входа Bukza одновременно нужны BUKZA_EMAIL и BUKZA_PASSWORD'
@@ -71,11 +127,7 @@ def _login():
     )
     response.raise_for_status()
     payload = response.json()
-    token = str(payload.get('token') or '').strip()
-    server_url = str(payload.get('serverUrl') or '').rstrip('/')
-    if not token or not server_url:
-        raise RuntimeError('Bukza не вернула token или serverUrl')
-    return server_url, token
+    return _session_values(payload, 'Ответ авторизации Bukza')
 
 
 def _fetch_reservations(server_url, token, day_from, day_to):
@@ -97,7 +149,8 @@ def _fetch_reservations(server_url, token, day_from, day_to):
     if response.status_code in {401, 403}:
         raise RuntimeError(
             'Сессия Bukza истекла или была отозвана. Войдите в Bukza '
-            'вручную и обновите BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL'
+            'вручную и обновите файл сессии или переменные '
+            'BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL'
         )
     response.raise_for_status()
     rows = response.json().get('rows')
@@ -853,12 +906,7 @@ def _notify_sync_error(bot, error, always=False):
 
 
 def run_bukza_sync(bot, mode='live', force_full=False):
-    if not any((
-        BUKZA_ACCESS_TOKEN,
-        BUKZA_SERVER_URL,
-        BUKZA_EMAIL,
-        BUKZA_PASSWORD,
-    )):
+    if not _has_credentials():
         print('Синхронизация Bukza пропущена: не заданы реквизиты')
         return None
     if not _sync_lock.acquire(blocking=False):
@@ -955,12 +1003,7 @@ def send_test_notification(message, bot):
 
 
 if __name__ == '__main__':
-    if not any((
-        BUKZA_ACCESS_TOKEN,
-        BUKZA_SERVER_URL,
-        BUKZA_EMAIL,
-        BUKZA_PASSWORD,
-    )):
+    if not _has_credentials():
         raise SystemExit('Не заданы реквизиты или ручная сессия Bukza')
     parser = argparse.ArgumentParser()
     parser.add_argument(

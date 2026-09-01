@@ -6,6 +6,7 @@ __pycache__/
 .env
 db/
 key/omgbot-430116-e9a4d9c69b7f.json
+key/bukza-signin.private.json
 Reports/
 dump/*
 !dump/STEAM_TRACKER_ИНСТРУКЦИЯ_МЕНЕДЖЕРА.md

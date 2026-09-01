@@ -38,6 +38,15 @@ def bukza_row(
 
 
 class BukzaTest(unittest.TestCase):
+    def setUp(self):
+        self.signin_file_patch = patch.object(
+            bukza, 'BUKZA_SIGNIN_FILE', '',
+        )
+        self.signin_file_patch.start()
+
+    def tearDown(self):
+        self.signin_file_patch.stop()
+
     def test_period_covers_current_sunday_and_two_following_weekends(self):
         self.assertEqual(
             bukza.notification_period(date(2026, 8, 7)),
@@ -119,6 +128,41 @@ class BukzaTest(unittest.TestCase):
         self.assertEqual(
             post.call_args.kwargs['headers']['Authorization'],
             'Bearer manual-token',
+        )
+
+    def test_signin_file_accepts_full_browser_request_url(self):
+        table_response = Mock(status_code=200)
+        table_response.json.return_value = {'rows': []}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            signin_path = Path(temp_dir) / 'bukza-signin.private.json'
+            signin_path.write_text(
+                '{"token":"file-token","serverUrl":'
+                '"https://tenant.bukza.test/api/reservation-tables/'
+                'getSchema/154891?language=ru"}',
+                encoding='utf-8',
+            )
+            with (
+                patch.object(bukza, 'BUKZA_SIGNIN_FILE', str(signin_path)),
+                patch.object(bukza, 'BUKZA_ACCESS_TOKEN', ''),
+                patch.object(bukza, 'BUKZA_SERVER_URL', ''),
+                patch.object(bukza, 'BUKZA_EMAIL', ''),
+                patch.object(bukza, 'BUKZA_PASSWORD', ''),
+                patch.object(
+                    bukza.requests, 'post', return_value=table_response,
+                ) as post,
+            ):
+                rows = bukza.fetch_reservations(
+                    date(2026, 8, 7), date(2026, 8, 7),
+                )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(
+            post.call_args.args[0],
+            'https://tenant.bukza.test/api/reservation-tables/data',
+        )
+        self.assertEqual(
+            post.call_args.kwargs['headers']['Authorization'],
+            'Bearer file-token',
         )
 
     def test_manual_session_requires_token_and_server(self):
