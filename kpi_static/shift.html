@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
   <link rel="stylesheet" href="/static/shift_config.css">
-  <link rel="stylesheet" href="/static/shift.css?v=20260901-1">
+  <link rel="stylesheet" href="/static/shift.css?v=20260901-2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -22,11 +22,9 @@
       </div>
       <div id="shiftRole" class="user-badge">Загрузка…</div>
     </header>
-    <p class="shift-subtitle">Смена сегодня, расписание и рабочие инструменты.</p>
-
     <section id="shiftToday" class="shift-today" hidden>
       <div class="shift-section-heading shift-heading-row">
-        <div><p class="eyebrow">Рабочий день</p><h2>Сегодня на смене</h2></div>
+        <div><p class="eyebrow">Рабочая смена</p><h2>Сегодня</h2></div>
         <span id="shiftTodayDate" class="section-date"></span>
       </div>
       <div id="shiftTodayList" class="shift-today-list"></div>
@@ -46,7 +44,7 @@
 
     <section id="employeeShiftDashboard" class="shift-dashboard" hidden>
       <div class="shift-section-heading shift-heading-row">
-        <div><p class="eyebrow">Личное расписание</p><h2>Мои смены</h2></div>
+        <div><p class="eyebrow">Дальше</p><h2>Ближайшие смены</h2></div>
         <span class="section-date">Текущий месяц</span>
       </div>
       <div class="shift-dashboard-grid">
@@ -61,7 +59,9 @@
 
     <details id="shiftSchedule" class="shift-schedule">
       <summary>
-        <span class="schedule-summary-icon">▦</span>
+        <span class="schedule-summary-icon" aria-hidden="true">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path d="M6 3v3M18 3v3M4 9h16M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></svg>
+        </span>
         <span class="schedule-summary-title"><small>Календарь команды</small><strong>Расписание на неделю</strong><b id="scheduleWeekLabel">Загрузка…</b></span>
         <span class="schedule-summary-side"><b id="scheduleSummaryCount">—</b><small id="scheduleSource"></small><i>⌄</i></span>
       </summary>
@@ -84,27 +84,35 @@
 
     <div class="shift-section-heading shift-tools-heading">
       <p class="eyebrow">Быстрый доступ</p>
-      <h2>Инструменты</h2>
+      <h2>Рабочие инструменты</h2>
     </div>
 
     <section id="shiftActions" class="shift-actions" hidden>
       <a id="shiftConsumablesLink" class="shift-action consumables" href="/shift/consumables">
-        <span class="shift-action-icon">📦</span>
+        <span class="shift-action-icon" aria-hidden="true">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path d="m4 7 8-4 8 4-8 4-8-4ZM4 7v10l8 4 8-4V7M12 11v10"/></svg>
+        </span>
         <div><small>Склад клуба</small><strong>Расходники</strong><p>Остатки, фотографии и история</p></div>
         <b id="consumablesLinkStatus" class="shift-action-status">Открыть →</b>
       </a>
       <a id="openExternalShift" class="shift-action primary" href="#" target="_blank" rel="noopener">
-        <span class="shift-action-icon">↗</span>
-        <div><small>Расписание</small><strong>Открыть OMG Shift</strong><p>Смены и настройки профиля</p></div>
+        <span class="shift-action-icon" aria-hidden="true">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path d="M14 5h5v5M10 14l9-9M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>
+        </span>
+        <div><small>Сайт расписания</small><strong>Профиль и расписание</strong><p>Смены и настройки профиля</p></div>
         <b class="shift-action-status">Перейти →</b>
       </a>
       <a id="openShiftConfig" class="shift-action management" href="/shift-config" hidden>
-        <span class="shift-action-icon">✓</span>
+        <span class="shift-action-icon" aria-hidden="true">
+          <svg class="ui-icon" viewBox="0 0 24 24"><path d="m3.5 6.5 2 2 3.5-4M11 7h9M3.5 13l2 2 3.5-4M11 13h9M3.5 19l2 2 3.5-4M11 19h9"/></svg>
+        </span>
         <div><small>Для менеджмента</small><strong>Сценарии смен</strong><p>Вопросы и чек-листы открытия и закрытия</p></div>
         <b class="shift-action-status">Настроить →</b>
       </a>
       <a id="reportProblem" class="shift-action taskboard" href="/problems?new=1" hidden>
-        <span class="shift-action-icon">?</span>
+        <span class="shift-action-icon" aria-hidden="true">
+          <svg class="ui-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.1 2.3c-.9.4-.9 1-.9 1.7M12 17h.01"/></svg>
+        </span>
         <div><small>Taskboard</small><strong>Сообщить о проблеме</strong><p>Создать новое обращение</p></div>
         <b class="shift-action-status">Создать →</b>
       </a>
@@ -117,7 +125,7 @@
 
     <div id="shiftError" class="error-card" hidden></div>
   </main>
-  <script src="/static/shift.js?v=20260901-2"></script>
+  <script src="/static/shift.js?v=20260901-3"></script>
   <script src="/static/swipe_navigation.js"></script>
 </body>
 </html>

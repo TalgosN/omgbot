@@ -306,12 +306,14 @@ function renderEmployeeDashboard(dashboard) {
   document.querySelector('#nearestShift').innerHTML = nearest ? `
     <p class="eyebrow">${relativeDateLabel(nearest.date, dashboard.today)}</p>
     <h2>${escapeHtml(nearest.club)}</h2>
-    <strong>${dateLabel(nearest.date)}</strong>
-    <span>${shiftTime(nearest)}${number(nearest.duration)} ч</span>
+    <div class="nearest-shift-meta">
+      <strong>${dateLabel(nearest.date)}</strong>
+      <span>${shiftTime(nearest)}${number(nearest.duration)} ч</span>
+    </div>
   ` : `
     <p class="eyebrow">Ближайшая смена</p>
     <h2>Смен пока нет</h2>
-    <span>В опубликованном расписании новых смен не найдено</span>
+    <div class="nearest-shift-meta"><span>В опубликованном расписании новых смен не найдено</span></div>
   `;
   document.querySelector('#upcomingShiftList').innerHTML = shifts.length > 1
     ? shifts.slice(1).map((shift) => `
