@@ -1,0 +1,70 @@
+.consumables-shell { width:min(100%,960px); }
+.consumables-back { display:inline-flex; min-height:34px; margin-bottom:10px; align-items:center; color:#9be8df; text-decoration:none; font-size:11px; font-weight:800; }
+.consumables-header h1 { font-size:clamp(26px,8vw,50px); }
+.consumables-overview { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-bottom:14px; }
+.consumables-overview.employee { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.consumables-overview article { min-width:0; padding:15px; border:1px solid var(--line); border-radius:18px; background:linear-gradient(145deg,rgba(8,65,69,.9),rgba(4,38,45,.82)); box-shadow:0 14px 38px rgba(0,0,0,.18); }
+.consumables-overview article.low { border-color:rgba(255,193,77,.22); background:linear-gradient(145deg,rgba(121,84,27,.26),rgba(4,38,45,.86)); }
+.consumables-overview small,.consumables-overview strong { display:block; }
+.consumables-overview small { overflow:hidden; color:var(--muted); font-size:10px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.consumables-overview strong { margin-top:6px; font-size:26px; line-height:1; }
+.consumables-overview .low strong { color:#ffd477; }
+.consumables-workspace { padding:15px; border:1px solid rgba(77,224,199,.2); border-radius:22px; background:radial-gradient(circle at 100% 0,rgba(77,224,199,.12),transparent 19rem),var(--card); box-shadow:0 20px 54px rgba(0,0,0,.24); }
+.consumables-controls { display:grid; gap:11px; margin-bottom:13px; }
+.consumables-toolbar { padding:0; align-items:end; }
+.consumables-toolbar > label { max-width:360px; }
+.consumables-toolbar label span { font-size:10px; }
+.consumables-toolbar select,.consumables-search-row input { min-height:48px; padding:12px 14px; border-radius:14px; font-size:12px; }
+.consumables-management { display:flex; gap:8px; margin-left:auto; }
+.consumables-add,.consumables-categories-button { min-height:48px; padding:11px 16px; border-radius:14px; font-size:11px; }
+.archive-toggle { min-height:48px; padding:0 14px; border-radius:14px; font-size:10px; }
+.consumables-categories { gap:8px; padding-bottom:4px; }
+.consumables-categories button { min-height:38px; padding:9px 13px; font-size:10px; }
+.consumables-status { font-size:10px; }
+.consumables-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; }
+.consumable-card { min-height:158px; grid-template-columns:98px minmax(0,1fr); gap:14px; padding:14px; border-radius:19px; }
+.consumable-photo { width:98px; height:98px; border-radius:17px; font-size:30px; }
+.consumable-name-row small { font-size:9px; }
+.consumable-name-row h3 { margin-top:5px; font-size:15px; line-height:1.3; }
+.stock-manage { width:34px; height:34px; border-radius:11px; }
+.consumable-stock { gap:9px; margin-top:12px; }
+.consumable-stock > strong { font-size:23px; }
+.consumable-stock > strong small,.consumable-stock > span:nth-child(2) { font-size:9px; }
+.stock-state { padding:6px 8px; font-size:9px; }
+.archive-reason { font-size:9px; }
+.consumable-card-actions { gap:8px; margin-top:12px; }
+.consumable-card-actions button { min-height:38px; padding:9px 11px; border-radius:11px; font-size:9px; }
+.consumable-modal-card { width:min(100%,620px); padding:20px; }
+.consumable-form input,.consumable-form select { min-height:48px; font-size:12px; }
+.consumable-form label > span { font-size:11px; }
+.modal-primary,.modal-restore { min-height:50px; font-size:12px; }
+
+@media(max-width:700px) {
+  .consumables-list { grid-template-columns:1fr; }
+}
+
+@media(max-width:460px) {
+  .consumables-shell { padding-right:12px; padding-left:12px; }
+  .consumables-overview { gap:6px; }
+  .consumables-overview article { padding:12px 10px; border-radius:15px; }
+  .consumables-overview small { font-size:8px; }
+  .consumables-overview strong { font-size:22px; }
+  .consumables-workspace { padding:12px; border-radius:19px; }
+  .consumables-toolbar { align-items:stretch; }
+  .consumables-toolbar > label { max-width:none; }
+  .consumables-management { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin:0; }
+  .consumables-search-row { display:grid; grid-template-columns:minmax(0,1fr) auto; }
+  .archive-toggle span { max-width:78px; line-height:1.2; }
+  .consumable-card { grid-template-columns:88px minmax(0,1fr); padding:12px; }
+  .consumable-photo { width:88px; height:88px; }
+}
+
+@media(max-width:350px) {
+  .consumables-overview { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .consumables-overview article:last-child { grid-column:1 / -1; }
+  .consumables-search-row { grid-template-columns:1fr; }
+  .archive-toggle { justify-content:center; }
+  .archive-toggle span { max-width:none; }
+  .consumable-card { grid-template-columns:72px minmax(0,1fr); }
+  .consumable-photo { width:72px; height:72px; }
+}

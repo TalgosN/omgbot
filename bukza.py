@@ -14,6 +14,8 @@ from constants import CHATS
 
 BUKZA_EMAIL = os.getenv('BUKZA_EMAIL', '').strip()
 BUKZA_PASSWORD = os.getenv('BUKZA_PASSWORD', '').strip()
+BUKZA_ACCESS_TOKEN = os.getenv('BUKZA_ACCESS_TOKEN', '').strip()
+BUKZA_SERVER_URL = os.getenv('BUKZA_SERVER_URL', '').strip().rstrip('/')
 BUKZA_TABLE_ID = int(os.getenv('BUKZA_TABLE_ID', '154891'))
 BUKZA_PUBLIC_SERVER = os.getenv(
     'BUKZA_PUBLIC_SERVER',
@@ -47,6 +49,21 @@ def notification_period(today):
 
 
 def _login():
+    if BUKZA_ACCESS_TOKEN or BUKZA_SERVER_URL:
+        if not BUKZA_ACCESS_TOKEN or not BUKZA_SERVER_URL:
+            raise RuntimeError(
+                'Для ручной сессии Bukza одновременно нужны '
+                'BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL'
+            )
+        token = BUKZA_ACCESS_TOKEN
+        if token.lower().startswith('bearer '):
+            token = token[7:].strip()
+        return BUKZA_SERVER_URL, token
+    if not BUKZA_EMAIL or not BUKZA_PASSWORD:
+        raise RuntimeError(
+            'Для входа Bukza одновременно нужны BUKZA_EMAIL и BUKZA_PASSWORD'
+        )
+
     response = requests.post(
         f'{BUKZA_PUBLIC_SERVER}/api/account/signin',
         json={'email': BUKZA_EMAIL, 'password': BUKZA_PASSWORD},
@@ -77,6 +94,11 @@ def _fetch_reservations(server_url, token, day_from, day_to):
         headers={'Authorization': f'Bearer {token}'},
         timeout=30,
     )
+    if response.status_code in {401, 403}:
+        raise RuntimeError(
+            'Сессия Bukza истекла или была отозвана. Войдите в Bukza '
+            'вручную и обновите BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL'
+        )
     response.raise_for_status()
     rows = response.json().get('rows')
     if not isinstance(rows, list):
@@ -831,7 +853,12 @@ def _notify_sync_error(bot, error, always=False):
 
 
 def run_bukza_sync(bot, mode='live', force_full=False):
-    if not BUKZA_EMAIL or not BUKZA_PASSWORD:
+    if not any((
+        BUKZA_ACCESS_TOKEN,
+        BUKZA_SERVER_URL,
+        BUKZA_EMAIL,
+        BUKZA_PASSWORD,
+    )):
         print('Синхронизация Bukza пропущена: не заданы реквизиты')
         return None
     if not _sync_lock.acquire(blocking=False):
@@ -928,8 +955,13 @@ def send_test_notification(message, bot):
 
 
 if __name__ == '__main__':
-    if not BUKZA_EMAIL or not BUKZA_PASSWORD:
-        raise SystemExit('Не заданы BUKZA_EMAIL и BUKZA_PASSWORD')
+    if not any((
+        BUKZA_ACCESS_TOKEN,
+        BUKZA_SERVER_URL,
+        BUKZA_EMAIL,
+        BUKZA_PASSWORD,
+    )):
+        raise SystemExit('Не заданы реквизиты или ручная сессия Bukza')
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--full',

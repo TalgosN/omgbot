@@ -37,7 +37,7 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="photoProcessing"', html)
         self.assertIn('id="cameraSavingText"', html)
         self.assertIn('/static/shift_test.css?v=20260830-1', html)
-        self.assertIn('/static/shift_test.js?v=20260830-1', html)
+        self.assertIn('/static/shift_test.js?v=20260901-1', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)

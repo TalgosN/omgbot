@@ -212,6 +212,8 @@ Shift. Синхронизация не создаёт пользователей
 | `CHAT_CALLCENTER` | группа Коллцентра для уведомлений Bukza | для Bukza |
 | `BUKZA_EMAIL` | логин Bukza | для Bukza |
 | `BUKZA_PASSWORD` | пароль Bukza | для Bukza |
+| `BUKZA_ACCESS_TOKEN` | временный токен ручной сессии Bukza вместо входа по паролю | вместе с `BUKZA_SERVER_URL` |
+| `BUKZA_SERVER_URL` | сервер из авторизованного запроса Bukza | вместе с `BUKZA_ACCESS_TOKEN` |
 | `BUKZA_TABLE_ID` | ID таблицы бронирований, по умолчанию `154891` | — |
 | `BUKZA_PUBLIC_SERVER` | публичный сервер авторизации Bukza | — |
 | `BUKZA_HISTORY_START` | начало первичного импорта, по умолчанию `2019-01-01` | — |

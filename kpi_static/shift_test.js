@@ -53,10 +53,6 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => { element.className = 'test-toast'; }, 3200);
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 function setCameraFeedback(visible, message = 'Сохраняем фотографию…', success = false) {
   const stage = $('#cameraStage');
   const feedback = $('#cameraSaving');
@@ -92,6 +88,35 @@ async function api(path, options = {}) {
     throw error;
   }
   return payload;
+}
+
+function uploadForm(path, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.setRequestHeader('X-Telegram-Init-Data', tg?.initData || '');
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    });
+    xhr.upload.addEventListener('load', () => onProgress?.(100));
+    xhr.addEventListener('load', () => {
+      let payload = {};
+      try { payload = JSON.parse(xhr.responseText || '{}'); }
+      catch (_error) { /* The status below provides the fallback message. */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+      const error = new Error(payload.error || 'Не удалось отправить отчёт');
+      error.code = payload.code || '';
+      reject(error);
+    });
+    xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время отправки')));
+    xhr.addEventListener('abort', () => reject(new Error('Отправка отменена')));
+    xhr.send(form);
+  });
 }
 
 function draftStorageKey(action = runtime.action) {
@@ -263,12 +288,13 @@ function renderOwnerClubSelection(selection) {
 
 function setPageCopy() {
   const closing = runtime.scenario.action === 'close';
+  const hasCleanliness = cleanlinessQuestions().length > 0;
   $('#pageTitle').textContent = closing ? 'ЗАКРЫТИЕ СМЕНЫ' : 'ОТКРЫТИЕ СМЕНЫ';
   $('#pageDescription').textContent = `${runtime.scenario.club} · ${formatDate(runtime.scenario.shift.date)} · набор ${runtime.scenario.variant_label}`;
   $$('[data-club]').forEach((element) => { element.textContent = runtime.scenario.club; });
   $('#variantLabel').textContent = `Набор ${runtime.scenario.variant_label}`;
-  $('#closingWorkflow').hidden = !closing;
-  $('#shiftReviewStep').textContent = closing ? '🌙 Этап 2' : 'Отчёт о смене';
+  $('#closingWorkflow').hidden = !closing || !hasCleanliness;
+  $('#shiftReviewStep').textContent = closing && hasCleanliness ? '🌙 Этап 2' : 'Отчёт о смене';
   $('#shiftReviewTitle').textContent = closing ? 'Закрытие' : 'Открытие';
 }
 
@@ -305,9 +331,12 @@ function renderChecklist() {
     ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')
     : '<li class="empty">Дополнительного чек-листа для этого набора нет</li>';
   const closing = runtime.scenario.action === 'close';
-  $('#checklistEyebrow').textContent = closing ? '🌙 Этап 2 из 2 · Закрытие' : 'Перед началом';
+  const hasCleanliness = cleanlinessQuestions().length > 0;
+  $('#checklistEyebrow').textContent = closing && hasCleanliness
+    ? '🌙 Этап 2 из 2 · Закрытие'
+    : 'Перед началом';
   $('#checklistTitle').textContent = closing ? 'Чек-лист закрытия' : 'Чек-лист смены';
-  $('#checklistDescription').textContent = closing
+  $('#checklistDescription').textContent = closing && hasCleanliness
     ? 'Чистота готова. Проверьте пункты и завершите закрытие клуба.'
     : 'Проверьте пункты, затем переходите к вопросам.';
   $('#startQuestions').textContent = closing ? 'Начать закрытие' : 'Всё понятно — начать';
@@ -557,13 +586,13 @@ function canvasBlob(canvas, quality) {
 }
 
 async function jpegFromSource(source, width, height) {
-  const maximumSide = 1600;
+  const maximumSide = 1280;
   const scale = Math.min(1, maximumSide / Math.max(width, height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(width * scale));
   canvas.height = Math.max(1, Math.round(height * scale));
   canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
-  let blob = await canvasBlob(canvas, 0.82);
+  let blob = await canvasBlob(canvas, 0.78);
   if (blob.size > MAX_PHOTO_BYTES) blob = await canvasBlob(canvas, 0.64);
   if (blob.size > MAX_PHOTO_BYTES) {
     throw new Error('Фотография получилась слишком большой. Попробуйте ещё раз');
@@ -585,7 +614,6 @@ async function capturePhoto() {
     const outcome = await saveCapturedPhoto(blob);
     if (outcome === 'camera') {
       setCameraFeedback(true, 'Фото сохранено · следующий пункт', true);
-      await wait(700);
     }
   } catch (error) {
     toast(error.message, true);
@@ -728,8 +756,9 @@ async function renderReview() {
   }
 
   const closing = runtime.scenario.action === 'close';
-  $('#cleanlinessReviewSection').hidden = !closing;
-  if (closing) {
+  const hasCleanliness = cleanlinessQuestions().length > 0;
+  $('#cleanlinessReviewSection').hidden = !closing || !hasCleanliness;
+  if (closing && hasCleanliness) {
     await renderPhotoReview(
       cleanlinessQuestions(), '#cleanlinessPhotoReview', 'cleanliness',
     );
@@ -756,6 +785,11 @@ async function repairDraftPhotos() {
   runtime.draft.photo_ids = await validPhotoIds(
     shiftPhotoQuestions(), runtime.draft.photo_ids,
   );
+  if (!cleanlinessQuestions().length && runtime.draft.photo_phase === 'cleanliness') {
+    runtime.draft.stage = 'checklist';
+    runtime.draft.photo_phase = 'shift';
+    runtime.draft.photo_index = 0;
+  }
   if (
     runtime.scenario.action === 'close'
     && runtime.draft.stage !== 'cleanliness_intro'
@@ -786,7 +820,7 @@ function renderSavedStage() {
 }
 
 function renderInitialStage() {
-  if (runtime.scenario.action === 'close') renderCleanlinessIntro();
+  if (runtime.scenario.action === 'close' && cleanlinessQuestions().length) renderCleanlinessIntro();
   else renderChecklist();
 }
 
@@ -806,7 +840,9 @@ function createDraft() {
     variant_index: scenario.variant_index,
     version: scenario.version,
     stage: 'checklist',
-    photo_phase: scenario.action === 'close' ? 'cleanliness' : 'shift',
+    photo_phase: scenario.action === 'close' && cleanlinessQuestions().length
+      ? 'cleanliness'
+      : 'shift',
     text_index: 0,
     photo_index: 0,
     answers: {},
@@ -837,10 +873,11 @@ function compatibleDraft(draft) {
     && ['cleanliness', 'shift'].includes(draft.photo_phase);
 }
 
-async function fetchScenario(variant = null, club = '') {
+async function fetchScenario(variant = null, club = '', runId = '') {
   const query = new URLSearchParams({ action: runtime.action });
   if (variant !== null && variant !== undefined) query.set('variant', variant);
   if (club) query.set('club', club);
+  if (runId) query.set('run_id', runId);
   return api(`/api/shift-test/scenario?${query}`);
 }
 
@@ -951,7 +988,11 @@ async function submitReport() {
       if (!record?.blob) throw new Error(`Не найдена фотография: ${question.text}`);
       form.append('photos', record.blob, `${question.id}.jpg`);
     }
-    await api('/api/shift-test/submit', { method: 'POST', body: form });
+    await uploadForm('/api/shift-test/submit', form, (progress) => {
+      button.textContent = progress < 100
+        ? `Загружаем фотографии · ${progress}%`
+        : 'Фотографии загружены · отправляем отчёт';
+    });
     await deleteDraft();
     runtime.draft = null;
     releaseReviewUrls();
@@ -1030,10 +1071,8 @@ $('#systemPhoto').addEventListener('change', async (event) => {
     const outcome = await saveCapturedPhoto(blob);
     if (outcome === 'camera') {
       setCameraFeedback(true, 'Фото сохранено · следующий пункт', true);
-      await wait(700);
     } else if (outcome === 'photo') {
       setPhotoProcessing(true, 'Фото сохранено · следующий пункт', true);
-      await wait(700);
     } else if (outcome === 'transition') {
       toast('Фотографии чистоты готовы');
     } else {
@@ -1213,6 +1252,7 @@ $('#discardDraft').addEventListener('click', async () => {
       runtime.draft.photo_ids = [];
       runtime.draft.cleanliness_photo_ids = [];
       runtime.draft.photo_phase = runtime.scenario.action === 'close'
+        && cleanlinessQuestions().length
         ? 'cleanliness'
         : 'shift';
       saveDraft();
@@ -1265,9 +1305,14 @@ async function initialize() {
     ? localDraft.variant_index
     : null;
   try {
-    runtime.scenario = await fetchScenario(requestedVariant, localDraft?.club || '');
+    runtime.scenario = await fetchScenario(
+      requestedVariant,
+      localDraft?.club || '',
+      localDraft?.started_at ? localDraft.id : '',
+    );
   } catch (error) {
     if (!localDraft) throw error;
+    if (localDraft.started_at) throw error;
     await deleteDraft(localDraft);
     runtime.scenario = await fetchScenario();
   }

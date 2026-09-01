@@ -1,6 +1,8 @@
 import types
 import unittest
+from datetime import datetime
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import openclose
 
@@ -66,6 +68,41 @@ class OpenCloseFlowChoiceTest(unittest.TestCase):
             buttons[1].callback_data,
             'shift_flow:close:legacy_confirmed',
         )
+
+    def test_previous_shift_is_used_only_for_closing_before_six(self):
+        bot = Mock()
+        message = types.SimpleNamespace(
+            chat=types.SimpleNamespace(id=123),
+            from_user=types.SimpleNamespace(id=123, username='tester'),
+        )
+        current = datetime(
+            2026, 8, 11, 1, 0, tzinfo=ZoneInfo('Europe/Moscow'),
+        )
+        with (
+            patch.object(openclose, 'require_role', return_value={'status': 0}),
+            patch.object(openclose, 'datetime', wraps=datetime) as date_mock,
+            patch('kpi.get_user_club_today', side_effect=[None, 'Ленинский']) as lookup,
+        ):
+            date_mock.now.return_value = current
+            allowed = openclose._can_manage_club(
+                message, 'Ленинский', bot, action='🚫 Закрыть смену',
+            )
+
+        self.assertTrue(allowed)
+        self.assertEqual(lookup.call_count, 2)
+
+        with (
+            patch.object(openclose, 'require_role', return_value={'status': 0}),
+            patch.object(openclose, 'datetime', wraps=datetime) as date_mock,
+            patch('kpi.get_user_club_today', return_value=None) as lookup,
+        ):
+            date_mock.now.return_value = current
+            allowed = openclose._can_manage_club(
+                message, 'Ленинский', bot, action='✅ Открыть смену',
+            )
+
+        self.assertFalse(allowed)
+        lookup.assert_called_once_with('tester')
 
 
 if __name__ == '__main__':

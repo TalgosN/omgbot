@@ -455,6 +455,11 @@ def inventory_payload(db_path, club=None, include_archived=False):
             )
             items.append(item)
         active_items = [item for item in items if item['is_active']]
+        archived_count = conn.execute(
+            '''SELECT COUNT(*) FROM consumables
+               WHERE club=? AND is_active=0''',
+            (selected,),
+        ).fetchone()[0] if selected else 0
         return {
             'clubs': clubs,
             'selected_club': selected,
@@ -463,7 +468,7 @@ def inventory_payload(db_path, club=None, include_archived=False):
             'summary': {
                 'active': len(active_items),
                 'low': sum(item['is_low'] for item in active_items),
-                'archived': sum(not item['is_active'] for item in items),
+                'archived': archived_count,
             },
         }
     finally:

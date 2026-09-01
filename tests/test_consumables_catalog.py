@@ -86,6 +86,11 @@ class ConsumablesCatalogTest(unittest.TestCase):
         consumables_catalog.set_item_active(
             self.db_path, 1, False, '@manager', 'временно не закупаем',
         )
+        active_payload = consumables_catalog.inventory_payload(
+            self.db_path, 'Дмитровка', include_archived=False,
+        )
+        self.assertEqual(active_payload['summary']['archived'], 1)
+        self.assertTrue(all(item['is_active'] for item in active_payload['items']))
         conn = sqlite3.connect(self.db_path)
         try:
             category_id = conn.execute(

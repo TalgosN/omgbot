@@ -99,7 +99,10 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_module_pages_load_shared_swipe_navigation(self):
-        for path in ('/kpi', '/problems', '/records', '/shift', '/shift-config'):
+        for path in (
+            '/kpi', '/problems', '/records', '/shift',
+            '/shift/consumables', '/shift-config',
+        ):
             response = self.client.get(path)
             try:
                 self.assertEqual(response.status_code, 200)
@@ -116,7 +119,9 @@ class KpiWebTest(unittest.TestCase):
                 script.headers['Cache-Control'],
                 'public, max-age=300',
             )
-            self.assertIn(b"navigate('/')", script.data)
+            self.assertIn(
+                b"document.body.dataset.swipeBack || '/'", script.data,
+            )
             self.assertIn(b"'/records'", script.data)
         finally:
             script.close()
@@ -441,6 +446,39 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(nearest['club'], 'Второй')
         self.assertEqual(pinned['club'], 'Первый')
 
+    def test_shift_close_uses_previous_shift_only_until_six(self):
+        shifts = [
+            {
+                'date': '2026-08-10', 'club': 'Вчерашний', 'duration': 14,
+                'start': '10:00', 'end': '00:00',
+            },
+            {
+                'date': '2026-08-11', 'club': 'Сегодняшний', 'duration': 12,
+                'start': '10:00', 'end': '22:00',
+            },
+        ]
+        with patch.object(kpi_web, '_upcoming_shifts', return_value=shifts):
+            before_six = datetime(
+                2026, 8, 11, 5, 59, tzinfo=ZoneInfo('Europe/Moscow'),
+            )
+            closing = kpi_web._select_shift_report_test_shift(
+                '@tester', action='close', now=before_six,
+            )
+            opening = kpi_web._select_shift_report_test_shift(
+                '@tester', action='open', now=before_six,
+            )
+            after_six = kpi_web._select_shift_report_test_shift(
+                '@tester',
+                action='close',
+                now=datetime(
+                    2026, 8, 11, 6, 0, tzinfo=ZoneInfo('Europe/Moscow'),
+                ),
+            )
+
+        self.assertEqual(closing['club'], 'Вчерашний')
+        self.assertEqual(opening['club'], 'Сегодняшний')
+        self.assertEqual(after_six['club'], 'Сегодняшний')
+
     def test_shift_test_scenario_uses_today_shift_and_editor_variant(self):
         today = kpi_web._moscow_today().isoformat()
         clubs = {
@@ -506,6 +544,10 @@ class KpiWebTest(unittest.TestCase):
         )
         self.assertEqual(
             kpi_web._shift_cleanliness_questions('open', 'Ленинский'),
+            [],
+        )
+        self.assertEqual(
+            kpi_web._shift_cleanliness_questions('close', 'Коллцентр'),
             [],
         )
 
@@ -811,6 +853,9 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'audio: false', script.data)
             self.assertIn(b"form.append('photos'", script.data)
             self.assertIn(b"form.append('cleanliness_photos'", script.data)
+            self.assertIn(b'const maximumSide = 1280', script.data)
+            self.assertIn(b"new XMLHttpRequest()", script.data)
+            self.assertIn('Фотографии загружены'.encode(), script.data)
         finally:
             script.close()
 
@@ -1272,10 +1317,22 @@ class KpiWebTest(unittest.TestCase):
 
         page = self.client.get('/shift')
         try:
-            self.assertIn(b'id="shiftConsumables"', page.data)
-            self.assertIn(b'id="consumablesClub"', page.data)
+            self.assertIn(b'id="shiftConsumablesLink"', page.data)
+            self.assertIn(b'href="/shift/consumables"', page.data)
+            self.assertNotIn(b'id="consumablesClub"', page.data)
         finally:
             page.close()
+
+        consumables_page = self.client.get('/shift/consumables')
+        try:
+            self.assertEqual(consumables_page.status_code, 200)
+            self.assertIn(b'id="consumablesClub"', consumables_page.data)
+            self.assertIn(b'data-swipe-back="/shift"', consumables_page.data)
+            self.assertIn(
+                b'/static/shift_consumables.js', consumables_page.data,
+            )
+        finally:
+            consumables_page.close()
 
     def test_shift_week_schedule_supports_personal_team_and_free_views(self):
         schedule = {

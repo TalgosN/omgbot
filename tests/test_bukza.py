@@ -76,7 +76,9 @@ class BukzaTest(unittest.TestCase):
             login_response,
             table_response,
         ]) as post, patch.object(bukza, 'BUKZA_EMAIL', 'user@example.com'), \
-                patch.object(bukza, 'BUKZA_PASSWORD', 'secret'):
+                patch.object(bukza, 'BUKZA_PASSWORD', 'secret'), \
+                patch.object(bukza, 'BUKZA_ACCESS_TOKEN', ''), \
+                patch.object(bukza, 'BUKZA_SERVER_URL', ''):
             rows = bukza.fetch_reservations(
                 date(2026, 8, 7),
                 date(2026, 8, 23),
@@ -95,6 +97,52 @@ class BukzaTest(unittest.TestCase):
             post.call_args_list[1].kwargs['headers']['Authorization'],
             'Bearer bukza-token',
         )
+
+    def test_manual_session_skips_password_login(self):
+        table_response = Mock(status_code=200)
+        table_response.json.return_value = {'rows': []}
+
+        with patch.object(bukza.requests, 'post', return_value=table_response) as post, \
+                patch.object(bukza, 'BUKZA_ACCESS_TOKEN', 'Bearer manual-token'), \
+                patch.object(bukza, 'BUKZA_SERVER_URL', 'https://tenant.bukza.test'):
+            rows = bukza.fetch_reservations(
+                date(2026, 8, 7),
+                date(2026, 8, 7),
+            )
+
+        self.assertEqual(rows, [])
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            'https://tenant.bukza.test/api/reservation-tables/data',
+        )
+        self.assertEqual(
+            post.call_args.kwargs['headers']['Authorization'],
+            'Bearer manual-token',
+        )
+
+    def test_manual_session_requires_token_and_server(self):
+        with patch.object(bukza, 'BUKZA_ACCESS_TOKEN', 'manual-token'), \
+                patch.object(bukza, 'BUKZA_SERVER_URL', ''), \
+                patch.object(bukza.requests, 'post') as post:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'BUKZA_ACCESS_TOKEN и BUKZA_SERVER_URL',
+            ):
+                bukza._login()
+
+        post.assert_not_called()
+
+    def test_expired_manual_session_has_actionable_error(self):
+        response = Mock(status_code=401)
+        with patch.object(bukza.requests, 'post', return_value=response):
+            with self.assertRaisesRegex(RuntimeError, 'Сессия Bukza истекла'):
+                bukza._fetch_reservations(
+                    'https://tenant.bukza.test',
+                    'expired-token',
+                    date(2026, 8, 7),
+                    date(2026, 8, 7),
+                )
 
     def test_empty_result_does_not_send_message(self):
         bot = Mock()

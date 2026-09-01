@@ -240,11 +240,56 @@ body.modal-open { overflow:hidden; }
 .shift-empty { padding:14px; border:1px dashed var(--line); border-radius:15px; color:var(--muted); font-size:10px; text-align:center; }
 .error-card { padding:16px; border:1px dashed var(--line); border-radius:18px; color:var(--danger); background:rgba(255,120,150,.08); font-size:11px; text-align:center; }
 #shiftError { margin-top:12px; }
+.shift-dashboard { gap:10px; margin:18px 0 12px; }
+.shift-dashboard > .shift-section-heading { margin:0; }
+.shift-dashboard-grid { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:10px; }
+.shift-dashboard-detail { display:grid; gap:8px; padding:14px; border:1px solid var(--line); border-radius:20px; background:var(--card); box-shadow:0 18px 48px rgba(0,0,0,.16); }
+.compact-heading { display:flex; align-items:end; justify-content:space-between; gap:10px; }
+.compact-heading strong { font-size:13px; }
+.compact-heading span { color:var(--muted); font-size:9px; }
+.nearest-shift { min-height:100%; box-shadow:0 18px 48px rgba(0,0,0,.16); }
+.shift-month-summary { margin-top:auto; }
+.shift-month-summary div { padding:12px 13px; background:rgba(3,27,34,.34); }
+.shift-schedule { margin:18px 0 12px; overflow:hidden; border:1px solid rgba(77,224,199,.2); border-radius:20px; background:radial-gradient(circle at 100% 0,rgba(77,224,199,.12),transparent 17rem),var(--card); box-shadow:0 18px 48px rgba(0,0,0,.2); }
+.shift-schedule > summary { display:grid; min-height:80px; padding:14px 15px; grid-template-columns:43px minmax(0,1fr) auto; align-items:center; gap:12px; list-style:none; cursor:pointer; }
+.shift-schedule > summary::-webkit-details-marker { display:none; }
+.schedule-summary-icon { display:grid; width:43px; height:43px; place-items:center; border:1px solid rgba(77,224,199,.22); border-radius:14px; color:#8de3d8; background:rgba(77,224,199,.09); font-size:20px; }
+.schedule-summary-title small,.schedule-summary-title strong,.schedule-summary-title b { display:block; }
+.schedule-summary-title small { color:#77d8cd; font-size:9px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+.schedule-summary-title strong { margin-top:4px; font-size:16px; }
+.schedule-summary-title b { margin-top:4px; color:var(--muted); font-size:10px; font-weight:650; }
+.schedule-summary-side { display:grid; justify-items:end; gap:4px; }
+.schedule-summary-side > b { color:#bfe8e4; font-size:10px; }
+.schedule-summary-side > small { color:#69ddcf; font-size:8px; font-weight:850; }
+.schedule-summary-side > i { color:#8de3d8; font-size:16px; font-style:normal; transition:transform .18s ease; }
+.shift-schedule[open] .schedule-summary-side > i { transform:rotate(180deg); }
+.schedule-body { padding:0 13px 13px; border-top:1px solid rgba(77,224,199,.12); }
+.shift-tools-heading { margin:18px 0 10px; }
+.shift-actions { gap:8px; }
+.shift-action { min-height:82px; padding:14px 15px; border-radius:18px; box-shadow:0 14px 38px rgba(0,0,0,.18); }
+.shift-action.consumables { background:linear-gradient(145deg,#0f756d,#08464a); }
+.shift-action > div { min-width:0; flex:1; }
+.shift-action strong { font-size:15px; }
+.shift-action p { margin-top:4px; font-size:9px; }
+.shift-action-status { flex:none; color:rgba(255,255,255,.78); font-size:9px; white-space:nowrap; }
+.shift-action-status.warning { padding:6px 8px; border-radius:999px; color:#ffe09a; background:rgba(255,193,77,.14); }
+.shift-history { margin-top:12px; }
+@media(max-width:640px) {
+  .shift-dashboard-grid { grid-template-columns:1fr; }
+}
 @media(max-width:420px) {
+  .shift-header { position:relative; display:block; }
+  .shift-header .user-badge { position:absolute; top:0; right:0; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .shift-title .eyebrow { padding-right:120px; }
+  .shift-title h1 { font-size:31px; }
   .schedule-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .today-report-grid { grid-template-columns:1fr; }
   .consumables-toolbar { align-items:stretch; flex-direction:column; }
   .consumables-add,.consumables-categories-button { width:100%; }
   .consumable-card { grid-template-columns:62px minmax(0,1fr); }
   .consumable-photo { width:62px; height:62px; }
+  .shift-action-status { font-size:8px; }
+  .shift-schedule > summary { grid-template-columns:40px minmax(0,1fr) auto; padding:13px; gap:10px; }
+  .schedule-summary-icon { width:40px; height:40px; }
+  .schedule-summary-title strong { font-size:14px; }
 }

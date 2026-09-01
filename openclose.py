@@ -356,7 +356,7 @@ def manual_selection_handler(message, a, tooearly, bot):
 
 # --- 5. ФИНАЛЬНАЯ ЛОГИКА (С ПРОВЕРКОЙ ФЛАГА) ---
 def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
-    if not _can_manage_club(message, club, bot):
+    if not _can_manage_club(message, club, bot, action=a):
         func_today(message, bot)
         return
     # 1. Проверяем конфиг для предупреждения ПОЛЬЗОВАТЕЛЮ
@@ -441,7 +441,7 @@ def enter_club(message, a, club, tooearly, is_geo_verified, bot):
 
 
 def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
-    if not _can_manage_club(message, club, bot):
+    if not _can_manage_club(message, club, bot, action=a):
         return
     # Условие: Либо юзер нажал "Да" (если мы вернем кнопку), либо просто прошел enter_club
     # Так как мы убрали кнопку, условие if message.text == ... можно упростить, 
@@ -565,7 +565,7 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
                                    next_expected_type, next_q_text)
 
 def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
-    if not _can_manage_club(message, club, bot):
+    if not _can_manage_club(message, club, bot, action=a):
         return
     from main import hello
     
@@ -717,7 +717,7 @@ def get_distance(lat1, lon1, lat2, lon2):
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 
-def _can_manage_club(message, club, bot):
+def _can_manage_club(message, club, bot, action=None):
     user = require_role(message, bot, ROLE_EMPLOYEE)
     if not user:
         return False
@@ -733,7 +733,7 @@ def _can_manage_club(message, club, bot):
     if scheduled_club:
         scheduled_clubs.append(scheduled_club)
     now = datetime.now(pytz.timezone('Europe/Moscow'))
-    if now.hour < 6:
+    if action == '🚫 Закрыть смену' and now.hour < 6:
         previous_date = (now - timedelta(days=1)).strftime('%Y-%m-%d')
         previous_club = get_user_club_today(username, previous_date)
         if previous_club and previous_club not in scheduled_clubs:

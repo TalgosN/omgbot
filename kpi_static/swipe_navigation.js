@@ -36,7 +36,7 @@
     }
     const event = new CustomEvent('omg:navigation-back', { cancelable: true });
     if (!window.dispatchEvent(event)) return;
-    navigate('/');
+    navigate(document.body.dataset.swipeBack || '/');
   }
 
   function goToNextModule() {
