@@ -1002,18 +1002,32 @@ def broadcast_menu(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add('➕ Создать рассылку', '📋 Текущие рассылки', '⬅️ Назад в админку')
-    msg = bot.send_message(message.chat.id, "Раздел управления важными рассылками в канал 💌", reply_markup=markup)
+    markup.add(
+        '➕ Инфо-рассылка', '✅ Новая задача',
+        '📣 Текущие рассылки', '📋 Задачи смены',
+        '⬅️ Назад в админку',
+    )
+    msg = bot.send_message(
+        message.chat.id,
+        "Рассылки и задачи смены 💌\n\nИнфо-рассылка просто публикуется в рабочей группе. Задача требует отчёт и хранит выполнение.",
+        reply_markup=markup,
+    )
     bot.register_next_step_handler(msg, broadcast_menu_handler, bot)
 
 def broadcast_menu_handler(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
     a = message.text
-    if a == '➕ Создать рассылку':
+    if a in {'➕ Создать рассылку', '➕ Инфо-рассылка'}:
         bc_add_text(message, bot)
-    elif a == '📋 Текущие рассылки':
+    elif a in {'📋 Текущие рассылки', '📣 Текущие рассылки'}:
         bc_show_active(message, bot)
+    elif a == '✅ Новая задача':
+        from shift_tasks import start_task_creation
+        start_task_creation(message, bot)
+    elif a == '📋 Задачи смены':
+        from shift_tasks import show_task_templates
+        show_task_templates(message, bot)
     elif a == '⬅️ Назад в админку':
         from menu import admin_menu
         admin_menu(message, bot)
@@ -1100,7 +1114,11 @@ def bc_show_active(message, bot):
     try:
         conn = sqlite3.connect('db/omgbot.sql')
         cur = conn.cursor()
-        cur.execute("SELECT ID, text, time, freq_type, freq_days, status FROM broadcasts")
+        cur.execute(
+            """SELECT ID, text, time, freq_type, freq_days, status
+               FROM broadcasts
+               WHERE COALESCE(kind, 'information')='information'"""
+        )
         broadcasts = cur.fetchall()
         cur.close()
         conn.close()
@@ -1152,7 +1170,11 @@ def bc_view_card(message, b_id, bot):
         conn = sqlite3.connect('db/omgbot.sql')
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT * FROM broadcasts WHERE ID=?", (b_id,))
+        cur.execute(
+            """SELECT * FROM broadcasts WHERE ID=?
+               AND COALESCE(kind, 'information')='information'""",
+            (b_id,),
+        )
         b = cur.fetchone()
         cur.close()
         conn.close()
@@ -1232,11 +1254,19 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("SELECT status FROM broadcasts WHERE ID=?", (b_id,))
+                cur.execute(
+                    """SELECT status FROM broadcasts WHERE ID=?
+                       AND COALESCE(kind, 'information')='information'""",
+                    (b_id,),
+                )
                 res = cur.fetchone()
                 if res:
                     new_status = 0 if res[0] == 1 else 1
-                    cur.execute("UPDATE broadcasts SET status=? WHERE ID=?", (new_status, b_id))
+                    cur.execute(
+                        """UPDATE broadcasts SET status=? WHERE ID=?
+                           AND COALESCE(kind, 'information')='information'""",
+                        (new_status, b_id),
+                    )
                     conn.commit()
                 cur.close()
                 conn.close()
@@ -1248,7 +1278,11 @@ def register_broadcast_callbacks(bot):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()
-                cur.execute("DELETE FROM broadcasts WHERE ID=?", (b_id,))
+                cur.execute(
+                    """DELETE FROM broadcasts WHERE ID=?
+                       AND COALESCE(kind, 'information')='information'""",
+                    (b_id,),
+                )
                 conn.commit()
                 cur.close()
                 conn.close()
@@ -1376,7 +1410,8 @@ def register_broadcast_callbacks(bot):
             cur = conn.cursor()
             # Перезаписываем данные КОНКРЕТНОЙ рассылки
             cur.execute(
-                "UPDATE broadcasts SET freq_type=?, freq_days=? WHERE id=?",
+                """UPDATE broadcasts SET freq_type=?, freq_days=? WHERE id=?
+                   AND COALESCE(kind, 'information')='information'""",
                 (freq_type, freq_days, b_id)
             )
             conn.commit()
@@ -1400,7 +1435,11 @@ def bc_save_new_text(message, b_id, bot):
     
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts SET text=? WHERE ID=?", (message.text, b_id))
+    cur.execute(
+        """UPDATE broadcasts SET text=? WHERE ID=?
+           AND COALESCE(kind, 'information')='information'""",
+        (message.text, b_id),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -1423,7 +1462,11 @@ def bc_save_new_time(message, b_id, bot):
         
     conn = sqlite3.connect('db/omgbot.sql')
     cur = conn.cursor()
-    cur.execute("UPDATE broadcasts SET time=? WHERE ID=?", (time_str, b_id))
+    cur.execute(
+        """UPDATE broadcasts SET time=? WHERE ID=?
+           AND COALESCE(kind, 'information')='information'""",
+        (time_str, b_id),
+    )
     conn.commit()
     cur.close()
     conn.close()

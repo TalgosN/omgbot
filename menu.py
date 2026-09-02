@@ -137,6 +137,10 @@ def func(message, bot):
         from openclose import func_today
         func_today(message, bot)
 
+    elif a == '📋 Задачи смены':
+        from shift_tasks import show_employee_tasks
+        show_employee_tasks(message, bot)
+
     elif a == '🎮 Steam Tracker':
         from steamtracker.admin import promotion_admin_menu
         promotion_admin_menu(message, bot)
@@ -279,11 +283,12 @@ def help_handler(message, bot):
         text = (
             '<b>🚀 Быстрый старт</b>\n\n'
             '👨🏻‍💻 <b>Смена</b> — открыть или закрыть смену, отправить репорт.\n'
+            '📋 <b>Задачи смены</b> — посмотреть задачи клуба и отправить фото- или видеоотчёт.\n'
             '🗓 <b>Расписание</b> — посмотреть смены из OMG Shift.\n'
             '🚩 <b>Доска проблем</b> — сообщить о проблеме или проверить задачи.\n'
             '👤 <b>Аккаунт</b> — профиль, синхронизация и статистика.\n'
             '📦 <b>Расходники</b> — проверить или изменить остатки.\n\n'
-            'Команды: /start, /menu, /app, /kpi, /shift, /schedule, /problems, '
+            'Команды: /start, /menu, /app, /kpi, /shift, /tasks, /schedule, /problems, '
             '/account, /consumables, /steam, /weather, /today, /repair, /help и /roll.'
         )
         reply_markup = None

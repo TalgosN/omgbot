@@ -520,27 +520,14 @@ class KpiWebTest(unittest.TestCase):
         )
         self.assertEqual(payload['cleanliness_questions'], [])
 
-    def test_close_cleanliness_points_are_fixed_and_maryino_has_no_toilet(self):
+    def test_cleanliness_is_removed_from_every_mini_app_shift_scenario(self):
         self.assertEqual(
-            [
-                question['text']
-                for question in kpi_web._shift_cleanliness_questions(
-                    'close', 'Ленинский',
-                )
-            ],
-            [
-                'Лаунж', 'Ресепшен', 'Туалет — общий план',
-                'Раковина', 'Унитаз', 'Бэк', 'Зеркало в туалете',
-            ],
+            kpi_web._shift_cleanliness_questions('close', 'Ленинский'),
+            [],
         )
         self.assertEqual(
-            [
-                question['text']
-                for question in kpi_web._shift_cleanliness_questions(
-                    'close', 'Марьино',
-                )
-            ],
-            ['Лаунж', 'Ресепшен', 'Бэк'],
+            kpi_web._shift_cleanliness_questions('close', 'Марьино'),
+            [],
         )
         self.assertEqual(
             kpi_web._shift_cleanliness_questions('open', 'Ленинский'),
@@ -549,6 +536,36 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(
             kpi_web._shift_cleanliness_questions('close', 'Коллцентр'),
             [],
+        )
+
+    def test_mini_app_keeps_technical_photos_but_filters_cleaning_questions(self):
+        self.assertIsNone(kpi_web._shift_app_question(
+            'open', {'text': 'Пришли фото чистого туалета №1', 'type': 'photo'},
+        ))
+        hall = kpi_web._shift_app_question(
+            'open', {
+                'text': 'Пришли фото зала, чтобы были видны готовые шлема, чистый пол',
+                'type': 'photo',
+            },
+        )
+        self.assertIn('готовность игровых зон', hall['text'])
+        self.assertIsNone(kpi_web._shift_app_question(
+            'close', {'text': 'Пришли фото прибранного лаунжа', 'type': 'photo'},
+        ))
+        self.assertIsNone(kpi_web._shift_app_question(
+            'close', {
+                'text': 'Пришли фото мешков with мусором',
+                'type': 'photo',
+            },
+        ))
+        technical = kpi_web._shift_app_question(
+            'close', {
+                'text': 'Пришли фото ресепа и что ПК выключены',
+                'type': 'photo',
+            },
+        )
+        self.assertEqual(
+            technical['text'], 'Пришли фото ресепа и что ПК выключены',
         )
 
     def test_shift_test_is_blocked_for_manager_when_today_shift_is_missing(self):
@@ -859,7 +876,7 @@ class KpiWebTest(unittest.TestCase):
         finally:
             script.close()
 
-    def test_cleanliness_album_is_sent_only_to_main_group(self):
+    def test_empty_legacy_cleanliness_album_is_not_sent(self):
         bot = Mock()
         questions = kpi_web._shift_cleanliness_questions(
             'close', 'Ленинский',
@@ -883,18 +900,11 @@ class KpiWebTest(unittest.TestCase):
                 {'club': 'Ленинский'}, photos,
             )
 
-        bot.send_media_group.assert_called_once()
-        self.assertEqual(bot.send_media_group.call_args.args[0], '-100-main')
-        album = bot.send_media_group.call_args.kwargs['media']
-        self.assertEqual(len(album), 7)
-        self.assertIn(
-            'Отчёт о чистоте · Ленинский', album[0].caption,
-        )
-        self.assertTrue(all(item.caption is None for item in album[1:]))
+        bot.send_media_group.assert_not_called()
         bot.send_photo.assert_not_called()
         bot.send_message.assert_not_called()
 
-    def test_close_submission_sends_cleanliness_then_completes_shift(self):
+    def test_close_submission_completes_without_embedded_cleanliness(self):
         today = kpi_web._moscow_today().isoformat()
         clubs = {
             'Ленинский': {
@@ -965,7 +975,7 @@ class KpiWebTest(unittest.TestCase):
                         'version': scenario['version'],
                     },
                 )
-                cleanliness = scenario['cleanliness_questions']
+                self.assertEqual(scenario['cleanliness_questions'], [])
                 response = self.client.post(
                     '/api/shift-test/submit',
                     headers=self.headers,
@@ -978,18 +988,8 @@ class KpiWebTest(unittest.TestCase):
                             'version': scenario['version'],
                             'answers': {'q1': 'Да'},
                             'photo_ids': [],
-                            'cleanliness_photo_ids': [
-                                question['id'] for question in cleanliness
-                            ],
+                            'cleanliness_photo_ids': [],
                         }),
-                        'cleanliness_photos': [
-                            (
-                                BytesIO(f'jpeg-{index}'.encode()),
-                                f'{question["id"]}.jpg',
-                                'image/jpeg',
-                            )
-                            for index, question in enumerate(cleanliness, 1)
-                        ],
                     },
                 )
                 conn = sqlite3.connect(db_path)
@@ -1003,12 +1003,12 @@ class KpiWebTest(unittest.TestCase):
 
         self.assertEqual(start.status_code, 200)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()['cleanliness_photos'], 7)
+        self.assertEqual(response.get_json()['cleanliness_photos'], 0)
         self.assertEqual(response.get_json()['photos'], 0)
-        self.assertEqual(run[0], 7)
-        self.assertTrue(all(run[1:]))
-        bot.send_media_group.assert_called_once()
-        self.assertEqual(bot.send_media_group.call_args.args[0], '-100-main')
+        self.assertEqual(run[0], 0)
+        self.assertIsNone(run[1])
+        self.assertTrue(all(run[2:]))
+        bot.send_media_group.assert_not_called()
         sent_chats = [call.args[0] for call in bot.send_message.call_args_list]
         self.assertIn('-100-reports', sent_chats)
         self.assertIn('-100-main', sent_chats)

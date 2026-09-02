@@ -1339,25 +1339,47 @@ def _shift_report_late_minutes(club, started_at):
 
 
 def _shift_cleanliness_questions(action, club_name):
-    if action != 'close':
-        return []
-    normalized_club = str(club_name or '').strip().casefold().replace('ё', 'е')
-    if normalized_club in {'коллцентр', 'колл-центр', 'кц', 'callcenter'}:
-        return []
-    labels = (
-        CLEANLINESS_MARYINO_LABELS
-        if normalized_club == 'марьино'
-        else CLEANLINESS_PHOTO_LABELS
-    )
-    return [
-        {
-            'id': f'cleanliness{index}',
-            'position': index,
-            'text': label,
-            'type': 'photo',
-        }
-        for index, label in enumerate(labels, 1)
-    ]
+    # Чистота теперь является отдельной ежедневной задачей в Telegram-боте.
+    # Старый сценарий открытия/закрытия в боте при этом остаётся неизменным.
+    return []
+
+
+def _shift_app_question(action, question):
+    """Убирает вопросы чистоты только из сценария Mini App."""
+    if not isinstance(question, dict):
+        return None
+    result = dict(question)
+    text = str(result.get('text') or '').strip()
+    normalized = text.casefold().replace('ё', 'е')
+    if action == 'open':
+        if any(marker in normalized for marker in (
+            'фото чистого санузла',
+            'фото чистого туалета',
+            'фото чистой раковины',
+        )):
+            return None
+        text = re.sub(
+            r',?\s*чистый пол',
+            ', готовность игровых зон',
+            text,
+            flags=re.IGNORECASE,
+        )
+    elif action == 'close':
+        cleaning_markers = (
+            'прибранного бэка',
+            'прибранного лаунжа',
+            'отчетом в рабочем чате о чистоте',
+            'порядка на полках',
+            'порядка в бэке',
+            'протертого от пыли и прибранного ресепа',
+        )
+        if (
+            any(marker in normalized for marker in cleaning_markers)
+            or ('мешк' in normalized and 'мусор' in normalized)
+        ):
+            return None
+    result['text'] = text
+    return result
 
 
 def _is_legacy_cleanliness_screenshot(action, question):
@@ -1427,9 +1449,10 @@ def _shift_report_test_scenario(
             raise ValueError('Сохранённый набор сценария больше недоступен')
 
     raw_questions = [
-        question
+        prepared
         for question in variants[selected_index]
-        if not _is_legacy_cleanliness_screenshot(action, question)
+        for prepared in [_shift_app_question(action, question)]
+        if prepared is not None
     ]
     questions = [
         {
@@ -1579,6 +1602,21 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
     if not bot:
         raise RuntimeError('Telegram-бот временно недоступен')
     refresh_club_status_dashboard(bot, DB_PATH)
+    task_warning = None
+    if scenario['action'] == 'close':
+        try:
+            from shift_tasks import record_close_task_warning
+            task_warning = record_close_task_warning(
+                bot,
+                run_id,
+                club_name,
+                scenario['shift']['date'],
+                dict(g.kpi_user),
+                db_path=DB_PATH,
+            )
+        except Exception as error:
+            print(f'Не удалось проверить задачи перед закрытием: {error}')
+
     if not run.get('start_notified_at'):
         name = (
             g.kpi_user.get('nick_name')
@@ -1607,6 +1645,7 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
         'started': True,
         'started_at': run['started_at'],
         'early_close': bool(run['early_close']),
+        'task_warning': task_warning,
     }
 
 

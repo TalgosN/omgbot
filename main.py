@@ -87,7 +87,12 @@ def check_dynamic_events(bot):
         cur = conn.cursor()
         
         # Читаем из НОВОЙ таблицы
-        cur.execute("SELECT id, text, photo, time, freq_type, freq_days FROM broadcasts WHERE status = 1")
+        cur.execute(
+            """SELECT id, text, photo, time, freq_type, freq_days
+               FROM broadcasts
+               WHERE status = 1
+                 AND COALESCE(kind, 'information') = 'information'"""
+        )
         active_broadcasts = cur.fetchall()
 
         for b_id, b_text, b_photo, b_time, freq_type, freq_days in active_broadcasts:
@@ -104,10 +109,13 @@ def check_dynamic_events(bot):
                     
                 if should_send:
                     from sender import safe_send
-                    safe_send(bot, CHATS['main_group'], b_text, photo=b_photo, parse_mode='HTML')
+                    sent = safe_send(
+                        bot, CHATS['main_group'], b_text,
+                        photo=b_photo, parse_mode='HTML',
+                    )
                     
                     # Отключаем только если тип строго "once" (однократно)
-                    if freq_type == "once":
+                    if freq_type == "once" and sent:
                         cur.execute("UPDATE broadcasts SET status = 0 WHERE id = ?", (b_id,))
                         conn.commit()
 
@@ -116,6 +124,12 @@ def check_dynamic_events(bot):
     except Exception as e:
         print(f"Ошибка в рассылках: {e}")
     # -----------------------
+
+    try:
+        from shift_tasks import process_shift_tasks
+        process_shift_tasks(bot, now=now)
+    except Exception as e:
+        print(f"Ошибка обработки задач смены: {e}")
 
     # 3. Проверяем каждый клуб
     for club_name, info in clubs.items():
@@ -467,6 +481,8 @@ create_tables_KPI()
 initialize_kpi_calculation_schema()
 initialize_shift_time_schema()
 initialize_repair_schema()
+from shift_tasks import initialize_shift_tasks_schema
+initialize_shift_tasks_schema()
 from birthday_greetings import initialize_birthday_schema
 initialize_birthday_schema()
 finalize_legacy_kpi_approval()
@@ -730,7 +746,7 @@ def command_help(message):
     _run_private_menu_command(message, lambda: show_help(bot, message))
 
 
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '📋 Задачи смены', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
 def handle_main_menu(message):
     if require_role(message, bot, ROLE_EMPLOYEE):
         bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -739,6 +755,9 @@ def handle_main_menu(message):
         
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and not message.text.startswith('#'))
 def SaySmth(message): #fun talk
+    from shift_tasks import handle_task_text
+    if handle_task_text(message, bot):
+        return
     if message.text.lower().find('кц офф')!=-1:
         send_react(message,"😴")
 
@@ -925,6 +944,13 @@ register_readonly_callback(bot)
 
 from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)
+
+from shift_tasks import (
+    register_shift_task_admin_handlers,
+    register_shift_task_handlers,
+)
+register_shift_task_handlers(bot)
+register_shift_task_admin_handlers(bot)
 
 from consumables import register_consumables_callbacks
 register_consumables_callbacks(bot)

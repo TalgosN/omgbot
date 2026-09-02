@@ -949,6 +949,16 @@ async function beginShift(earlyConfirmed = false) {
     runtime.draft.early_close = Boolean(result.early_close);
     saveDraft();
     $('#earlyCloseDialog').close();
+    if (result.task_warning?.count) {
+      $('#taskWarningText').textContent = result.task_warning.message;
+      $('#taskWarningList').replaceChildren(...result.task_warning.titles.map((title) => {
+        const item = document.createElement('li');
+        item.textContent = title;
+        return item;
+      }));
+      $('#taskWarningDialog').showModal();
+      return;
+    }
     continueAfterStart();
   } catch (error) {
     if (error.code === 'early_close_confirmation_required') {
@@ -1012,6 +1022,10 @@ $('#cancelEarlyClose').addEventListener('click', () => {
   $('#earlyCloseDialog').close();
 });
 $('#confirmEarlyClose').addEventListener('click', () => beginShift(true));
+$('#acknowledgeTaskWarning').addEventListener('click', () => {
+  $('#taskWarningDialog').close();
+  continueAfterStart();
+});
 
 $('#questionForm').addEventListener('submit', (event) => {
   event.preventDefault();
