@@ -2,6 +2,7 @@ import html
 import json
 import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,9 @@ CATEGORY_DEEP_CLEANING_SPECIAL = 'deep_cleaning_special'
 CATEGORY_GENERAL = 'general'
 
 _task_admin_drafts = {}
+_task_media_group_lock = threading.Lock()
+_task_media_group_timers = {}
+TASK_MEDIA_GROUP_DELAY_SECONDS = 1.2
 
 DEFAULT_CLEANLINESS_POINTS = (
     'Лаунж — общий вид',
@@ -181,6 +185,8 @@ def initialize_shift_tasks_schema(db_path=DB_PATH):
                        instance_id INTEGER NOT NULL,
                        telegram_file_id TEXT NOT NULL,
                        telegram_file_unique_id TEXT,
+                       telegram_message_id INTEGER,
+                       media_group_id TEXT,
                        media_type TEXT NOT NULL,
                        file_size INTEGER,
                        submitted_by_chatid TEXT NOT NULL,
@@ -190,6 +196,11 @@ def initialize_shift_tasks_schema(db_path=DB_PATH):
                        UNIQUE(instance_id, telegram_file_unique_id)
                    )'''
             )
+            for definition in (
+                'telegram_message_id INTEGER',
+                'media_group_id TEXT',
+            ):
+                _add_column(conn, 'shift_task_media', definition)
             conn.execute(
                 '''CREATE INDEX IF NOT EXISTS idx_shift_task_media_instance
                    ON shift_task_media(instance_id, state, id)'''
@@ -764,7 +775,7 @@ def _retry_task_reports(bot, db_path=DB_PATH):
                     media_rows = conn.execute(
                         '''SELECT * FROM shift_task_media
                            WHERE instance_id=? AND state='submitted'
-                           ORDER BY id''',
+                           ORDER BY COALESCE(telegram_message_id, 0), id''',
                         (instance['id'],),
                     ).fetchall()
                     if not media_rows:
@@ -1077,6 +1088,79 @@ def _draft_media_count(conn, instance_id, chatid):
     ).fetchone()[0]
 
 
+def _send_task_media_progress(
+    bot, chatid, instance_id, db_path=DB_PATH, notices=(),
+):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        draft = conn.execute(
+            '''SELECT 1 FROM shift_task_drafts
+               WHERE chatid=? AND instance_id=? AND state='collecting' ''',
+            (str(chatid), instance_id),
+        ).fetchone()
+        instance = conn.execute(
+            '''SELECT * FROM shift_task_instances
+               WHERE id=? AND status IN ('pending', 'in_progress')''',
+            (instance_id,),
+        ).fetchone()
+        if not draft or not instance:
+            return False
+        count = _draft_media_count(conn, instance_id, chatid)
+    finally:
+        conn.close()
+    text = (
+        f'Альбом обработан: {count}/{MAX_ATTACHMENTS}. '
+        'Можно отправить ещё фото или видео.'
+    )
+    if notices:
+        text += '\n\n⚠️ ' + ' '.join(sorted(set(notices)))
+    bot.send_message(
+        chatid, text,
+        reply_markup=_draft_markup(instance, count),
+    )
+    return True
+
+
+def _flush_task_media_group(
+    key, token, bot, chatid, instance_id, db_path,
+):
+    with _task_media_group_lock:
+        current = _task_media_group_timers.get(key)
+        if not current or current[1] is not token:
+            return
+        _task_media_group_timers.pop(key, None)
+        notices = current[2]
+    try:
+        _send_task_media_progress(
+            bot, chatid, instance_id, db_path=db_path, notices=notices,
+        )
+    except Exception as error:
+        print(f'Не отправлен итог загрузки альбома: {error}')
+
+
+def _queue_task_media_group_progress(
+    bot, chatid, instance_id, media_group_id, db_path=DB_PATH, notice=None,
+):
+    key = (str(chatid), str(media_group_id))
+    token = object()
+    timer = threading.Timer(
+        TASK_MEDIA_GROUP_DELAY_SECONDS,
+        _flush_task_media_group,
+        args=(key, token, bot, chatid, instance_id, db_path),
+    )
+    timer.daemon = True
+    with _task_media_group_lock:
+        previous = _task_media_group_timers.get(key)
+        notices = set(previous[2]) if previous else set()
+        if notice:
+            notices.add(str(notice))
+        _task_media_group_timers[key] = (timer, token, notices)
+        if previous:
+            previous[0].cancel()
+    timer.start()
+
+
 def handle_task_media(message, bot):
     if message.chat.id <= 0:
         return False
@@ -1107,6 +1191,13 @@ def handle_task_media(message, bot):
             return True
         count = _draft_media_count(conn, instance['id'], actor['chatid'])
         if count >= MAX_ATTACHMENTS:
+            if getattr(message, 'media_group_id', None):
+                _queue_task_media_group_progress(
+                    bot, actor['chatid'], instance['id'],
+                    message.media_group_id, db_path=DB_PATH,
+                    notice='Лишние вложения после лимита 10 не добавлены.',
+                )
+                return True
             bot.send_message(
                 message.chat.id,
                 'Уже добавлено 10 вложений. Завершите отчёт или отмените его.',
@@ -1117,6 +1208,13 @@ def handle_task_media(message, bot):
             media = message.video
             media_type = 'video'
             if int(media.file_size or 0) > MAX_VIDEO_BYTES:
+                if getattr(message, 'media_group_id', None):
+                    _queue_task_media_group_progress(
+                        bot, actor['chatid'], instance['id'],
+                        message.media_group_id, db_path=DB_PATH,
+                        notice='Видео больше 20 МБ не добавлено.',
+                    )
+                    return True
                 bot.send_message(
                     message.chat.id,
                     'Видео больше 20 МБ. Сократите его или отправьте другое.',
@@ -1133,14 +1231,17 @@ def handle_task_media(message, bot):
             conn.execute(
                 '''INSERT OR IGNORE INTO shift_task_media (
                        instance_id, telegram_file_id, telegram_file_unique_id,
-                       media_type, file_size, submitted_by_chatid,
-                       submitted_by_login, created_at, state
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft')''',
+                       telegram_message_id, media_group_id, media_type,
+                       file_size, submitted_by_chatid, submitted_by_login,
+                       created_at, state
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')''',
                 (
                     instance['id'], media.file_id,
-                    getattr(media, 'file_unique_id', None), media_type,
-                    int(getattr(media, 'file_size', 0) or 0), actor['chatid'],
-                    actor['login'], _timestamp(),
+                    getattr(media, 'file_unique_id', None),
+                    int(getattr(message, 'message_id', 0) or 0),
+                    str(getattr(message, 'media_group_id', '') or ''),
+                    media_type, int(getattr(media, 'file_size', 0) or 0),
+                    actor['chatid'], actor['login'], _timestamp(),
                 ),
             )
             count = _draft_media_count(conn, instance['id'], actor['chatid'])
@@ -1148,12 +1249,18 @@ def handle_task_media(message, bot):
                 'UPDATE shift_task_drafts SET updated_at=? WHERE chatid=?',
                 (_timestamp(), actor['chatid']),
             )
-        bot.send_message(
-            message.chat.id,
-            f'Добавлено: {count}/{MAX_ATTACHMENTS}. '
-            'Можно отправить ещё фото или видео.',
-            reply_markup=_draft_markup(instance, count),
-        )
+        if getattr(message, 'media_group_id', None):
+            _queue_task_media_group_progress(
+                bot, actor['chatid'], instance['id'],
+                message.media_group_id, db_path=DB_PATH,
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                f'Добавлено: {count}/{MAX_ATTACHMENTS}. '
+                'Можно отправить ещё фото или видео.',
+                reply_markup=_draft_markup(instance, count),
+            )
         return True
     finally:
         conn.close()
@@ -1300,7 +1407,7 @@ def _finish_task(call, bot, instance_id):
         media_rows = conn.execute(
             '''SELECT * FROM shift_task_media
                WHERE instance_id=? AND submitted_by_chatid=? AND state='draft'
-               ORDER BY id''',
+               ORDER BY COALESCE(telegram_message_id, 0), id''',
             (instance_id, actor['chatid']),
         ).fetchall()
         required = max(1, len(_instance_requirements(instance)))

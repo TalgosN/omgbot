@@ -44,6 +44,25 @@ class FakeBot:
         return None
 
 
+class FakeTimer:
+    def __init__(self, interval, function, args=()):
+        self.interval = interval
+        self.function = function
+        self.args = args
+        self.cancelled = False
+        self.started = False
+        self.daemon = False
+
+    def start(self):
+        self.started = True
+
+    def cancel(self):
+        self.cancelled = True
+
+    def fire(self):
+        self.function(*self.args)
+
+
 class ShiftTasksTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -132,6 +151,9 @@ class ShiftTasksTest(unittest.TestCase):
         regular_clubs = json.loads(conn.execute(
             'SELECT clubs_json FROM broadcasts WHERE id=10'
         ).fetchone()[0])
+        media_columns = {
+            row[1] for row in conn.execute('PRAGMA table_info(shift_task_media)')
+        }
         conn.close()
 
         self.assertEqual(migrated['kind'], shift_tasks.KIND_TASK)
@@ -145,6 +167,36 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(maryino_special['title'], 'Глубокая уборка бэка')
         self.assertEqual(json.loads(maryino_special['clubs_json']), ['Марьино'])
         self.assertEqual(regular_clubs, ['Ленинский'])
+        self.assertIn('telegram_message_id', media_columns)
+        self.assertIn('media_group_id', media_columns)
+
+    def test_media_group_progress_is_debounced_to_one_message(self):
+        timers = []
+
+        def timer_factory(*args, **kwargs):
+            timer = FakeTimer(*args, **kwargs)
+            timers.append(timer)
+            return timer
+
+        shift_tasks._task_media_group_timers.clear()
+        with (
+            patch.object(shift_tasks.threading, 'Timer', side_effect=timer_factory),
+            patch.object(shift_tasks, '_send_task_media_progress') as progress,
+        ):
+            shift_tasks._queue_task_media_group_progress(
+                FakeBot(), '101', 7, 'album-1', db_path=self.db_path,
+            )
+            shift_tasks._queue_task_media_group_progress(
+                FakeBot(), '101', 7, 'album-1', db_path=self.db_path,
+            )
+            timers[0].fire()
+            timers[1].fire()
+
+        self.assertTrue(timers[0].cancelled)
+        self.assertTrue(timers[0].started)
+        self.assertTrue(timers[1].started)
+        progress.assert_called_once()
+        shift_tasks._task_media_group_timers.clear()
 
     def test_scheduler_creates_shared_club_task_and_does_not_duplicate_notifications(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
@@ -254,12 +306,16 @@ class ShiftTasksTest(unittest.TestCase):
             conn.executemany(
                 '''INSERT INTO shift_task_media (
                        instance_id, telegram_file_id, telegram_file_unique_id,
-                       media_type, file_size, submitted_by_chatid,
-                       submitted_by_login, created_at, state
-                   ) VALUES (?, ?, ?, 'photo', 1000, '101', '@employee',
-                             '2026-09-01 12:05:00', 'draft')''',
+                       telegram_message_id, media_group_id, media_type,
+                       file_size, submitted_by_chatid, submitted_by_login,
+                       created_at, state
+                   ) VALUES (?, ?, ?, ?, 'album-1', 'photo', 1000, '101',
+                             '@employee', '2026-09-01 12:05:00', 'draft')''',
                 [
-                    (instance_id, f'telegram-photo-id-{index}', f'unique-photo-id-{index}')
+                    (
+                        instance_id, f'telegram-photo-id-{index}',
+                        f'unique-photo-id-{index}', 108 - index,
+                    )
                     for index in range(1, 8)
                 ],
             )
@@ -297,7 +353,11 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(instance, ('completed', '@employee', '-1001'))
         self.assertEqual(media, ('telegram-photo-id-1', 'submitted'))
         self.assertEqual(draft_count, 0)
-        self.assertTrue(any(item[0] == 'album' for item in bot.messages))
+        album = next(item for item in bot.messages if item[0] == 'album')
+        self.assertEqual(
+            [item.media for item in album[2]],
+            [f'telegram-photo-id-{index}' for index in range(7, 0, -1)],
+        )
 
 
 if __name__ == '__main__':
