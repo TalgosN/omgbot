@@ -746,7 +746,7 @@ def command_help(message):
     _run_private_menu_command(message, lambda: show_help(bot, message))
 
 
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '📋 Задачи смены', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
 def handle_main_menu(message):
     if require_role(message, bot, ROLE_EMPLOYEE):
         bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -755,9 +755,6 @@ def handle_main_menu(message):
         
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and not message.text.startswith('#'))
 def SaySmth(message): #fun talk
-    from shift_tasks import handle_task_text
-    if handle_task_text(message, bot):
-        return
     if message.text.lower().find('кц офф')!=-1:
         send_react(message,"😴")
 
@@ -945,11 +942,7 @@ register_readonly_callback(bot)
 from admin_panel import register_broadcast_callbacks
 register_broadcast_callbacks(bot)
 
-from shift_tasks import (
-    register_shift_task_admin_handlers,
-    register_shift_task_handlers,
-)
-register_shift_task_handlers(bot)
+from shift_tasks import register_shift_task_admin_handlers
 register_shift_task_admin_handlers(bot)
 
 from consumables import register_consumables_callbacks

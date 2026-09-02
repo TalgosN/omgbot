@@ -1,5 +1,7 @@
 import html
+import io
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -9,7 +11,7 @@ from zoneinfo import ZoneInfo
 from telebot import types
 
 from club_config import get_clubs
-from constants import CHATS
+from constants import CHATS, KPI_WEBAPP_URL
 from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 
 
@@ -29,6 +31,7 @@ _task_admin_drafts = {}
 _task_media_group_lock = threading.Lock()
 _task_media_group_timers = {}
 TASK_MEDIA_GROUP_DELAY_SECONDS = 1.2
+_task_app_completion_lock = threading.Lock()
 
 DEFAULT_CLEANLINESS_POINTS = (
     'Лаунж — общий вид',
@@ -239,6 +242,22 @@ def initialize_shift_tasks_schema(db_path=DB_PATH):
                        report_sent_at TEXT
                    )'''
             )
+            legacy_draft_instances = [
+                row[0] for row in conn.execute(
+                    'SELECT DISTINCT instance_id FROM shift_task_drafts'
+                ).fetchall()
+            ]
+            if legacy_draft_instances:
+                placeholders = ','.join('?' for _ in legacy_draft_instances)
+                conn.execute(
+                    f'''UPDATE shift_task_instances
+                        SET status='pending', started_at=NULL,
+                            started_by_login=NULL
+                        WHERE id IN ({placeholders}) AND status='in_progress' ''',
+                    legacy_draft_instances,
+                )
+            conn.execute("DELETE FROM shift_task_media WHERE state='draft'")
+            conn.execute('DELETE FROM shift_task_drafts')
         _migrate_legacy_cleaning_broadcasts(conn)
         _ensure_cleanliness_template(conn)
     finally:
@@ -563,20 +582,34 @@ def _task_card(instance, notification_type='activation'):
     return '\n'.join(lines)
 
 
+def _task_webapp_url(instance_id=None):
+    base_url = str(KPI_WEBAPP_URL or '').strip()
+    runtime_path = os.path.join('data', 'kpi_webapp_url.txt')
+    try:
+        with open(runtime_path, encoding='utf-8') as runtime_file:
+            runtime_url = runtime_file.read().strip()
+    except OSError:
+        runtime_url = ''
+    if runtime_url:
+        base_url = runtime_url
+    if not base_url:
+        return None
+    url = f'{base_url.rstrip("/")}/shift/tasks'
+    if instance_id is not None:
+        url += f'?task={int(instance_id)}'
+    return url
+
+
 def _task_markup(instance_id, opening=False):
     markup = types.InlineKeyboardMarkup()
-    if opening:
+    webapp_url = _task_webapp_url(None if opening else instance_id)
+    if webapp_url:
         markup.add(types.InlineKeyboardButton(
-            '📋 Открыть задачи', callback_data='stask_list',
+            '📋 Открыть в OMG Shift',
+            web_app=types.WebAppInfo(webapp_url),
         ))
         return markup
-    markup.add(types.InlineKeyboardButton(
-        '▶️ Начать отчёт', callback_data=f'stask_start_{instance_id}',
-    ))
-    markup.add(types.InlineKeyboardButton(
-        '⏭ Пропустить с причиной', callback_data=f'stask_skip_{instance_id}',
-    ))
-    return markup
+    return None
 
 
 def _notification_exists(conn, instance_id, kind, chatid):
@@ -1052,272 +1085,352 @@ def show_employee_tasks(message, bot):
             f'• <b>{html.escape(instance["title"])}</b> · '
             f'{html.escape(instance["club"])} · до {instance["due_at"][11:16]}'
         )
-        markup.add(types.InlineKeyboardButton(
-            f'{instance["club"]} · {instance["title"][:28]}',
-            callback_data=f'stask_open_{instance["id"]}',
-        ))
+        webapp_url = _task_webapp_url(instance['id'])
+        if webapp_url:
+            markup.add(types.InlineKeyboardButton(
+                f'{instance["club"]} · {instance["title"][:28]}',
+                web_app=types.WebAppInfo(webapp_url),
+            ))
+        else:
+            markup.add(types.InlineKeyboardButton(
+                f'{instance["club"]} · {instance["title"][:28]}',
+                callback_data=f'stask_open_{instance["id"]}',
+            ))
     bot.send_message(
         message.chat.id, '\n'.join(text), parse_mode='HTML', reply_markup=markup,
     )
 
 
-def _draft_markup(instance, count):
-    instance_id = int(instance['id'])
-    required = max(1, len(_instance_requirements(instance)))
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton(
-        f'✅ Завершить отчёт · {count}/{required}',
-        callback_data=f'stask_finish_{instance_id}',
-    ))
-    markup.add(
-        types.InlineKeyboardButton(
-            '⏭ Пропустить', callback_data=f'stask_skip_{instance_id}',
+def _app_actor(user):
+    user = dict(user or {})
+    login = str(user.get('login') or '')
+    return {
+        'chatid': str(user.get('chatid') or ''),
+        'login': login,
+        'name': str(
+            user.get('nick_name') or user.get('first_name') or login
         ),
-        types.InlineKeyboardButton(
-            '✖️ Отменить', callback_data=f'stask_cancel_{instance_id}',
-        ),
-    )
-    return markup
+        'role': int(user.get('status') or 0),
+    }
 
 
-def _draft_media_count(conn, instance_id, chatid):
-    return conn.execute(
-        '''SELECT COUNT(*) FROM shift_task_media
-           WHERE instance_id=? AND submitted_by_chatid=? AND state='draft' ''',
-        (instance_id, str(chatid)),
-    ).fetchone()[0]
+def _task_accessible_to_actor(conn, instance, actor):
+    if not instance or not actor.get('chatid'):
+        return False
+    if actor['role'] >= ROLE_MANAGER:
+        return True
+    notified = conn.execute(
+        '''SELECT 1 FROM shift_task_notifications
+           WHERE instance_id=? AND recipient_chatid=? LIMIT 1''',
+        (instance['id'], actor['chatid']),
+    ).fetchone()
+    if notified:
+        return True
+    recipients = _scheduled_recipients(conn, instance)
+    return actor['chatid'] in {str(row[0]) for row in recipients}
 
 
-def _send_task_media_progress(
-    bot, chatid, instance_id, db_path=DB_PATH, notices=(),
-):
+def _app_task_payload(instance, current):
+    row = dict(instance)
+    status = row['status']
+    due_at = datetime.strptime(
+        row['due_at'], '%Y-%m-%d %H:%M:%S',
+    ).replace(tzinfo=MOSCOW)
+    overdue = status in ('pending', 'in_progress') and current >= due_at
+    requirements = _instance_requirements(row)
+    return {
+        'id': row['id'],
+        'template_id': row['template_id'],
+        'date': row['occurrence_date'],
+        'club': row['club'],
+        'title': row['title'],
+        'instructions': row['instructions'] or '',
+        'requirements': requirements,
+        'required_attachments': max(1, len(requirements)),
+        'max_attachments': MAX_ATTACHMENTS,
+        'available_at': row['available_at'],
+        'due_at': row['due_at'],
+        'status': status,
+        'overdue': overdue,
+        'started_at': row['started_at'],
+        'started_by_login': row['started_by_login'],
+        'completed_at': row['completed_at'],
+        'completed_by_name': row['completed_by_name'],
+        'completed_by_login': row['completed_by_login'],
+        'skipped_at': row['skipped_at'],
+        'skipped_by_name': row['skipped_by_name'],
+        'skipped_by_login': row['skipped_by_login'],
+        'skip_reason': row['skip_reason'],
+        'can_execute': status in ('pending', 'in_progress'),
+    }
+
+
+def app_task_list(user, scope='active', db_path=DB_PATH, now=None):
+    current = _now(now)
+    initialize_shift_tasks_schema(db_path)
+    ensure_task_instances(current.date(), db_path=db_path, now=current)
+    actor = _app_actor(user)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        draft = conn.execute(
-            '''SELECT 1 FROM shift_task_drafts
-               WHERE chatid=? AND instance_id=? AND state='collecting' ''',
-            (str(chatid), instance_id),
-        ).fetchone()
-        instance = conn.execute(
-            '''SELECT * FROM shift_task_instances
-               WHERE id=? AND status IN ('pending', 'in_progress')''',
-            (instance_id,),
-        ).fetchone()
-        if not draft or not instance:
-            return False
-        count = _draft_media_count(conn, instance_id, chatid)
+        if scope == 'history':
+            first_day = (current.date() - timedelta(days=30)).isoformat()
+            rows = conn.execute(
+                '''SELECT * FROM shift_task_instances
+                   WHERE occurrence_date BETWEEN ? AND ?
+                   ORDER BY occurrence_date DESC, due_at DESC, id DESC''',
+                (first_day, current.date().isoformat()),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                '''SELECT * FROM shift_task_instances
+                   WHERE occurrence_date=?
+                   ORDER BY due_at, id''',
+                (current.date().isoformat(),),
+            ).fetchall()
+        return [
+            _app_task_payload(row, current)
+            for row in rows
+            if _task_accessible_to_actor(conn, row, actor)
+        ]
     finally:
         conn.close()
-    text = (
-        f'Альбом обработан: {count}/{MAX_ATTACHMENTS}. '
-        'Можно отправить ещё фото или видео.'
-    )
-    if notices:
-        text += '\n\n⚠️ ' + ' '.join(sorted(set(notices)))
-    bot.send_message(
-        chatid, text,
-        reply_markup=_draft_markup(instance, count),
-    )
-    return True
 
 
-def _flush_task_media_group(
-    key, token, bot, chatid, instance_id, db_path,
-):
-    with _task_media_group_lock:
-        current = _task_media_group_timers.get(key)
-        if not current or current[1] is not token:
-            return
-        _task_media_group_timers.pop(key, None)
-        notices = current[2]
-    try:
-        _send_task_media_progress(
-            bot, chatid, instance_id, db_path=db_path, notices=notices,
-        )
-    except Exception as error:
-        print(f'Не отправлен итог загрузки альбома: {error}')
-
-
-def _queue_task_media_group_progress(
-    bot, chatid, instance_id, media_group_id, db_path=DB_PATH, notice=None,
-):
-    key = (str(chatid), str(media_group_id))
-    token = object()
-    timer = threading.Timer(
-        TASK_MEDIA_GROUP_DELAY_SECONDS,
-        _flush_task_media_group,
-        args=(key, token, bot, chatid, instance_id, db_path),
-    )
-    timer.daemon = True
-    with _task_media_group_lock:
-        previous = _task_media_group_timers.get(key)
-        notices = set(previous[2]) if previous else set()
-        if notice:
-            notices.add(str(notice))
-        _task_media_group_timers[key] = (timer, token, notices)
-        if previous:
-            previous[0].cancel()
-    timer.start()
-
-
-def handle_task_media(message, bot):
-    if message.chat.id <= 0:
-        return False
-    actor = _actor_snapshot(message)
-    if not actor:
-        return False
-    conn = sqlite3.connect(DB_PATH)
+def start_app_task(user, instance_id, db_path=DB_PATH):
+    actor = _app_actor(user)
+    initialize_shift_tasks_schema(db_path)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        draft = conn.execute(
-            '''SELECT * FROM shift_task_drafts
-               WHERE chatid=? AND state='collecting' ''',
-            (actor['chatid'],),
-        ).fetchone()
-        if not draft:
-            return False
         instance = conn.execute(
             'SELECT * FROM shift_task_instances WHERE id=?',
-            (draft['instance_id'],),
+            (instance_id,),
         ).fetchone()
-        if not instance or instance['status'] not in ('pending', 'in_progress'):
-            with conn:
-                conn.execute(
-                    'DELETE FROM shift_task_drafts WHERE chatid=?',
-                    (actor['chatid'],),
-                )
-            bot.send_message(message.chat.id, 'Эта задача уже закрыта.')
-            return True
-        count = _draft_media_count(conn, instance['id'], actor['chatid'])
-        if count >= MAX_ATTACHMENTS:
-            if getattr(message, 'media_group_id', None):
-                _queue_task_media_group_progress(
-                    bot, actor['chatid'], instance['id'],
-                    message.media_group_id, db_path=DB_PATH,
-                    notice='Лишние вложения после лимита 10 не добавлены.',
-                )
-                return True
-            bot.send_message(
-                message.chat.id,
-                'Уже добавлено 10 вложений. Завершите отчёт или отмените его.',
-                reply_markup=_draft_markup(instance, count),
-            )
-            return True
-        if message.video:
-            media = message.video
-            media_type = 'video'
-            if int(media.file_size or 0) > MAX_VIDEO_BYTES:
-                if getattr(message, 'media_group_id', None):
-                    _queue_task_media_group_progress(
-                        bot, actor['chatid'], instance['id'],
-                        message.media_group_id, db_path=DB_PATH,
-                        notice='Видео больше 20 МБ не добавлено.',
-                    )
-                    return True
-                bot.send_message(
-                    message.chat.id,
-                    'Видео больше 20 МБ. Сократите его или отправьте другое.',
-                )
-                return True
-        elif message.photo:
-            media = message.photo[-1]
-            media_type = 'photo'
-        else:
-            return False
-        if not require_role(message, bot, ROLE_EMPLOYEE):
-            return True
+        if not _task_accessible_to_actor(conn, instance, actor):
+            raise ValueError('Эта задача вам недоступна')
+        if instance['status'] not in ('pending', 'in_progress'):
+            raise ValueError('Задача уже закрыта')
         with conn:
             conn.execute(
-                '''INSERT OR IGNORE INTO shift_task_media (
-                       instance_id, telegram_file_id, telegram_file_unique_id,
-                       telegram_message_id, media_group_id, media_type,
-                       file_size, submitted_by_chatid, submitted_by_login,
-                       created_at, state
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')''',
-                (
-                    instance['id'], media.file_id,
-                    getattr(media, 'file_unique_id', None),
-                    int(getattr(message, 'message_id', 0) or 0),
-                    str(getattr(message, 'media_group_id', '') or ''),
-                    media_type, int(getattr(media, 'file_size', 0) or 0),
-                    actor['chatid'], actor['login'], _timestamp(),
-                ),
+                '''UPDATE shift_task_instances
+                   SET status='in_progress', started_at=COALESCE(started_at, ?),
+                       started_by_login=COALESCE(started_by_login, ?)
+                   WHERE id=? AND status IN ('pending', 'in_progress')''',
+                (_timestamp(), actor['login'], instance_id),
             )
-            count = _draft_media_count(conn, instance['id'], actor['chatid'])
+        return _app_task_payload(
             conn.execute(
-                'UPDATE shift_task_drafts SET updated_at=? WHERE chatid=?',
-                (_timestamp(), actor['chatid']),
-            )
-        if getattr(message, 'media_group_id', None):
-            _queue_task_media_group_progress(
-                bot, actor['chatid'], instance['id'],
-                message.media_group_id, db_path=DB_PATH,
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                f'Добавлено: {count}/{MAX_ATTACHMENTS}. '
-                'Можно отправить ещё фото или видео.',
-                reply_markup=_draft_markup(instance, count),
-            )
-        return True
+                'SELECT * FROM shift_task_instances WHERE id=?',
+                (instance_id,),
+            ).fetchone(),
+            _now(),
+        )
     finally:
         conn.close()
 
 
-def handle_task_text(message, bot):
-    if message.chat.id <= 0 or not message.text:
-        return False
-    actor = _actor_snapshot(message)
-    if not actor:
-        return False
-    conn = sqlite3.connect(DB_PATH)
+def _send_app_task_report(bot, instance, actor, uploads):
+    requirements = _instance_requirements(instance)
+    requirement_text = ''
+    if requirements:
+        requirement_text = '\n\n' + '\n'.join(
+            f'{index}. {html.escape(label[:60])}'
+            for index, label in enumerate(requirements, 1)
+        )
+    caption = (
+        '✅ <b>Задача выполнена</b>\n\n'
+        f'📍 {html.escape(str(instance["club"])[:60])}\n'
+        f'📋 {html.escape(str(instance["title"])[:80])}\n'
+        f'👤 {html.escape(str(actor["name"])[:80])} · '
+        f'{html.escape(str(actor["login"])[:64])}\n'
+        f'📎 Вложений: {len(uploads)}{requirement_text}'
+    )
+    files = []
+    if len(uploads) == 1:
+        upload = uploads[0]
+        media_file = io.BytesIO(upload['content'])
+        media_file.name = upload['filename']
+        method = bot.send_video if upload['media_type'] == 'video' else bot.send_photo
+        messages = [method(
+            CHATS['reports'], media_file, caption=caption, parse_mode='HTML',
+        )]
+    else:
+        media = []
+        for index, upload in enumerate(uploads):
+            media_file = io.BytesIO(upload['content'])
+            media_file.name = upload['filename']
+            files.append(media_file)
+            media_class = (
+                types.InputMediaVideo
+                if upload['media_type'] == 'video'
+                else types.InputMediaPhoto
+            )
+            media.append(media_class(
+                media_file,
+                caption=caption if index == 0 else None,
+                parse_mode='HTML' if index == 0 else None,
+            ))
+        messages = list(bot.send_media_group(CHATS['reports'], media=media))
+    stored = []
+    for upload, message in zip(uploads, messages):
+        if upload['media_type'] == 'video':
+            telegram_media = message.video
+        else:
+            telegram_media = message.photo[-1]
+        stored.append({
+            **upload,
+            'telegram_file_id': telegram_media.file_id,
+            'telegram_file_unique_id': telegram_media.file_unique_id,
+            'telegram_message_id': getattr(message, 'message_id', None),
+            'media_group_id': getattr(message, 'media_group_id', None),
+        })
+    return stored, [
+        str(getattr(message, 'message_id', '')) for message in messages
+    ]
+
+
+def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
+    actor = _app_actor(user)
+    if not bot or not CHATS.get('reports'):
+        raise RuntimeError('Чат отчётов временно недоступен')
+    with _task_app_completion_lock:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            instance = conn.execute(
+                'SELECT * FROM shift_task_instances WHERE id=?',
+                (instance_id,),
+            ).fetchone()
+            if not _task_accessible_to_actor(conn, instance, actor):
+                raise ValueError('Эта задача вам недоступна')
+            if instance['status'] not in ('pending', 'in_progress'):
+                raise ValueError('Задачу уже закрыл коллега')
+            required = max(1, len(_instance_requirements(instance)))
+            if not required <= len(uploads) <= MAX_ATTACHMENTS:
+                raise ValueError(
+                    f'Нужно добавить вложений: {required}. Сейчас: {len(uploads)}'
+                )
+            stored, message_ids = _send_app_task_report(
+                bot, instance, actor, uploads,
+            )
+            completed_at = _timestamp()
+            with conn:
+                updated = conn.execute(
+                    '''UPDATE shift_task_instances
+                       SET status='completed', completed_at=?,
+                           completed_by_login=?, completed_by_name=?,
+                           completed_by_chatid=?, report_chatid=?,
+                           report_message_ids=?
+                       WHERE id=? AND status IN ('pending', 'in_progress')''',
+                    (
+                        completed_at, actor['login'], actor['name'],
+                        actor['chatid'], str(CHATS['reports']),
+                        json.dumps(message_ids), instance_id,
+                    ),
+                ).rowcount
+                if not updated:
+                    raise ValueError('Задачу уже закрыл коллега')
+                conn.execute(
+                    '''DELETE FROM shift_task_media
+                       WHERE instance_id=? AND state='draft' ''',
+                    (instance_id,),
+                )
+                for media in stored:
+                    conn.execute(
+                        '''INSERT OR IGNORE INTO shift_task_media (
+                               instance_id, telegram_file_id,
+                               telegram_file_unique_id, telegram_message_id,
+                               media_group_id, media_type, file_size,
+                               submitted_by_chatid, submitted_by_login,
+                               created_at, state
+                           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted')''',
+                        (
+                            instance_id, media['telegram_file_id'],
+                            media['telegram_file_unique_id'],
+                            media['telegram_message_id'], media['media_group_id'],
+                            media['media_type'], media['file_size'],
+                            actor['chatid'], actor['login'], _timestamp(),
+                        ),
+                    )
+                conn.execute(
+                    'DELETE FROM shift_task_drafts WHERE instance_id=?',
+                    (instance_id,),
+                )
+            _update_task_cards(bot, conn, instance_id, 'completed')
+            return {'id': instance_id, 'status': 'completed'}
+        finally:
+            conn.close()
+
+
+def skip_app_task(user, instance_id, reason, bot, db_path=DB_PATH):
+    actor = _app_actor(user)
+    reason = str(reason or '').strip()
+    if not 3 <= len(reason) <= 500:
+        raise ValueError('Укажите причину пропуска — от 3 до 500 символов')
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        draft = conn.execute(
-            '''SELECT * FROM shift_task_drafts
-               WHERE chatid=? AND state='awaiting_skip_reason' ''',
-            (actor['chatid'],),
+        instance = conn.execute(
+            'SELECT * FROM shift_task_instances WHERE id=?',
+            (instance_id,),
         ).fetchone()
-        if not draft:
-            return False
-        reason = message.text.strip()
-        if len(reason) < 3:
-            bot.send_message(message.chat.id, 'Опишите причину чуть подробнее.')
-            return True
-        if len(reason) > 500:
-            bot.send_message(message.chat.id, 'Причина должна быть не длиннее 500 символов.')
-            return True
+        if not _task_accessible_to_actor(conn, instance, actor):
+            raise ValueError('Эта задача вам недоступна')
+        skipped_at = _timestamp()
         with conn:
+            updated = conn.execute(
+                '''UPDATE shift_task_instances
+                   SET status='skipped', skipped_at=?, skipped_by_login=?,
+                       skipped_by_name=?, skipped_by_chatid=?, skip_reason=?
+                   WHERE id=? AND status IN ('pending', 'in_progress')''',
+                (
+                    skipped_at, actor['login'], actor['name'], actor['chatid'],
+                    reason, instance_id,
+                ),
+            ).rowcount
+            if not updated:
+                raise ValueError('Задачу уже закрыл коллега')
             conn.execute(
-                '''UPDATE shift_task_drafts
-                   SET state='awaiting_skip_confirmation', skip_reason=?,
-                       updated_at=? WHERE chatid=?''',
-                (reason, _timestamp(), actor['chatid']),
+                '''DELETE FROM shift_task_media
+                   WHERE instance_id=? AND state='draft' ''',
+                (instance_id,),
             )
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(
-            'Да, пропустить',
-            callback_data=f'stask_skipconfirm_{draft["instance_id"]}',
-        ))
-        markup.add(types.InlineKeyboardButton(
-            'Нет, вернуться к отчёту',
-            callback_data=f'stask_skipcancel_{draft["instance_id"]}',
-        ))
-        bot.send_message(
-            message.chat.id,
-            f'⚠️ <b>Точно пропустить задачу?</b>\n\nПричина: '
-            f'{html.escape(reason)}\n\nПропуск будет записан и отправлен в REPORT.',
-            parse_mode='HTML',
-            reply_markup=markup,
-        )
-        return True
+            conn.execute(
+                'DELETE FROM shift_task_drafts WHERE instance_id=?',
+                (instance_id,),
+            )
+        if bot and CHATS.get('reports'):
+            try:
+                message = bot.send_message(
+                    CHATS['reports'],
+                    '⏭ <b>Задача пропущена</b>\n\n'
+                    f'📍 {html.escape(instance["club"])}\n'
+                    f'📋 {html.escape(instance["title"])}\n'
+                    f'👤 {html.escape(actor["name"])} · '
+                    f'{html.escape(actor["login"])}\n'
+                    f'💬 <b>Причина:</b> {html.escape(reason)}',
+                    parse_mode='HTML',
+                )
+            except Exception as error:
+                print(f'Не отправлен пропуск задачи из приложения: {error}')
+            else:
+                with conn:
+                    conn.execute(
+                        '''UPDATE shift_task_instances
+                           SET report_chatid=?, report_message_ids=? WHERE id=?''',
+                        (
+                            str(CHATS['reports']),
+                            json.dumps([str(getattr(message, 'message_id', ''))]),
+                            instance_id,
+                        ),
+                    )
+            _update_task_cards(bot, conn, instance_id, 'skipped')
+        return {'id': instance_id, 'status': 'skipped'}
     finally:
         conn.close()
 
 
-def _send_task_report(bot, instance, actor, media_rows):
     requirements = _instance_requirements(instance)
     requirement_text = ''
     if requirements:
@@ -1552,150 +1665,6 @@ def _skip_task(call, bot, instance_id):
         conn.close()
 
 
-def register_shift_task_handlers(bot):
-    @bot.message_handler(commands=['tasks'])
-    def tasks_command(message):
-        show_employee_tasks(message, bot)
-
-    @bot.message_handler(content_types=['photo', 'video'])
-    def task_media(message):
-        handle_task_media(message, bot)
-
-    @bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('stask_'))
-    def task_callback(call):
-        if not require_role(call, bot, ROLE_EMPLOYEE):
-            return
-        data = str(call.data or '')
-        if data == 'stask_list':
-            bot.answer_callback_query(call.id)
-            show_employee_tasks(call.message, bot)
-            return
-        match = re.fullmatch(
-            r'stask_(open|start|finish|skip|skipconfirm|skipcancel|cancel)_(\d+)',
-            data,
-        )
-        if not match:
-            bot.answer_callback_query(call.id, 'Кнопка устарела.', show_alert=True)
-            return
-        action, raw_id = match.groups()
-        instance_id = int(raw_id)
-        instance = _load_instance(instance_id)
-        if not _task_accessible(call, instance):
-            bot.answer_callback_query(call.id, 'Эта задача вам недоступна.', show_alert=True)
-            return
-        if action == 'open':
-            bot.answer_callback_query(call.id)
-            bot.send_message(
-                call.message.chat.id,
-                _task_card(instance),
-                parse_mode='HTML',
-                reply_markup=_task_markup(instance_id),
-            )
-            return
-        actor = _actor_snapshot(call)
-        if action == 'start':
-            if instance['status'] not in ('pending', 'in_progress'):
-                bot.answer_callback_query(call.id, 'Задача уже закрыта.', show_alert=True)
-                return
-            conn = sqlite3.connect(DB_PATH)
-            try:
-                with conn:
-                    conn.execute(
-                        '''INSERT INTO shift_task_drafts
-                           (chatid, instance_id, state, updated_at)
-                           VALUES (?, ?, 'collecting', ?)
-                           ON CONFLICT(chatid) DO UPDATE SET
-                               instance_id=excluded.instance_id,
-                               state='collecting', skip_reason=NULL,
-                               updated_at=excluded.updated_at''',
-                        (actor['chatid'], instance_id, _timestamp()),
-                    )
-                    conn.execute(
-                        '''UPDATE shift_task_instances
-                           SET status='in_progress', started_at=COALESCE(started_at, ?),
-                               started_by_login=COALESCE(started_by_login, ?)
-                           WHERE id=? AND status='pending' ''',
-                        (_timestamp(), actor['login'], instance_id),
-                    )
-                    count = _draft_media_count(conn, instance_id, actor['chatid'])
-            finally:
-                conn.close()
-            bot.answer_callback_query(call.id, 'Отчёт начат.')
-            bot.send_message(
-                call.message.chat.id,
-                '📎 Отправляйте сюда фото и видео по одному или альбомом. '
-                'Когда всё готово — нажмите кнопку ниже.',
-                reply_markup=_draft_markup(instance, count),
-            )
-            return
-        if action == 'finish':
-            _finish_task(call, bot, instance_id)
-            return
-        if action == 'skip':
-            conn = sqlite3.connect(DB_PATH)
-            try:
-                with conn:
-                    conn.execute(
-                        '''INSERT INTO shift_task_drafts
-                           (chatid, instance_id, state, updated_at)
-                           VALUES (?, ?, 'awaiting_skip_reason', ?)
-                           ON CONFLICT(chatid) DO UPDATE SET
-                               instance_id=excluded.instance_id,
-                               state='awaiting_skip_reason', skip_reason=NULL,
-                               updated_at=excluded.updated_at''',
-                        (actor['chatid'], instance_id, _timestamp()),
-                    )
-            finally:
-                conn.close()
-            bot.answer_callback_query(call.id)
-            bot.send_message(
-                call.message.chat.id,
-                'Напишите причину пропуска одним сообщением. Она обязательна.',
-            )
-            return
-        if action == 'skipconfirm':
-            _skip_task(call, bot, instance_id)
-            return
-        if action == 'skipcancel':
-            conn = sqlite3.connect(DB_PATH)
-            try:
-                with conn:
-                    count = _draft_media_count(conn, instance_id, actor['chatid'])
-                    conn.execute(
-                        '''UPDATE shift_task_drafts
-                           SET state='collecting', skip_reason=NULL, updated_at=?
-                           WHERE chatid=?''',
-                        (_timestamp(), actor['chatid']),
-                    )
-            finally:
-                conn.close()
-            bot.answer_callback_query(call.id, 'Возвращаемся к отчёту.')
-            bot.send_message(
-                call.message.chat.id,
-                'Продолжайте отправлять фото или видео.',
-                reply_markup=_draft_markup(instance, count),
-            )
-            return
-        if action == 'cancel':
-            conn = sqlite3.connect(DB_PATH)
-            try:
-                with conn:
-                    conn.execute(
-                        '''DELETE FROM shift_task_media
-                           WHERE instance_id=? AND submitted_by_chatid=?
-                             AND state='draft' ''',
-                        (instance_id, actor['chatid']),
-                    )
-                    conn.execute(
-                        'DELETE FROM shift_task_drafts WHERE chatid=?',
-                        (actor['chatid'],),
-                    )
-            finally:
-                conn.close()
-            bot.answer_callback_query(call.id, 'Черновик удалён.')
-            bot.send_message(call.message.chat.id, 'Черновик отчёта удалён. Задача осталась активной.')
-
-
 def _admin_task_days_keyboard(selected=''):
     markup = types.InlineKeyboardMarkup()
     names = {'0': 'Пн', '1': 'Вт', '2': 'Ср', '3': 'Чт', '4': 'Пт', '5': 'Сб', '6': 'Вс'}
@@ -1757,6 +1726,45 @@ def start_task_creation(message, bot):
     bot.register_next_step_handler(sent, _admin_task_title, bot)
 
 
+def start_task_conversion(message, bot, broadcast_id):
+    if not require_role(message, bot, ROLE_MANAGER):
+        return
+    initialize_shift_tasks_schema()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            '''SELECT * FROM broadcasts WHERE id=?
+               AND COALESCE(kind, 'information')=?''',
+            (broadcast_id, KIND_INFORMATION),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        bot.send_message(message.chat.id, 'Инфо-рассылка не найдена или уже преобразована.')
+        return
+    actor = _actor_snapshot(message)
+    _task_admin_drafts[message.chat.id] = {
+        'conversion_broadcast_id': int(broadcast_id),
+        'clubs': [],
+        'instructions': row['text'] or '',
+        'time': row['time'],
+        'freq_type': row['freq_type'],
+        'freq_days': row['freq_days'] or '',
+        'status': int(row['status'] or 0),
+        'created_by': actor['login'] if actor else None,
+    }
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add('Вернуться')
+    sent = bot.send_message(
+        message.chat.id,
+        f'<b>Рассылка #{broadcast_id} → задача</b>\n\n'
+        'Время, дни и текст сохранятся. Введите короткое название задачи:',
+        parse_mode='HTML', reply_markup=markup,
+    )
+    bot.register_next_step_handler(sent, _admin_task_title, bot)
+
+
 def _admin_abort(message, bot):
     _task_admin_drafts.pop(message.chat.id, None)
     from admin_panel import broadcast_menu
@@ -1774,7 +1782,15 @@ def _admin_task_title(message, bot):
         sent = bot.send_message(message.chat.id, 'Название должно содержать от 3 до 80 символов.')
         bot.register_next_step_handler(sent, _admin_task_title, bot)
         return
-    _task_admin_drafts[message.chat.id]['title'] = title
+    draft = _task_admin_drafts[message.chat.id]
+    draft['title'] = title
+    if draft.get('conversion_broadcast_id'):
+        bot.send_message(
+            message.chat.id,
+            'Выберите клубы, в которых появится задача:',
+            reply_markup=_admin_clubs_keyboard(),
+        )
+        return
     sent = bot.send_message(
         message.chat.id,
         'Опишите, что нужно сделать. Упоминания клубов, срок и просьбу прислать отчёт писать не нужно — бот добавит это сам.',
@@ -1844,10 +1860,26 @@ def _admin_task_due_time(message, bot):
         bot.register_next_step_handler(sent, _admin_task_due_time, bot)
         return
     draft['due_time'] = due
+    if draft.get('conversion_broadcast_id'):
+        _prompt_task_announcement(message.chat.id, bot)
+        return
     bot.send_message(
         message.chat.id,
         'Выберите дни выполнения:',
         reply_markup=_admin_task_days_keyboard(),
+    )
+
+
+def _prompt_task_announcement(chat_id, bot):
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton('Да', callback_data='stadmin_announce_yes'),
+        types.InlineKeyboardButton('Нет', callback_data='stadmin_announce_no'),
+    )
+    bot.send_message(
+        chat_id,
+        'Дублировать короткое объявление о задаче в рабочую группу?',
+        reply_markup=markup,
     )
 
 
@@ -1859,27 +1891,55 @@ def _save_task_template(chat_id, bot, announce_main):
     conn = sqlite3.connect(DB_PATH)
     try:
         with conn:
-            cursor = conn.execute(
-                '''INSERT INTO broadcasts (
-                       text, photo, time, freq_type, freq_days, status, kind,
-                       title, clubs_json, due_time, announce_main,
-                       task_category, created_by, created_at, updated_at
-                   ) VALUES (?, 'None', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (
-                    draft['instructions'], draft['time'], draft['freq_type'],
-                    draft.get('freq_days', ''), KIND_TASK, draft['title'],
-                    json.dumps(draft['clubs'], ensure_ascii=False),
-                    draft['due_time'], int(announce_main),
-                    CATEGORY_GENERAL, draft.get('created_by'),
-                    _timestamp(), _timestamp(),
-                ),
-            )
-            template_id = cursor.lastrowid
+            conversion_id = draft.get('conversion_broadcast_id')
+            if conversion_id:
+                updated = conn.execute(
+                    '''UPDATE broadcasts
+                       SET kind=?, title=?, clubs_json=?, due_time=?,
+                           announce_main=?, task_category=?, created_by=?,
+                           updated_at=?
+                       WHERE id=? AND COALESCE(kind, 'information')=?''',
+                    (
+                        KIND_TASK, draft['title'],
+                        json.dumps(draft['clubs'], ensure_ascii=False),
+                        draft['due_time'], int(announce_main), CATEGORY_GENERAL,
+                        draft.get('created_by'), _timestamp(), conversion_id,
+                        KIND_INFORMATION,
+                    ),
+                ).rowcount
+                if not updated:
+                    bot.send_message(chat_id, 'Рассылка уже изменена. Обновите список.')
+                    return
+                template_id = int(conversion_id)
+            else:
+                cursor = conn.execute(
+                    '''INSERT INTO broadcasts (
+                           text, photo, time, freq_type, freq_days, status, kind,
+                           title, clubs_json, due_time, announce_main,
+                           task_category, created_by, created_at, updated_at
+                       ) VALUES (?, 'None', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        draft['instructions'], draft['time'], draft['freq_type'],
+                        draft.get('freq_days', ''), KIND_TASK, draft['title'],
+                        json.dumps(draft['clubs'], ensure_ascii=False),
+                        draft['due_time'], int(announce_main),
+                        CATEGORY_GENERAL, draft.get('created_by'),
+                        _timestamp(), _timestamp(),
+                    ),
+                )
+                template_id = cursor.lastrowid
     finally:
         conn.close()
+    active_note = (
+        'Сотрудники получат её по расписанию.'
+        if not draft.get('conversion_broadcast_id') or draft.get('status', 1)
+        else 'Рассылка была на паузе, поэтому задача тоже сохранена на паузе.'
+    )
     bot.send_message(
         chat_id,
-        f'✅ Задача #{template_id} создана. Сотрудники получат её по расписанию.',
+        f'✅ Задача #{template_id} '
+        f'{"создана из рассылки" if draft.get("conversion_broadcast_id") else "создана"}. '
+        f'{active_note}',
         reply_markup=types.ReplyKeyboardRemove(),
     )
 
@@ -2236,6 +2296,14 @@ def register_shift_task_admin_handlers(bot):
                 bot.answer_callback_query(call.id, 'Клубы обновлены.')
                 _task_template_card(call.message, template_id, bot)
                 return
+            if draft.get('conversion_broadcast_id'):
+                bot.answer_callback_query(call.id)
+                sent = bot.send_message(
+                    chat_id,
+                    f'Рассылка появляется в {draft["time"]}. До какого времени задача должна быть выполнена?',
+                )
+                bot.register_next_step_handler(sent, _admin_task_due_time, bot)
+                return
             bot.answer_callback_query(call.id)
             sent = bot.send_message(chat_id, 'Во сколько показать задачу сотрудникам? Например: 12:00')
             bot.register_next_step_handler(sent, _admin_task_start_time, bot)
@@ -2280,13 +2348,8 @@ def register_shift_task_admin_handlers(bot):
                 return
             actor = _actor_snapshot(call)
             draft['created_by'] = actor['login'] if actor else None
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton('Да', callback_data='stadmin_announce_yes'),
-                types.InlineKeyboardButton('Нет', callback_data='stadmin_announce_no'),
-            )
             bot.answer_callback_query(call.id)
-            bot.send_message(chat_id, 'Дублировать короткое объявление о задаче в рабочую группу?', reply_markup=markup)
+            _prompt_task_announcement(chat_id, bot)
             return
         if data.startswith('stadmin_announce_'):
             bot.answer_callback_query(call.id)

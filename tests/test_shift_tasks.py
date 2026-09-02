@@ -21,18 +21,46 @@ class FakeBot:
         return message
 
     def send_photo(self, chat_id, photo, **kwargs):
-        message = SimpleNamespace(message_id=len(self.messages) + 1)
+        index = len(self.messages) + 1
+        message = SimpleNamespace(
+            message_id=index,
+            media_group_id=None,
+            photo=[SimpleNamespace(
+                file_id=f'photo-{index}', file_unique_id=f'photo-unique-{index}',
+            )],
+        )
         self.messages.append(('photo', str(chat_id), photo, kwargs))
         return message
 
     def send_video(self, chat_id, video, **kwargs):
-        message = SimpleNamespace(message_id=len(self.messages) + 1)
+        index = len(self.messages) + 1
+        message = SimpleNamespace(
+            message_id=index,
+            media_group_id=None,
+            video=SimpleNamespace(
+                file_id=f'video-{index}', file_unique_id=f'video-unique-{index}',
+            ),
+        )
         self.messages.append(('video', str(chat_id), video, kwargs))
         return message
 
     def send_media_group(self, chat_id, media):
         self.messages.append(('album', str(chat_id), media, {}))
-        return [SimpleNamespace(message_id=100 + index) for index in range(len(media))]
+        return [
+            SimpleNamespace(
+                message_id=100 + index,
+                media_group_id='album-result',
+                photo=[SimpleNamespace(
+                    file_id=f'album-photo-{index}',
+                    file_unique_id=f'album-photo-unique-{index}',
+                )],
+                video=SimpleNamespace(
+                    file_id=f'album-video-{index}',
+                    file_unique_id=f'album-video-unique-{index}',
+                ),
+            )
+            for index in range(len(media))
+        ]
 
     def edit_message_reply_markup(self, **_kwargs):
         return None
@@ -198,6 +226,59 @@ class ShiftTasksTest(unittest.TestCase):
         progress.assert_called_once()
         shift_tasks._task_media_group_timers.clear()
 
+    def test_schema_discards_legacy_bot_drafts_and_reopens_instances(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        shift_tasks.ensure_task_instances(
+            '2026-09-01', db_path=self.db_path,
+            now=datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),
+        )
+        conn = sqlite3.connect(self.db_path)
+        instance_id = conn.execute(
+            '''SELECT id FROM shift_task_instances
+               WHERE occurrence_date='2026-09-01' ORDER BY id LIMIT 1'''
+        ).fetchone()[0]
+        with conn:
+            conn.execute(
+                '''UPDATE shift_task_instances
+                   SET status='in_progress', started_at='2026-09-01 12:05:00',
+                       started_by_login='@employee' WHERE id=?''',
+                (instance_id,),
+            )
+            conn.execute(
+                '''INSERT INTO shift_task_drafts
+                   (chatid, instance_id, state, updated_at)
+                   VALUES ('101', ?, 'collecting', '2026-09-01 12:05:00')''',
+                (instance_id,),
+            )
+            conn.execute(
+                '''INSERT INTO shift_task_media (
+                       instance_id, telegram_file_id, telegram_file_unique_id,
+                       media_type, submitted_by_chatid, created_at, state
+                   ) VALUES (?, 'photo-id', 'photo-unique', 'photo', '101',
+                             '2026-09-01 12:05:00', 'draft')''',
+                (instance_id,),
+            )
+        conn.close()
+
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        instance = conn.execute(
+            '''SELECT status, started_at, started_by_login
+               FROM shift_task_instances WHERE id=?''',
+            (instance_id,),
+        ).fetchone()
+        draft_count = conn.execute(
+            'SELECT COUNT(*) FROM shift_task_drafts'
+        ).fetchone()[0]
+        media_count = conn.execute(
+            "SELECT COUNT(*) FROM shift_task_media WHERE state='draft'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(instance, ('pending', None, None))
+        self.assertEqual(draft_count, 0)
+        self.assertEqual(media_count, 0)
+
     def test_scheduler_creates_shared_club_task_and_does_not_duplicate_notifications(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)
@@ -358,6 +439,122 @@ class ShiftTasksTest(unittest.TestCase):
             [item.media for item in album[2]],
             [f'telegram-photo-id-{index}' for index in range(7, 0, -1)],
         )
+
+    def test_app_lists_starts_and_completes_existing_task_instance(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.execute(
+                '''INSERT INTO users
+                   (ID, login, first_name, second_name, nick_name, status, chatid)
+                   VALUES (1, '@employee', 'Иван', 'Иванов', 'Иван', 0, '101')'''
+            )
+            conn.execute(
+                '''INSERT INTO shifts
+                   (dt_shift, club, dur, source, shift_login, shift_start, shift_end)
+                   VALUES ('2026-09-01', 'Ленинский', 10, 'omg_shift',
+                           '@employee', '10:00', '20:00')'''
+            )
+        conn.close()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        actor = {
+            'chatid': '101', 'login': '@employee', 'nick_name': 'Иван',
+            'status': 0,
+        }
+        tasks = shift_tasks.app_task_list(
+            actor, db_path=self.db_path, now=now,
+        )
+        self.assertTrue(tasks)
+        task = shift_tasks.start_app_task(
+            actor, tasks[0]['id'], db_path=self.db_path,
+        )
+        self.assertEqual(task['status'], 'in_progress')
+
+        bot = FakeBot()
+        uploads = [{
+            'content': b'photo', 'filename': 'report.jpg',
+            'media_type': 'photo', 'file_size': 5,
+        }] * task['required_attachments']
+        with patch.object(shift_tasks, 'CHATS', {
+            'reports': '-1001', 'main_group': '-1002',
+        }):
+            result = shift_tasks.complete_app_task(
+                actor, task['id'], uploads, bot, db_path=self.db_path,
+            )
+
+        self.assertEqual(result['status'], 'completed')
+        conn = sqlite3.connect(self.db_path)
+        stored = conn.execute(
+            '''SELECT status, completed_by_login, report_chatid
+               FROM shift_task_instances WHERE id=?''',
+            (task['id'],),
+        ).fetchone()
+        media_count = conn.execute(
+            '''SELECT COUNT(*) FROM shift_task_media
+               WHERE instance_id=? AND state='submitted' ''',
+            (task['id'],),
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(stored, ('completed', '@employee', '-1001'))
+        self.assertEqual(media_count, task['required_attachments'])
+
+    def test_information_broadcast_can_be_converted_without_copy(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            cursor = conn.execute(
+                '''INSERT INTO broadcasts
+                   (text, photo, time, freq_type, freq_days, status, kind)
+                   VALUES ('Проверить склад', 'photo-id', '12:00',
+                           'custom', '13', 1, 'information')'''
+            )
+            broadcast_id = cursor.lastrowid
+        conn.close()
+        shift_tasks._task_admin_drafts[101] = {
+            'conversion_broadcast_id': broadcast_id,
+            'instructions': 'Проверить склад',
+            'time': '12:00', 'freq_type': 'custom', 'freq_days': '13',
+            'title': 'Проверка склада', 'clubs': ['Ленинский'],
+            'due_time': '18:00', 'created_by': '@manager',
+        }
+        with patch.object(shift_tasks, 'DB_PATH', self.db_path):
+            shift_tasks._save_task_template(101, FakeBot(), False)
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            '''SELECT id, kind, text, photo, time, freq_type, freq_days,
+                      title, clubs_json, due_time
+               FROM broadcasts WHERE id=?''',
+            (broadcast_id,),
+        ).fetchone()
+        count = conn.execute('SELECT COUNT(*) FROM broadcasts').fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 2)  # системная задача чистоты + эта запись
+        self.assertEqual(row[0], broadcast_id)
+        self.assertEqual(row[1], shift_tasks.KIND_TASK)
+        self.assertEqual(row[2:7], (
+            'Проверить склад', 'photo-id', '12:00', 'custom', '13',
+        ))
+        self.assertEqual(row[7], 'Проверка склада')
+        self.assertEqual(json.loads(row[8]), ['Ленинский'])
+        self.assertEqual(row[9], '18:00')
+
+    def test_task_notification_opens_shift_tasks_webapp(self):
+        with (
+            patch.object(shift_tasks, 'KPI_WEBAPP_URL', 'https://bot.omg-vr.ru/'),
+            patch('builtins.open', side_effect=OSError),
+        ):
+            markup = shift_tasks._task_markup(17)
+        button = markup.keyboard[0][0]
+        self.assertEqual(button.web_app.url, 'https://bot.omg-vr.ru/shift/tasks?task=17')
+
+    def test_task_notification_has_no_bot_execution_fallback(self):
+        with (
+            patch.object(shift_tasks, 'KPI_WEBAPP_URL', ''),
+            patch('builtins.open', side_effect=OSError),
+        ):
+            markup = shift_tasks._task_markup(17)
+        self.assertIsNone(markup)
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ const scheduleState = { date: null, view: 'mine', data: null };
 const schedulePanel = document.querySelector('#shiftSchedule');
 const consumablesLink = document.querySelector('#shiftConsumablesLink');
 const consumablesLinkStatus = document.querySelector('#consumablesLinkStatus');
+const shiftTasksStatus = document.querySelector('#shiftTasksStatus');
 let employeeDashboardData = null;
 let activeTodayDate = null;
 let shiftReportAvailable = false;
@@ -204,6 +205,18 @@ async function loadConsumablesShortcut(club = null) {
   consumablesLinkStatus.classList.toggle('warning', low > 0);
 }
 
+async function loadTaskShortcut() {
+  const payload = await api('/api/shift/tasks?scope=active');
+  const active = Number(payload.summary?.active || 0);
+  const overdue = Number(payload.summary?.overdue || 0);
+  shiftTasksStatus.textContent = overdue
+    ? `Просрочено: ${overdue} →`
+    : active
+      ? `В работе: ${active} →`
+      : 'Всё готово →';
+  shiftTasksStatus.classList.toggle('warning', overdue > 0);
+}
+
 function parseLocalDate(value) {
   const [year, month, day] = value.split('-').map(Number);
   return new Date(year, month - 1, day);
@@ -351,6 +364,9 @@ async function loadShift() {
   renderEmployeeDashboard(payload.employee_dashboard);
   shiftActions.classList.toggle('manager', payload.can_manage);
   shiftActions.hidden = false;
+  loadTaskShortcut().catch(() => {
+    shiftTasksStatus.textContent = 'Открыть →';
+  });
 }
 
 document.querySelector('#scheduleTabs').addEventListener('click', (event) => {

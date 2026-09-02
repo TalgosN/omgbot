@@ -1260,6 +1260,10 @@ def bc_view_card(message, b_id, bot):
     )
     # Добавили новую кнопку изменения частоты:
     markup.add(types.InlineKeyboardButton(text="🔄 Изменить частоту", callback_data=f"bc_editfreq_{b_id}"))
+    markup.add(types.InlineKeyboardButton(
+        text="✅ Преобразовать в задачу",
+        callback_data=f"bc_convert_{b_id}",
+    ))
     markup.add(types.InlineKeyboardButton(text="⬅️ Вернуться к списку", callback_data=f"bc_back_list"))
 
     if b['photo'] and b['photo'] != "None":
@@ -1363,6 +1367,13 @@ def register_broadcast_callbacks(bot):
                     "Выберите новую частоту или дни недели для этой рассылки:", 
                     reply_markup=generate_edit_days_keyboard(b_id, "")
                 )
+                return
+
+            if data.startswith("convert_"):
+                b_id = int(data.split("_")[1])
+                bot.delete_message(call.message.chat.id, call.message.id)
+                from shift_tasks import start_task_conversion
+                start_task_conversion(call.message, bot, b_id)
                 return
             
         except Exception as e:

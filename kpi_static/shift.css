@@ -21,6 +21,7 @@
 .shift-action { position:relative; display:grid; min-height:78px; padding:13px 14px; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:12px; overflow:hidden; border:1px solid var(--line); border-radius:18px; color:var(--ink); text-decoration:none; background:linear-gradient(110deg,rgba(77,224,199,.07),rgba(3,27,34,.5)); box-shadow:0 10px 28px rgba(0,0,0,.12); }
 .shift-action[hidden] { display:none !important; }
 .shift-action.primary { --tool-color:#9bbcff; }
+.shift-action.tasks { --tool-color:#ffd477; }
 .shift-action.management { --tool-color:#8ef3bd; }
 .shift-action.taskboard { --tool-color:#d6a4ff; }
 .shift-action.consumables { --tool-color:#83e7db; }

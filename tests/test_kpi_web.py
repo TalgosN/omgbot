@@ -101,7 +101,7 @@ class KpiWebTest(unittest.TestCase):
     def test_module_pages_load_shared_swipe_navigation(self):
         for path in (
             '/kpi', '/problems', '/records', '/shift',
-            '/shift/consumables', '/shift-config',
+            '/shift/consumables', '/shift/tasks', '/shift-config',
         ):
             response = self.client.get(path)
             try:
@@ -143,6 +143,50 @@ class KpiWebTest(unittest.TestCase):
             )
         finally:
             home.close()
+
+    def test_shift_tasks_api_returns_shared_task_statuses(self):
+        tasks = [{
+            'id': 7, 'club': 'Ленинский', 'status': 'in_progress',
+            'overdue': True,
+        }]
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, 'app_task_list', return_value=tasks),
+        ):
+            response = self.client.get(
+                '/api/shift/tasks?scope=active', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['tasks'], tasks)
+        self.assertEqual(payload['summary']['active'], 1)
+        self.assertEqual(payload['summary']['overdue'], 1)
+        self.assertTrue(payload['can_manage'])
+
+    def test_shift_task_completion_accepts_app_media(self):
+        bot = Mock()
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(
+                kpi_web, 'complete_app_task',
+                return_value={'id': 7, 'status': 'completed'},
+            ) as complete,
+        ):
+            response = self.client.post(
+                '/api/shift/tasks/7/complete',
+                data={'media': (BytesIO(b'photo'), 'report.jpg', 'image/jpeg')},
+                headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['status'], 'completed')
+        uploads = complete.call_args.args[2]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0]['media_type'], 'photo')
 
     def test_records_api_is_available_to_every_active_role(self):
         payload = {

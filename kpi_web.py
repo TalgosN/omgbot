@@ -96,6 +96,12 @@ from shift_config_store import (
     rollback_version,
     save_editor_config,
 )
+from shift_tasks import (
+    app_task_list,
+    complete_app_task,
+    skip_app_task,
+    start_app_task,
+)
 from task_notifications import (
     BOT_TASK_TYPE,
     GENERAL_TASK_TYPE,
@@ -2230,6 +2236,49 @@ def _consumable_integer(value, field_name):
     return int(raw)
 
 
+def _shift_task_uploads():
+    uploads = request.files.getlist('media')
+    if not uploads:
+        raise ValueError('Добавьте фото или видео отчёта')
+    if len(uploads) > 10:
+        raise ValueError('Можно добавить не больше 10 вложений')
+    result = []
+    total_size = 0
+    image_types = {'image/jpeg', 'image/png', 'image/webp'}
+    video_types = {'video/mp4', 'video/quicktime', 'video/webm'}
+    for index, upload in enumerate(uploads, 1):
+        mimetype = str(upload.mimetype or '').lower().split(';', 1)[0]
+        if mimetype in image_types:
+            media_type = 'photo'
+            maximum = 6 * 1024 * 1024
+        elif mimetype in video_types:
+            media_type = 'video'
+            maximum = 20 * 1024 * 1024
+        else:
+            raise ValueError(
+                f'Вложение {index}: поддерживаются JPEG, PNG, WebP, MP4, MOV и WebM'
+            )
+        content = upload.read(maximum + 1)
+        if not content:
+            raise ValueError(f'Вложение {index} не удалось прочитать')
+        if len(content) > maximum:
+            limit = 20 if media_type == 'video' else 6
+            raise ValueError(f'Вложение {index} должно быть меньше {limit} МБ')
+        total_size += len(content)
+        if total_size > 45 * 1024 * 1024:
+            raise ValueError('Общий размер вложений должен быть меньше 45 МБ')
+        result.append({
+            'content': content,
+            'filename': re.sub(
+                r'[^a-zA-Z0-9._-]+', '-',
+                str(upload.filename or f'task-{index}'),
+            )[:100],
+            'media_type': media_type,
+            'file_size': len(content),
+        })
+    return result
+
+
 def _sync_consumables_after_change():
     try:
         from consumables import sync_consumables_to_sheets
@@ -3334,6 +3383,11 @@ def shift_consumables_index():
     return send_from_directory(STATIC_DIR, 'shift_consumables.html')
 
 
+@app.get('/shift/tasks')
+def shift_tasks_index():
+    return send_from_directory(STATIC_DIR, 'shift_tasks.html')
+
+
 @app.get('/shift-report')
 @app.get('/shift-test')
 def shift_test_index():
@@ -3514,6 +3568,63 @@ def api_shift_overview():
 def api_shift_schedule():
     return jsonify(_shift_week_payload(
         _actor_login(), request.args.get('date'),
+    ))
+
+
+@app.get('/api/shift/tasks')
+@require_user
+def api_shift_tasks():
+    scope = str(request.args.get('scope') or 'active').strip().lower()
+    if scope not in {'active', 'history'}:
+        raise ValueError('Неизвестный раздел задач')
+    tasks = app_task_list(g.kpi_user, scope=scope, db_path=DB_PATH)
+    club = str(request.args.get('club') or '').strip()
+    if club and int(g.kpi_user['status']) >= ROLE_MANAGER:
+        tasks = [task for task in tasks if task['club'] == club]
+    return jsonify({
+        'scope': scope,
+        'can_manage': int(g.kpi_user['status']) >= ROLE_MANAGER,
+        'tasks': tasks,
+        'clubs': sorted({task['club'] for task in tasks}),
+        'summary': {
+            'active': sum(
+                task['status'] in {'pending', 'in_progress'}
+                for task in tasks
+            ),
+            'overdue': sum(task['overdue'] for task in tasks),
+            'completed': sum(task['status'] == 'completed' for task in tasks),
+            'skipped': sum(task['status'] == 'skipped' for task in tasks),
+        },
+    })
+
+
+@app.post('/api/shift/tasks/<int:instance_id>/start')
+@require_user
+def api_shift_task_start(instance_id):
+    return jsonify(start_app_task(g.kpi_user, instance_id, db_path=DB_PATH))
+
+
+@app.post('/api/shift/tasks/<int:instance_id>/complete')
+@require_user
+def api_shift_task_complete(instance_id):
+    bot = _notification_bot()
+    try:
+        result = complete_app_task(
+            g.kpi_user, instance_id, _shift_task_uploads(), bot,
+            db_path=DB_PATH,
+        )
+    except RuntimeError as error:
+        return jsonify({'error': str(error)}), 502
+    return jsonify(result)
+
+
+@app.post('/api/shift/tasks/<int:instance_id>/skip')
+@require_user
+def api_shift_task_skip(instance_id):
+    payload = request.get_json(silent=True) or {}
+    return jsonify(skip_app_task(
+        g.kpi_user, instance_id, payload.get('reason'),
+        _notification_bot(), db_path=DB_PATH,
     ))
 
 
