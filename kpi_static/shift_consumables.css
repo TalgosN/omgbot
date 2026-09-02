@@ -68,3 +68,12 @@
   .consumable-card { grid-template-columns:72px minmax(0,1fr); }
   .consumable-photo { width:72px; height:72px; }
 }
+
+/* Consumables keep cyan as a local accent while cards stay visually separate. */
+.consumables-overview article { border-color:rgba(65,218,224,.2); background:radial-gradient(circle at 100% 0,rgba(65,218,224,.09),transparent 10rem),linear-gradient(145deg,rgba(10,43,52,.98),rgba(4,25,33,.98)); box-shadow:0 16px 40px rgba(0,0,0,.25),inset 0 1px rgba(255,255,255,.02); }
+.consumables-workspace { border-color:rgba(65,218,224,.24); background:radial-gradient(circle at 100% 0,rgba(65,218,224,.11),transparent 20rem),linear-gradient(145deg,rgba(10,43,52,.98),rgba(4,25,33,.99)); box-shadow:0 22px 58px rgba(0,0,0,.32),inset 0 1px rgba(255,255,255,.025); }
+.consumable-card { border-color:var(--line); background:linear-gradient(145deg,rgba(7,32,40,.98),rgba(3,20,27,.99)); box-shadow:0 12px 28px rgba(0,0,0,.2),inset 0 1px rgba(255,255,255,.02); }
+.consumable-card.low { border-color:rgba(255,193,77,.3); background:radial-gradient(circle at 0 0,rgba(255,193,77,.1),transparent 11rem),linear-gradient(145deg,rgba(7,32,40,.98),rgba(3,20,27,.99)); }
+.consumable-photo { border-color:rgba(65,218,224,.22); background:linear-gradient(145deg,rgba(65,218,224,.1),var(--card-3)); }
+.consumable-modal-card { border-color:var(--line-strong); background:linear-gradient(160deg,#0b333d,#041920); }
+.modal-product,.consumable-history-head,.consumable-history-list > div { background:var(--card-3); }
