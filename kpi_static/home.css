@@ -103,7 +103,8 @@ button, input, select, textarea { font: inherit; }
 .kpi-module { background: linear-gradient(145deg, #7046d9, #3e238d); }
 .problem-module { background: linear-gradient(145deg, #a24de1, #6e2ea7); }
 .records-module { background:radial-gradient(circle at 14% 0,rgba(255,205,85,.34),transparent 9rem),radial-gradient(circle at 92% 12%,rgba(255,235,181,.24),transparent 8rem),linear-gradient(145deg,#7651a3,#3c2858); }
-.shift-module { background: linear-gradient(145deg, #21a99b, #106c68); }
+.shift-module { border-color:rgba(199,169,255,.3); background:radial-gradient(circle at 92% 0,rgba(39,203,184,.18),transparent 10rem),linear-gradient(145deg,#493361,#21152f); box-shadow:0 14px 30px rgba(50,32,94,.24); }
+.shift-module .module-icon { border-color:rgba(39,203,184,.34); color:#72e4d7; background:rgba(39,203,184,.1); }
 .management-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .management-grid .summary-tile { padding: 13px 10px; box-shadow: none; }
 .management-grid .summary-tile strong { font-size: 20px; }

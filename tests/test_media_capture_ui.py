@@ -36,7 +36,7 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="batchReplaceInput"', html)
         self.assertIn('id="photoProcessing"', html)
         self.assertIn('id="cameraSavingText"', html)
-        self.assertIn('/static/shift_test.css?v=20260902-2', html)
+        self.assertIn('/static/shift_test.css?v=20260902-3', html)
         self.assertIn('/static/shift_test.js?v=20260902-1', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
