@@ -105,7 +105,11 @@ def hello(chatid, bot):
     else:
         bot.send_message(chatid, f'Привет, {user["nick_name"]}!')
         
-        markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        markup = telebot.types.ReplyKeyboardMarkup(
+            row_width=2,
+            resize_keyboard=True,
+            is_persistent=True,
+        )
         buttons = [
             _main_menu_button(text)
             for text in funclist[user['status']]
@@ -117,6 +121,15 @@ def hello(chatid, bot):
         markup.add(*buttons)
 
         bot.send_message(chatid, 'Что вы хотите сделать? 👀', reply_markup=markup)
+
+
+def restore_main_menu_for_private_text(message, bot):
+    if message.chat.id <= 0:
+        return False
+    if not require_role(message, bot, ROLE_EMPLOYEE, notify=False):
+        return False
+    hello(message.chat.id, bot)
+    return True
 
 def func(message, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):

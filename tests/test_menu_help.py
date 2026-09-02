@@ -22,6 +22,7 @@ class WebAppInfo:
 class Markup:
     def __init__(self, **kwargs):
         self.rows = []
+        self.kwargs = kwargs
 
     def add(self, *buttons):
         self.rows.append(list(buttons))
@@ -101,6 +102,38 @@ class HelpMenuTest(unittest.TestCase):
         self.menu.hello(123, bot)
 
         bot.register_next_step_handler.assert_not_called()
+        markup = bot.send_message.call_args.kwargs['reply_markup']
+        self.assertTrue(markup.kwargs['is_persistent'])
+
+    def test_private_text_restores_main_menu_for_authorized_employee(self):
+        bot = Mock()
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+
+        with patch.object(
+            self.menu,
+            'require_role',
+            return_value={'status': 0},
+        ) as require_role, patch.object(self.menu, 'hello') as hello:
+            restored = self.menu.restore_main_menu_for_private_text(message, bot)
+
+        self.assertTrue(restored)
+        require_role.assert_called_once_with(
+            message,
+            bot,
+            self.menu.ROLE_EMPLOYEE,
+            notify=False,
+        )
+        hello.assert_called_once_with(123, bot)
+
+    def test_group_text_never_restores_private_main_menu(self):
+        bot = Mock()
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=-100123))
+
+        with patch.object(self.menu, 'hello') as hello:
+            restored = self.menu.restore_main_menu_for_private_text(message, bot)
+
+        self.assertFalse(restored)
+        hello.assert_not_called()
 
     def test_problem_reply_button_opens_authorized_inline_app(self):
         bot = Mock()

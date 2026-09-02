@@ -64,22 +64,53 @@ function renderTasks() {
   const visible = state.club
     ? state.tasks.filter((task) => task.club === state.club)
     : state.tasks;
+  const groups = new Map();
+  visible.forEach((task) => {
+    const key = state.scope === 'history'
+      ? `${task.date}:${task.template_id}`
+      : String(task.template_id);
+    if (!groups.has(key)) groups.set(key, { key, tasks: [], title: task.title, date: task.date });
+    groups.get(key).tasks.push(task);
+  });
   document.querySelector('#taskList').innerHTML = visible.length
-    ? visible.map((task) => {
-      const itemStatus = status(task);
-      const actor = task.completed_by_name || task.skipped_by_name || task.started_by_login;
-      const foot = task.status === 'completed'
-        ? `${shortDate(task.completed_at)} · ${clock(task.completed_at)}`
-        : task.status === 'skipped'
-          ? `${shortDate(task.skipped_at)} · ${clock(task.skipped_at)}`
-          : `до ${clock(task.due_at)}`;
-      return `
-        <button class="task-card ${itemStatus.className}" type="button" data-task="${task.id}">
-          <div class="task-card-head"><span>${escapeHtml(task.club)}</span><b>${itemStatus.label}</b></div>
-          <h2>${escapeHtml(task.title)}</h2>
-          <p>${escapeHtml(task.instructions || 'Откройте карточку, чтобы посмотреть задание')}</p>
-          <div class="task-card-foot"><small>${shortDate(task.date)} · ${foot}</small><strong>${actor ? escapeHtml(actor) : 'Открыть →'}</strong></div>
+    ? [...groups.values()].map((group) => {
+      const completed = group.tasks.filter((task) => task.status === 'completed');
+      const skipped = group.tasks.filter((task) => task.status === 'skipped');
+      const overdue = group.tasks.filter((task) => task.overdue);
+      const performers = [...new Set(completed.map((task) => task.completed_by_name || task.completed_by_login).filter(Boolean))];
+      const groupClass = completed.length === group.tasks.length
+        ? 'completed'
+        : overdue.length
+          ? 'overdue'
+          : skipped.length === group.tasks.length
+            ? 'skipped'
+            : 'progress';
+      const groupLabel = completed.length === group.tasks.length
+        ? 'Всё готово'
+        : `${completed.length}/${group.tasks.length} готово`;
+      const performerLine = performers.length
+        ? `Выполнили: ${performers.join(', ')}`
+        : 'Пока никто не завершил';
+      const rows = group.tasks.map((task) => {
+        const itemStatus = status(task);
+        const actor = task.completed_by_name || task.skipped_by_name || task.started_by_login;
+        return `<button class="task-club-row ${itemStatus.className}" type="button" data-task="${task.id}">
+          <span><strong>${escapeHtml(task.club)}</strong><small>${itemStatus.label}${actor ? ` · ${escapeHtml(actor)}` : ''}</small></span>
+          <b>${task.status === 'completed' ? '✓' : task.status === 'skipped' ? '—' : clock(task.due_at)}</b>
         </button>`;
+      }).join('');
+      return `<article class="task-group ${groupClass}">
+        <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" aria-expanded="false">
+          <span class="task-group-icon">${completed.length === group.tasks.length ? '✓' : completed.length}</span>
+          <span class="task-group-copy">
+            <small>${state.scope === 'history' ? shortDate(group.date) : `${group.tasks.length} клуб.`}</small>
+            <strong>${escapeHtml(group.title)}</strong>
+            <em>${escapeHtml(performerLine)}</em>
+          </span>
+          <span class="task-group-progress"><b>${groupLabel}</b><i>⌄</i></span>
+        </button>
+        <div class="task-group-details" hidden>${rows}</div>
+      </article>`;
     }).join('')
     : `<div class="task-empty">${state.scope === 'active' ? 'На сегодня активных задач нет. Всё готово ✓' : 'За последние 30 дней задач не найдено.'}</div>`;
 }
@@ -274,6 +305,16 @@ document.querySelector('#clubFilters').addEventListener('click', (event) => {
   renderTasks();
 });
 document.querySelector('#taskList').addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-group]');
+  if (toggle) {
+    const group = toggle.closest('.task-group');
+    const details = group.querySelector('.task-group-details');
+    const expanded = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', String(!expanded));
+    group.classList.toggle('expanded', !expanded);
+    details.hidden = expanded;
+    return;
+  }
   const card = event.target.closest('[data-task]');
   if (!card) return;
   const task = state.tasks.find((item) => item.id === Number(card.dataset.task));

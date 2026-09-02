@@ -18,7 +18,6 @@ from permissions import ROLE_EMPLOYEE, ROLE_MANAGER, get_user, require_role
 DB_PATH = 'db/omgbot.sql'
 MOSCOW = ZoneInfo('Europe/Moscow')
 MAX_ATTACHMENTS = 10
-MAX_VIDEO_BYTES = 20 * 1024 * 1024
 
 KIND_INFORMATION = 'information'
 KIND_TASK = 'task'
@@ -28,9 +27,6 @@ CATEGORY_DEEP_CLEANING_SPECIAL = 'deep_cleaning_special'
 CATEGORY_GENERAL = 'general'
 
 _task_admin_drafts = {}
-_task_media_group_lock = threading.Lock()
-_task_media_group_timers = {}
-TASK_MEDIA_GROUP_DELAY_SECONDS = 1.2
 _task_app_completion_lock = threading.Lock()
 
 DEFAULT_CLEANLINESS_POINTS = (
@@ -993,114 +989,6 @@ def _actor_snapshot(update):
     }
 
 
-def _load_instance(instance_id, db_path=DB_PATH):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            'SELECT * FROM shift_task_instances WHERE id=?',
-            (instance_id,),
-        ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def _task_accessible(update, instance, db_path=DB_PATH):
-    actor = _actor_snapshot(update)
-    if not actor or not instance:
-        return False
-    user = get_user(update)
-    if int(user['status']) >= ROLE_MANAGER:
-        return True
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        notified = conn.execute(
-            '''SELECT 1 FROM shift_task_notifications
-               WHERE instance_id=? AND recipient_chatid=? LIMIT 1''',
-            (instance['id'], actor['chatid']),
-        ).fetchone()
-        if notified:
-            return True
-        recipients = _scheduled_recipients(conn, instance)
-        return actor['chatid'] in {str(row[0]) for row in recipients}
-    finally:
-        conn.close()
-
-
-def _active_task_rows(update, db_path=DB_PATH):
-    actor = _actor_snapshot(update)
-    if not actor:
-        return []
-    user = get_user(update)
-    today = _now().date().isoformat()
-    ensure_task_instances(today, db_path=db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            '''SELECT DISTINCT instance.*
-               FROM shift_task_instances instance
-               LEFT JOIN shift_task_notifications note
-                 ON note.instance_id=instance.id
-                AND note.recipient_chatid=?
-               LEFT JOIN shifts shift_row
-                 ON date(substr(shift_row.dt_shift, 1, 10))=date(instance.occurrence_date)
-                AND lower(trim(shift_row.club))=lower(trim(instance.club))
-               LEFT JOIN users employee ON employee.chatid=?
-               WHERE instance.occurrence_date=?
-                 AND instance.status IN ('pending', 'in_progress')
-                 AND (
-                    ? >= ?
-                    OR note.id IS NOT NULL
-                    OR (shift_row.shift_login IS NOT NULL
-                        AND lower(shift_row.shift_login)=lower(employee.login))
-                    OR (shift_row.shift_login IS NULL
-                        AND shift_row.shift_second_name=employee.second_name
-                        AND shift_row.shift_first_name=employee.first_name)
-                 )
-               ORDER BY instance.due_at, instance.id''',
-            (
-                actor['chatid'], actor['chatid'], today,
-                int(user['status']), ROLE_MANAGER,
-            ),
-        ).fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
-
-
-def show_employee_tasks(message, bot):
-    if not require_role(message, bot, ROLE_EMPLOYEE):
-        return
-    tasks = _active_task_rows(message)
-    if not tasks:
-        bot.send_message(message.chat.id, '✅ На сегодня активных задач нет.')
-        return
-    text = ['📋 <b>Задачи смены</b>', '']
-    markup = types.InlineKeyboardMarkup()
-    for instance in tasks:
-        text.append(
-            f'• <b>{html.escape(instance["title"])}</b> · '
-            f'{html.escape(instance["club"])} · до {instance["due_at"][11:16]}'
-        )
-        webapp_url = _task_webapp_url(instance['id'])
-        if webapp_url:
-            markup.add(types.InlineKeyboardButton(
-                f'{instance["club"]} · {instance["title"][:28]}',
-                web_app=types.WebAppInfo(webapp_url),
-            ))
-        else:
-            markup.add(types.InlineKeyboardButton(
-                f'{instance["club"]} · {instance["title"][:28]}',
-                callback_data=f'stask_open_{instance["id"]}',
-            ))
-    bot.send_message(
-        message.chat.id, '\n'.join(text), parse_mode='HTML', reply_markup=markup,
-    )
-
-
 def _app_actor(user):
     user = dict(user or {})
     login = str(user.get('login') or '')
@@ -1431,6 +1319,7 @@ def skip_app_task(user, instance_id, reason, bot, db_path=DB_PATH):
         conn.close()
 
 
+def _send_task_report(bot, instance, actor, media_rows):
     requirements = _instance_requirements(instance)
     requirement_text = ''
     if requirements:
@@ -1503,166 +1392,6 @@ def _update_task_cards(bot, conn, instance_id, final_text):
             except Exception:
                 pass
     return final_text
-
-
-def _finish_task(call, bot, instance_id):
-    actor = _actor_snapshot(call)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        instance = conn.execute(
-            'SELECT * FROM shift_task_instances WHERE id=?',
-            (instance_id,),
-        ).fetchone()
-        if not instance or instance['status'] not in ('pending', 'in_progress'):
-            bot.answer_callback_query(call.id, 'Задача уже закрыта.', show_alert=True)
-            return
-        media_rows = conn.execute(
-            '''SELECT * FROM shift_task_media
-               WHERE instance_id=? AND submitted_by_chatid=? AND state='draft'
-               ORDER BY COALESCE(telegram_message_id, 0), id''',
-            (instance_id, actor['chatid']),
-        ).fetchall()
-        required = max(1, len(_instance_requirements(instance)))
-        if not required <= len(media_rows) <= MAX_ATTACHMENTS:
-            bot.answer_callback_query(
-                call.id,
-                f'Нужно добавить вложений: {required}. Сейчас: {len(media_rows)}.',
-                show_alert=True,
-            )
-            return
-        completed_at = _timestamp()
-        with conn:
-            updated = conn.execute(
-                '''UPDATE shift_task_instances
-                   SET status='completed', completed_at=?,
-                       completed_by_login=?, completed_by_name=?,
-                       completed_by_chatid=?
-                   WHERE id=? AND status IN ('pending', 'in_progress')''',
-                (
-                    completed_at, actor['login'], actor['name'], actor['chatid'],
-                    instance_id,
-                ),
-            ).rowcount
-            if not updated:
-                bot.answer_callback_query(call.id, 'Задачу уже завершил коллега.', show_alert=True)
-                return
-            conn.execute(
-                '''UPDATE shift_task_media SET state='submitted'
-                   WHERE instance_id=? AND submitted_by_chatid=? AND state='draft' ''',
-                (instance_id, actor['chatid']),
-            )
-            conn.execute(
-                '''DELETE FROM shift_task_media
-                   WHERE instance_id=? AND state='draft' ''',
-                (instance_id,),
-            )
-            conn.execute(
-                'DELETE FROM shift_task_drafts WHERE instance_id=?',
-                (instance_id,),
-            )
-        instance = dict(instance)
-        instance['completed_at'] = completed_at
-        try:
-            message_ids = _send_task_report(bot, instance, actor, media_rows)
-        except Exception as error:
-            print(f'Не отправлен отчёт задачи в REPORT: {error}')
-            message_ids = []
-        if message_ids:
-            with conn:
-                conn.execute(
-                    '''UPDATE shift_task_instances
-                       SET report_chatid=?, report_message_ids=? WHERE id=?''',
-                    (str(CHATS['reports']), json.dumps(message_ids), instance_id),
-                )
-        _update_task_cards(bot, conn, instance_id, 'completed')
-        bot.answer_callback_query(call.id, 'Отчёт принят!')
-        bot.send_message(
-            call.message.chat.id,
-            f'✅ <b>{html.escape(instance["title"])}</b> выполнена. Спасибо!',
-            parse_mode='HTML',
-        )
-    finally:
-        conn.close()
-
-
-def _skip_task(call, bot, instance_id):
-    actor = _actor_snapshot(call)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        draft = conn.execute(
-            '''SELECT * FROM shift_task_drafts
-               WHERE chatid=? AND instance_id=?
-                 AND state='awaiting_skip_confirmation' ''',
-            (actor['chatid'], instance_id),
-        ).fetchone()
-        if not draft or not draft['skip_reason']:
-            bot.answer_callback_query(call.id, 'Причина пропуска не найдена.', show_alert=True)
-            return
-        instance = conn.execute(
-            'SELECT * FROM shift_task_instances WHERE id=?',
-            (instance_id,),
-        ).fetchone()
-        if not instance or instance['status'] not in ('pending', 'in_progress'):
-            bot.answer_callback_query(call.id, 'Задача уже закрыта.', show_alert=True)
-            return
-        skipped_at = _timestamp()
-        with conn:
-            updated = conn.execute(
-                '''UPDATE shift_task_instances
-                   SET status='skipped', skipped_at=?, skipped_by_login=?,
-                       skipped_by_name=?, skipped_by_chatid=?, skip_reason=?
-                   WHERE id=? AND status IN ('pending', 'in_progress')''',
-                (
-                    skipped_at, actor['login'], actor['name'], actor['chatid'],
-                    draft['skip_reason'], instance_id,
-                ),
-            ).rowcount
-            if not updated:
-                bot.answer_callback_query(
-                    call.id, 'Задачу уже закрыл коллега.', show_alert=True,
-                )
-                return
-            conn.execute(
-                '''DELETE FROM shift_task_media
-                   WHERE instance_id=? AND state='draft' ''',
-                (instance_id,),
-            )
-            conn.execute(
-                'DELETE FROM shift_task_drafts WHERE instance_id=?',
-                (instance_id,),
-            )
-        try:
-            report_message = bot.send_message(
-                CHATS['reports'],
-                f'⏭ <b>Задача пропущена</b>\n\n'
-                f'📍 {html.escape(instance["club"])}\n'
-                f'📋 {html.escape(instance["title"])}\n'
-                f'👤 {html.escape(actor["name"])} · {html.escape(actor["login"])}\n'
-                f'💬 <b>Причина:</b> {html.escape(draft["skip_reason"])}',
-                parse_mode='HTML',
-            )
-        except Exception as error:
-            print(f'Не отправлен пропуск задачи в REPORT: {error}')
-        else:
-            with conn:
-                conn.execute(
-                    '''UPDATE shift_task_instances
-                       SET report_chatid=?, report_message_ids=? WHERE id=?''',
-                    (
-                        str(CHATS['reports']),
-                        json.dumps([
-                            str(getattr(report_message, 'message_id', '')),
-                        ]),
-                        instance_id,
-                    ),
-                )
-        _update_task_cards(bot, conn, instance_id, 'skipped')
-        bot.answer_callback_query(call.id, 'Пропуск записан.')
-        bot.send_message(call.message.chat.id, 'Пропуск записан и отправлен в REPORT.')
-    finally:
-        conn.close()
 
 
 def _admin_task_days_keyboard(selected=''):

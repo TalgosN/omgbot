@@ -773,6 +773,10 @@ def SaySmth(message): #fun talk
         send_react(message,"🔥")
         bot.reply_to(message, random.choice(TEXTS['burn']))
 
+    else:
+        from menu import restore_main_menu_for_private_text
+        restore_main_menu_for_private_text(message, bot)
+
 
         
 @bot.message_handler(func=lambda message: message.text is not None and '/' not in message.text and message.text.startswith('#'))

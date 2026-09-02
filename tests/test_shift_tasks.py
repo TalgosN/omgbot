@@ -72,25 +72,6 @@ class FakeBot:
         return None
 
 
-class FakeTimer:
-    def __init__(self, interval, function, args=()):
-        self.interval = interval
-        self.function = function
-        self.args = args
-        self.cancelled = False
-        self.started = False
-        self.daemon = False
-
-    def start(self):
-        self.started = True
-
-    def cancel(self):
-        self.cancelled = True
-
-    def fire(self):
-        self.function(*self.args)
-
-
 class ShiftTasksTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -197,34 +178,6 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(regular_clubs, ['Ленинский'])
         self.assertIn('telegram_message_id', media_columns)
         self.assertIn('media_group_id', media_columns)
-
-    def test_media_group_progress_is_debounced_to_one_message(self):
-        timers = []
-
-        def timer_factory(*args, **kwargs):
-            timer = FakeTimer(*args, **kwargs)
-            timers.append(timer)
-            return timer
-
-        shift_tasks._task_media_group_timers.clear()
-        with (
-            patch.object(shift_tasks.threading, 'Timer', side_effect=timer_factory),
-            patch.object(shift_tasks, '_send_task_media_progress') as progress,
-        ):
-            shift_tasks._queue_task_media_group_progress(
-                FakeBot(), '101', 7, 'album-1', db_path=self.db_path,
-            )
-            shift_tasks._queue_task_media_group_progress(
-                FakeBot(), '101', 7, 'album-1', db_path=self.db_path,
-            )
-            timers[0].fire()
-            timers[1].fire()
-
-        self.assertTrue(timers[0].cancelled)
-        self.assertTrue(timers[0].started)
-        self.assertTrue(timers[1].started)
-        progress.assert_called_once()
-        shift_tasks._task_media_group_timers.clear()
 
     def test_schema_discards_legacy_bot_drafts_and_reopens_instances(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
@@ -364,81 +317,6 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(second['count'], 1)
         self.assertEqual(warnings, 1)
         self.assertEqual(len(report_messages), 1)
-
-    def test_finishing_task_keeps_telegram_references_and_closes_shared_instance(self):
-        shift_tasks.initialize_shift_tasks_schema(self.db_path)
-        shift_tasks.ensure_task_instances(
-            '2026-09-01', db_path=self.db_path,
-            now=datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),
-        )
-        conn = sqlite3.connect(self.db_path)
-        instance_id = conn.execute(
-            '''SELECT id FROM shift_task_instances
-               WHERE occurrence_date='2026-09-01' AND club='Ленинский'
-               ORDER BY id LIMIT 1'''
-        ).fetchone()[0]
-        with conn:
-            conn.execute(
-                '''INSERT INTO shift_task_drafts
-                   (chatid, instance_id, state, updated_at)
-                   VALUES ('101', ?, 'collecting', '2026-09-01 12:05:00')''',
-                (instance_id,),
-            )
-            conn.executemany(
-                '''INSERT INTO shift_task_media (
-                       instance_id, telegram_file_id, telegram_file_unique_id,
-                       telegram_message_id, media_group_id, media_type,
-                       file_size, submitted_by_chatid, submitted_by_login,
-                       created_at, state
-                   ) VALUES (?, ?, ?, ?, 'album-1', 'photo', 1000, '101',
-                             '@employee', '2026-09-01 12:05:00', 'draft')''',
-                [
-                    (
-                        instance_id, f'telegram-photo-id-{index}',
-                        f'unique-photo-id-{index}', 108 - index,
-                    )
-                    for index in range(1, 8)
-                ],
-            )
-        conn.close()
-        bot = FakeBot()
-        call = SimpleNamespace(
-            id='callback-1',
-            message=SimpleNamespace(chat=SimpleNamespace(id=101)),
-        )
-        actor = {'chatid': '101', 'login': '@employee', 'name': 'Иван'}
-        with (
-            patch.object(shift_tasks, 'DB_PATH', self.db_path),
-            patch.object(shift_tasks, '_actor_snapshot', return_value=actor),
-            patch.object(shift_tasks, 'CHATS', {
-                'reports': '-1001', 'main_group': '-1002',
-            }),
-        ):
-            shift_tasks._finish_task(call, bot, instance_id)
-
-        conn = sqlite3.connect(self.db_path)
-        instance = conn.execute(
-            '''SELECT status, completed_by_login, report_chatid
-               FROM shift_task_instances WHERE id=?''',
-            (instance_id,),
-        ).fetchone()
-        media = conn.execute(
-            '''SELECT telegram_file_id, state FROM shift_task_media
-               WHERE instance_id=? ORDER BY id LIMIT 1''',
-            (instance_id,),
-        ).fetchone()
-        draft_count = conn.execute(
-            'SELECT COUNT(*) FROM shift_task_drafts WHERE chatid=?', ('101',),
-        ).fetchone()[0]
-        conn.close()
-        self.assertEqual(instance, ('completed', '@employee', '-1001'))
-        self.assertEqual(media, ('telegram-photo-id-1', 'submitted'))
-        self.assertEqual(draft_count, 0)
-        album = next(item for item in bot.messages if item[0] == 'album')
-        self.assertEqual(
-            [item.media for item in album[2]],
-            [f'telegram-photo-id-{index}' for index in range(7, 0, -1)],
-        )
 
     def test_app_lists_starts_and_completes_existing_task_instance(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
