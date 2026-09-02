@@ -268,11 +268,13 @@ def birthday_test_generate(message, bot):
             bot.delete_message(message.chat.id, loading.message_id)
         except Exception:
             pass
-        source_note = (
-            'OpenRouter'
-            if preview['source'] == 'openrouter'
-            else 'резервный шаблон — OpenRouter недоступен'
-        )
+        if preview['source'] == 'openrouter':
+            source_note = 'OpenRouter'
+        else:
+            reason = preview.get('generation_error')
+            source_note = 'резервный шаблон — OpenRouter недоступен'
+            if reason:
+                source_note += f' ({reason})'
         bot.send_message(
             message.chat.id,
             f'🧪 Тест для {user["login"]}\n'
@@ -775,6 +777,58 @@ def handle_shifton_employee_sync(message, bot):
     admin_extra_menu(message, bot)
 
 
+def collect_openrouter_health(api_key, model=None, session=requests):
+    if not api_key:
+        return ["❌ OpenRouter: API-ключ не задан"]
+
+    try:
+        response = session.get(
+            "https://openrouter.ai/api/v1/key",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        key_data = response.json().get("data") or {}
+    except Exception as error:
+        return [f"❌ OpenRouter: {str(error)[:120]}"]
+
+    lines = [
+        "✅ OpenRouter: ключ доступен, "
+        f"модель {model or 'по умолчанию'}"
+    ]
+    key_limit = key_data.get("limit")
+    key_remaining = key_data.get("limit_remaining")
+    if key_limit is not None and key_remaining is not None:
+        lines.append(
+            "🔑 Лимит ключа OpenRouter: "
+            f"осталось ${float(key_remaining):.2f} "
+            f"из ${float(key_limit):.2f}"
+        )
+
+    try:
+        response = session.get(
+            "https://openrouter.ai/api/v1/credits",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        credits = response.json().get("data") or {}
+        total_credits = float(credits["total_credits"])
+        total_usage = float(credits["total_usage"])
+        lines.append(
+            "💳 Аккаунт OpenRouter: "
+            f"остаток ${max(total_credits - total_usage, 0):.2f} "
+            f"из ${total_credits:.2f}, "
+            f"использовано ${total_usage:.2f}"
+        )
+    except Exception as error:
+        lines.append(
+            "⚠️ Баланс OpenRouter недоступен: "
+            f"{str(error)[:120]}"
+        )
+    return lines
+
+
 def collect_steamtracker_health():
     lines = ["", "🎮 Steam Tracker"]
     try:
@@ -855,26 +909,10 @@ def collect_steamtracker_health():
             lines.append("ℹ️ Google Steam Tracker: выгрузка отключена")
 
         if settings.generator_provider == "openrouter":
-            if not settings.openrouter_api_key:
-                lines.append("❌ OpenRouter: API-ключ не задан")
-            else:
-                try:
-                    response = requests.get(
-                        "https://openrouter.ai/api/v1/key",
-                        headers={
-                            "Authorization": (
-                                f"Bearer {settings.openrouter_api_key}"
-                            )
-                        },
-                        timeout=5,
-                    )
-                    response.raise_for_status()
-                    lines.append(
-                        "✅ OpenRouter: ключ доступен, "
-                        f"модель {settings.openrouter_model or 'по умолчанию'}"
-                    )
-                except Exception as error:
-                    lines.append(f"❌ OpenRouter: {str(error)[:120]}")
+            lines.extend(collect_openrouter_health(
+                settings.openrouter_api_key,
+                settings.openrouter_model,
+            ))
         else:
             lines.append(
                 f"ℹ️ Генератор: {settings.generator_provider} "

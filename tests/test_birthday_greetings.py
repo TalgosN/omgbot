@@ -278,10 +278,28 @@ class BirthdayGreetingsTest(unittest.TestCase):
             )
 
         self.assertEqual(result, 'Готовое поздравление')
+        headers = session.post.call_args.kwargs['headers']
+        headers['X-Title'].encode('latin-1')
+        self.assertEqual(headers['X-Title'], 'OMG VR Birthday Greetings')
         request_body = session.post.call_args.kwargs['json']
         self.assertEqual(request_body['model'], 'test/model')
         self.assertIn('Не используй статистику', request_body['messages'][1]['content'])
         self.assertNotIn('Подтверждённые положительные факты', request_body['messages'][1]['content'])
+
+    def test_fallback_exposes_generation_error_for_admin_preview(self):
+        generator = Mock(side_effect=UnicodeEncodeError(
+            'latin-1', 'В', 0, 1, 'ordinal not in range(256)',
+        ))
+
+        payload = greetings.build_birthday_message(
+            self.user(),
+            today=date(2026, 8, 30),
+            db_path=self.db_path,
+            generator=generator,
+        )
+
+        self.assertEqual(payload['source'], 'fallback')
+        self.assertIn('UnicodeEncodeError', payload['generation_error'])
 
     def test_non_leap_year_uses_february_28_for_february_29(self):
         self.assertTrue(greetings._is_birthday_today(

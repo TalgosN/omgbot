@@ -59,6 +59,42 @@ class AdminBirthdayGreetingsTest(unittest.TestCase):
         )
         self.assertIn('— Виарыч 🤖💜', preview_call.args[1])
 
+    def test_fallback_preview_contains_openrouter_error(self):
+        message = SimpleNamespace(
+            text='@tester',
+            chat=SimpleNamespace(id=123),
+            from_user=SimpleNamespace(id=456),
+        )
+        bot = Mock()
+        bot.send_message.return_value = SimpleNamespace(message_id=10)
+        preview = {
+            'source': 'fallback',
+            'generation_error': 'HTTPError: 402 Payment Required',
+            'text': 'Резервное поздравление',
+        }
+
+        with (
+            patch.object(
+                admin_panel,
+                'require_role',
+                return_value={'ID': 9, 'status': 2},
+            ),
+            patch.object(
+                birthday_greetings,
+                'build_birthday_preview',
+                return_value=({'login': '@tester'}, preview),
+            ),
+            patch.object(
+                admin_panel.types,
+                'ReplyKeyboardMarkup',
+                return_value=Mock(),
+            ),
+        ):
+            admin_panel.birthday_test_generate(message, bot)
+
+        texts = [call.args[1] for call in bot.send_message.call_args_list]
+        self.assertTrue(any('402 Payment Required' in text for text in texts))
+
 
 if __name__ == '__main__':
     unittest.main()

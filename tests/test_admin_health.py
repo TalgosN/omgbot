@@ -85,6 +85,51 @@ class AdminHealthTest(unittest.TestCase):
         google.open.assert_not_called()
         google.open_by_key.assert_called_once_with(self.admin.CONFIG_SPREADSHEET_ID)
 
+    def test_openrouter_health_includes_account_and_key_balances(self):
+        key_response = Mock()
+        key_response.json.return_value = {
+            "data": {"limit": 3, "limit_remaining": 2.75},
+        }
+        credits_response = Mock()
+        credits_response.json.return_value = {
+            "data": {"total_credits": 5, "total_usage": 0.25},
+        }
+        session = Mock()
+        session.get.side_effect = [key_response, credits_response]
+
+        lines = self.admin.collect_openrouter_health(
+            "secret",
+            "test/model",
+            session=session,
+        )
+
+        report = "\n".join(lines)
+        self.assertIn("модель test/model", report)
+        self.assertIn("осталось $2.75 из $3.00", report)
+        self.assertIn("остаток $4.75 из $5.00", report)
+        self.assertNotIn("secret", report)
+        self.assertEqual(
+            [call.args[0] for call in session.get.call_args_list],
+            [
+                "https://openrouter.ai/api/v1/key",
+                "https://openrouter.ai/api/v1/credits",
+            ],
+        )
+
+    def test_openrouter_health_keeps_key_status_when_balance_fails(self):
+        key_response = Mock()
+        key_response.json.return_value = {"data": {}}
+        session = Mock()
+        session.get.side_effect = [key_response, RuntimeError("credits down")]
+
+        report = "\n".join(self.admin.collect_openrouter_health(
+            "secret",
+            session=session,
+        ))
+
+        self.assertIn("✅ OpenRouter: ключ доступен", report)
+        self.assertIn("⚠️ Баланс OpenRouter недоступен", report)
+
     def test_monthly_kpi_report_filters_zero_shifts_and_marks_weakest_three(self):
         def employee(name, shifts, weighted_shifts, total, weighted):
             return {

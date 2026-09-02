@@ -605,7 +605,7 @@ def generate_openrouter_greeting(name, role, facts, session=requests):
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json',
             'HTTP-Referer': 'https://omg-vr.ru',
-            'X-Title': 'Виарыч · поздравления',
+            'X-Title': 'OMG VR Birthday Greetings',
         },
         json=body,
         timeout=45,
@@ -626,12 +626,14 @@ def build_birthday_message(user, today=None, db_path=DB_PATH, generator=None):
     stats = collect_personal_year_stats(user, today, db_path)
     facts = select_positive_facts(stats, role)
     source = 'openrouter'
+    generation_error = None
     try:
         greeting = (generator or generate_openrouter_greeting)(name, role, facts)
     except Exception as error:
         print(f'OpenRouter не сгенерировал поздравление для {mention}: {error}')
         greeting = _fallback_greeting(name, role)
         source = 'fallback'
+        generation_error = f'{type(error).__name__}: {error}'[:300]
     parts = [
         f'🎂 Сегодня день рождения у {mention} — {name}!',
         greeting,
@@ -644,6 +646,7 @@ def build_birthday_message(user, today=None, db_path=DB_PATH, generator=None):
         'facts': facts,
         'stats': stats,
         'source': source,
+        'generation_error': generation_error,
         'prompt_version': PROMPT_VERSION,
     }
 
