@@ -832,7 +832,7 @@ function createDraft() {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   runtime.draft = {
     schema: DRAFT_SCHEMA,
-    id: `${scenario.shift.date}:${scenario.action}:${entropy}`,
+    id: scenario.run_id || `${scenario.shift.date}:${scenario.action}:${entropy}`,
     action: scenario.action,
     user_login: scenario.user_login,
     date: scenario.shift.date,
@@ -848,7 +848,7 @@ function createDraft() {
     answers: {},
     photo_ids: [],
     cleanliness_photo_ids: [],
-    started_at: null,
+    started_at: scenario.started_at || null,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -1322,7 +1322,10 @@ async function initialize() {
     runtime.scenario = await fetchScenario(
       requestedVariant,
       localDraft?.club || '',
-      localDraft?.started_at ? localDraft.id : '',
+      localDraft?.schema === DRAFT_SCHEMA
+        && localDraft.action === runtime.action
+        ? localDraft.id
+        : '',
     );
   } catch (error) {
     if (!localDraft) throw error;
@@ -1347,6 +1350,10 @@ async function initialize() {
   }
 
   runtime.draft = localDraft;
+  if (!runtime.draft.started_at && runtime.scenario.started_at) {
+    runtime.draft.started_at = runtime.scenario.started_at;
+    saveDraft();
+  }
   await repairDraftPhotos();
   const answered = Object.keys(runtime.draft.answers).length;
   const photos = runtime.draft.photo_ids.length

@@ -37,7 +37,7 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="photoProcessing"', html)
         self.assertIn('id="cameraSavingText"', html)
         self.assertIn('/static/shift_test.css?v=20260901-2', html)
-        self.assertIn('/static/shift_test.js?v=20260901-2', html)
+        self.assertIn('/static/shift_test.js?v=20260902-1', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)
@@ -90,6 +90,18 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('runtime.draft.photo_ids = [];', reset_handler)
         self.assertIn('await startFreshScenario();', reset_handler)
         self.assertIn("$('#discardDraft').hidden = false;", script)
+
+    def test_every_shift_draft_checks_for_server_run_on_resume(self):
+        script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
+
+        initialization = script.split('async function initialize()', 1)[1]
+        self.assertIn("localDraft?.schema === DRAFT_SCHEMA", initialization)
+        self.assertIn("localDraft.action === runtime.action", initialization)
+        self.assertIn("? localDraft.id", initialization)
+        self.assertNotIn("localDraft?.started_at ? localDraft.id", initialization)
+        self.assertIn("runtime.scenario.started_at", initialization)
+        self.assertIn("id: scenario.run_id ||", script)
+        self.assertIn("started_at: scenario.started_at || null", script)
 
 
 if __name__ == '__main__':

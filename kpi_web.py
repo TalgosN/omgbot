@@ -1091,6 +1091,43 @@ def _shift_clock_minutes(value):
     return hour * 60 + minute
 
 
+def _shift_report_candidate_shifts(login, current, include_previous=False):
+    today = current.date().isoformat()
+    previous = (current.date() - timedelta(days=1)).isoformat()
+    allowed_dates = {today, previous} if include_previous else {today}
+    shifts = [
+        shift for shift in _current_user_shifts(
+            login,
+            previous if include_previous else today,
+            today,
+            limit=50,
+        )
+        if shift.get('date') in allowed_dates
+    ]
+    if include_previous and not any(
+        shift.get('date') == previous for shift in shifts
+    ):
+        known = {
+            (
+                shift.get('date'), shift.get('club'),
+                shift.get('start'), shift.get('end'),
+            )
+            for shift in shifts
+        }
+        for shift in _upcoming_shifts(
+            login, limit=50, date_from=previous, date_to=previous,
+        ):
+            key = (
+                shift.get('date'), shift.get('club'),
+                shift.get('start'), shift.get('end'),
+            )
+            if shift.get('date') == previous and key not in known:
+                shift['schedule_source'] = 'local_cache'
+                shifts.append(shift)
+                known.add(key)
+    return shifts
+
+
 def _select_shift_report_test_shift(
     login, action=None, now=None, requested_club=None,
 ):
@@ -1098,18 +1135,9 @@ def _select_shift_report_test_shift(
     today = current.date().isoformat()
     previous = (current.date() - timedelta(days=1)).isoformat()
     previous_close_available = action == 'close' and current.hour < 6
-    allowed_dates = {today}
-    if previous_close_available:
-        allowed_dates.add(previous)
-    shifts = [
-        shift for shift in _current_user_shifts(
-            login,
-            previous if previous_close_available else today,
-            today,
-            limit=50,
-        )
-        if shift.get('date') in allowed_dates
-    ]
+    shifts = _shift_report_candidate_shifts(
+        login, current, include_previous=previous_close_available,
+    )
     if requested_club:
         normalized_request = str(requested_club).strip().casefold()
         shifts = [
@@ -1277,6 +1305,8 @@ def _shift_report_run_scenario(run_id):
     variant_index = int(run['variant_index'])
     return {
         'production_mode': True,
+        'run_id': run['id'],
+        'started_at': run['started_at'],
         'action': run['action'],
         'action_label': 'Открытие' if run['action'] == 'open' else 'Закрытие',
         'club': run['club'],
@@ -1296,6 +1326,31 @@ def _shift_report_run_scenario(run_id):
         ),
         'draft_ttl_hours': 18,
     }
+
+
+def _latest_shift_report_run_scenario(action, requested_club=None, now=None):
+    if action not in SHIFT_ACTIONS:
+        return None
+    current = now or datetime.now(ZoneInfo('Europe/Moscow'))
+    cutoff = (current - timedelta(hours=18)).strftime('%Y-%m-%d %H:%M:%S')
+    _initialize_shift_report_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        query = '''
+            SELECT id FROM shift_webapp_runs
+            WHERE lower(login)=lower(?) AND action=?
+              AND finished_at IS NULL AND completed_at IS NULL
+              AND datetime(started_at) >= datetime(?)
+        '''
+        values = [_actor_login(), action, cutoff]
+        if requested_club:
+            query += ' AND lower(club)=lower(?)'
+            values.append(str(requested_club).strip())
+        query += ' ORDER BY datetime(started_at) DESC LIMIT 1'
+        row = conn.execute(query, values).fetchone()
+    finally:
+        conn.close()
+    return _shift_report_run_scenario(row[0]) if row else None
 
 
 def _shift_report_is_early_close(action, club, now=None):
@@ -1894,18 +1949,9 @@ def _today_shift_contexts(login, now=None):
     today = today_date.isoformat()
     previous = (today_date - timedelta(days=1)).isoformat()
     include_previous = current.hour < 6
-    allowed_dates = {today}
-    if include_previous:
-        allowed_dates.add(previous)
-    shifts = [
-        shift for shift in _current_user_shifts(
-            login,
-            previous if include_previous else today,
-            today,
-            limit=50,
-        )
-        if shift.get('date') in allowed_dates
-    ]
+    shifts = _shift_report_candidate_shifts(
+        login, current, include_previous=include_previous,
+    )
     if not shifts:
         return []
     clubs = list(dict.fromkeys(str(shift['club']) for shift in shifts))
@@ -3627,6 +3673,11 @@ def api_shift_test_scenario():
             if action and scenario['action'] != action:
                 raise ValueError('Сохранённый отчёт относится к другому действию')
             return jsonify(scenario)
+    scenario = _latest_shift_report_run_scenario(
+        action, requested_club=requested_club,
+    )
+    if scenario:
+        return jsonify(scenario)
     if (
         int(g.kpi_user['status']) == ROLE_OWNER
         and not requested_club

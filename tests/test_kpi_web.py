@@ -479,6 +479,80 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(opening['club'], 'Сегодняшний')
         self.assertEqual(after_six['club'], 'Сегодняшний')
 
+    def test_shift_close_falls_back_to_cached_previous_shift_after_midnight(self):
+        previous_shift = {
+            'date': '2026-08-10', 'club': 'Вчерашний', 'duration': 14,
+            'start': '10:00', 'end': '00:00',
+        }
+        after_midnight = datetime(
+            2026, 8, 11, 0, 1, tzinfo=ZoneInfo('Europe/Moscow'),
+        )
+        with patch.object(kpi_web, '_current_user_shifts', return_value=[]), \
+                patch.object(
+                    kpi_web, '_upcoming_shifts', return_value=[previous_shift],
+                ) as cached:
+            closing = kpi_web._select_shift_report_test_shift(
+                '@tester', action='close', now=after_midnight,
+            )
+
+        self.assertEqual(closing['club'], 'Вчерашний')
+        self.assertEqual(closing['schedule_source'], 'local_cache')
+        cached.assert_called_once_with(
+            '@tester', limit=50,
+            date_from='2026-08-10', date_to='2026-08-10',
+        )
+
+    def test_recent_unfinished_shift_run_can_resume_without_local_draft(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'shift-resume.sqlite3'
+            with patch.object(kpi_web, 'DB_PATH', str(db_path)), \
+                    patch.object(kpi_web, '_actor_login', return_value='@tester'):
+                kpi_web._initialize_shift_report_schema(str(db_path))
+                scenario = {
+                    'questions': [{'id': 'q1', 'text': 'Фото', 'type': 'photo'}],
+                    'cleanliness_questions': [],
+                    'checklist': [],
+                    'shift': {
+                        'date': '2026-08-10', 'club': 'Вчерашний',
+                        'duration': 14, 'start': '10:00', 'end': '00:00',
+                    },
+                }
+                conn = sqlite3.connect(db_path)
+                try:
+                    with conn:
+                        conn.execute(
+                            '''INSERT INTO shift_webapp_runs (
+                                   id, login, chatid, club, action, shift_date,
+                                   scenario_version, variant_index, started_at,
+                                   scenario_json
+                               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                            (
+                                '2026-08-10:close:resume-run', '@tester', '1',
+                                'Вчерашний', 'close', '2026-08-10', 'version',
+                                0, '2026-08-11 00:00:30',
+                                json.dumps(scenario, ensure_ascii=False),
+                            ),
+                        )
+                finally:
+                    conn.close()
+
+                with kpi_web.app.test_request_context():
+                    kpi_web.g.kpi_user = {
+                        'login': '@tester', 'nick_name': 'Тест',
+                        'first_name': 'Тест',
+                    }
+                    resumed = kpi_web._latest_shift_report_run_scenario(
+                        'close',
+                        now=datetime(
+                            2026, 8, 11, 0, 1,
+                            tzinfo=ZoneInfo('Europe/Moscow'),
+                        ),
+                    )
+
+        self.assertEqual(resumed['run_id'], '2026-08-10:close:resume-run')
+        self.assertEqual(resumed['shift']['date'], '2026-08-10')
+        self.assertEqual(resumed['started_at'], '2026-08-11 00:00:30')
+
     def test_shift_test_scenario_uses_today_shift_and_editor_variant(self):
         today = kpi_web._moscow_today().isoformat()
         clubs = {
