@@ -117,14 +117,8 @@
     });
   }
 
-  function installEntry() {
-    const header = document.querySelector('.home-header');
-    if (!header) return;
-    const entry = document.createElement('button');
-    entry.className = 'employee-preview-entry';
-    entry.type = 'button';
-    entry.innerHTML = 'Посмотреть приложение как сотрудник <span>→</span>';
-    header.insertAdjacentElement('afterend', entry);
+  function bindEntry(entry) {
+    entry.hidden = false;
     entry.addEventListener('click', async () => {
       entry.disabled = true;
       try {
@@ -149,13 +143,32 @@
     });
   }
 
+  function installEntry() {
+    const explicitEntries = document.querySelectorAll('[data-employee-preview-entry]');
+    if (explicitEntries.length) {
+      explicitEntries.forEach(bindEntry);
+      return;
+    }
+    const header = document.querySelector('.home-header');
+    if (!header) return;
+    const entry = document.createElement('button');
+    entry.className = 'employee-preview-entry';
+    entry.type = 'button';
+    entry.innerHTML = 'Посмотреть приложение как сотрудник <span>→</span>';
+    header.insertAdjacentElement('afterend', entry);
+    bindEntry(entry);
+  }
+
   async function initialize() {
     installStyles();
     try {
       const me = await api('/api/me');
       window.OmgEmployeePreview = me.preview || null;
       if (me.preview) renderBanner(me.preview);
-      else if (me.can_preview_employee && window.location.pathname === '/') installEntry();
+      else if (me.can_preview_employee && (
+        window.location.pathname === '/'
+        || document.querySelector('[data-employee-preview-entry]')
+      )) installEntry();
     } catch (_) {
       // Main page modules show the authorization error themselves.
     }

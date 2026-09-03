@@ -1055,7 +1055,7 @@ def _task_accessible_to_actor(conn, instance, actor):
     return actor['chatid'] in {str(row[0]) for row in recipients}
 
 
-def _app_task_payload(instance, current):
+def _app_task_payload(instance, current, can_execute=True):
     row = dict(instance)
     status = row['status']
     due_at = datetime.strptime(
@@ -1086,7 +1086,8 @@ def _app_task_payload(instance, current):
         'skipped_by_name': row['skipped_by_name'],
         'skipped_by_login': row['skipped_by_login'],
         'skip_reason': row['skip_reason'],
-        'can_execute': status in ('pending', 'in_progress'),
+        'can_execute': can_execute and status in ('pending', 'in_progress'),
+        'media_count': int(row.get('media_count') or 0),
     }
 
 
@@ -1104,20 +1105,30 @@ def app_task_list(
         if scope == 'history':
             first_day = (current.date() - timedelta(days=30)).isoformat()
             rows = conn.execute(
-                '''SELECT * FROM shift_task_instances
+                '''SELECT shift_task_instances.*,
+                          (SELECT COUNT(*) FROM shift_task_media media
+                           WHERE media.instance_id=shift_task_instances.id
+                             AND media.state='submitted') AS media_count
+                   FROM shift_task_instances
                    WHERE occurrence_date BETWEEN ? AND ?
                    ORDER BY occurrence_date DESC, due_at DESC, id DESC''',
                 (first_day, current.date().isoformat()),
             ).fetchall()
         else:
             rows = conn.execute(
-                '''SELECT * FROM shift_task_instances
+                '''SELECT shift_task_instances.*,
+                          (SELECT COUNT(*) FROM shift_task_media media
+                           WHERE media.instance_id=shift_task_instances.id
+                             AND media.state='submitted') AS media_count
+                   FROM shift_task_instances
                    WHERE occurrence_date=?
                    ORDER BY due_at, id''',
                 (current.date().isoformat(),),
             ).fetchall()
         return [
-            _app_task_payload(row, current)
+            _app_task_payload(
+                row, current, can_execute=actor['role'] < ROLE_MANAGER,
+            )
             for row in rows
             if (
                 row['status'] not in ('pending', 'in_progress')
@@ -1130,8 +1141,78 @@ def app_task_list(
         conn.close()
 
 
+def app_task_report(user, instance_id, db_path=DB_PATH, now=None):
+    current = _now(now)
+    actor = _app_actor(user)
+    initialize_shift_tasks_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        instance = conn.execute(
+            '''SELECT shift_task_instances.*,
+                      (SELECT COUNT(*) FROM shift_task_media media
+                       WHERE media.instance_id=shift_task_instances.id
+                         AND media.state='submitted') AS media_count
+               FROM shift_task_instances WHERE id=?''',
+            (instance_id,),
+        ).fetchone()
+        if not _task_accessible_to_actor(conn, instance, actor):
+            raise ValueError('Эта задача вам недоступна')
+        media = conn.execute(
+            '''SELECT id, media_type, file_size
+               FROM shift_task_media
+               WHERE instance_id=? AND state='submitted'
+               ORDER BY COALESCE(telegram_message_id, 0), id''',
+            (instance_id,),
+        ).fetchall()
+        payload = _app_task_payload(
+            instance, current, can_execute=actor['role'] < ROLE_MANAGER,
+        )
+        payload['media'] = [dict(row) for row in media]
+        payload['report_chatid'] = instance['report_chatid']
+        try:
+            message_ids = json.loads(
+                instance['report_message_ids'] or '[]'
+            )
+        except (TypeError, json.JSONDecodeError):
+            message_ids = []
+        payload['report_message_ids'] = (
+            message_ids if isinstance(message_ids, list) else [message_ids]
+        )
+        return payload
+    finally:
+        conn.close()
+
+
+def app_task_media_file(user, instance_id, media_id, db_path=DB_PATH):
+    actor = _app_actor(user)
+    initialize_shift_tasks_schema(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        instance = conn.execute(
+            'SELECT * FROM shift_task_instances WHERE id=?',
+            (instance_id,),
+        ).fetchone()
+        if not _task_accessible_to_actor(conn, instance, actor):
+            raise ValueError('Эта задача вам недоступна')
+        media = conn.execute(
+            '''SELECT telegram_file_id, media_type
+               FROM shift_task_media
+               WHERE id=? AND instance_id=? AND state='submitted' ''',
+            (media_id, instance_id),
+        ).fetchone()
+        if not media:
+            raise ValueError('Вложение задачи не найдено')
+        return dict(media)
+    finally:
+        conn.close()
+
+
 def start_app_task(user, instance_id, db_path=DB_PATH):
     actor = _app_actor(user)
+    if actor['role'] >= ROLE_MANAGER:
+        raise ValueError('Для менеджмента задачи доступны только для просмотра')
     initialize_shift_tasks_schema(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -1154,7 +1235,11 @@ def start_app_task(user, instance_id, db_path=DB_PATH):
             )
         return _app_task_payload(
             conn.execute(
-                'SELECT * FROM shift_task_instances WHERE id=?',
+                '''SELECT shift_task_instances.*,
+                          (SELECT COUNT(*) FROM shift_task_media media
+                           WHERE media.instance_id=shift_task_instances.id
+                             AND media.state='submitted') AS media_count
+                   FROM shift_task_instances WHERE id=?''',
                 (instance_id,),
             ).fetchone(),
             _now(),
@@ -1225,6 +1310,8 @@ def _send_app_task_report(bot, instance, actor, uploads):
 
 def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
     actor = _app_actor(user)
+    if actor['role'] >= ROLE_MANAGER:
+        raise ValueError('Для менеджмента задачи доступны только для просмотра')
     if not bot or not CHATS.get('reports'):
         raise RuntimeError('Чат отчётов временно недоступен')
     with _task_app_completion_lock:
@@ -1298,6 +1385,8 @@ def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
 
 def skip_app_task(user, instance_id, reason, bot, db_path=DB_PATH):
     actor = _app_actor(user)
+    if actor['role'] >= ROLE_MANAGER:
+        raise ValueError('Для менеджмента задачи доступны только для просмотра')
     reason = str(reason or '').strip()
     if not 3 <= len(reason) <= 500:
         raise ValueError('Укажите причину пропуска — от 3 до 500 символов')

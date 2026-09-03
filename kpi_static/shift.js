@@ -11,6 +11,8 @@ const consumablesLink = document.querySelector('#shiftConsumablesLink');
 const consumablesLinkStatus = document.querySelector('#consumablesLinkStatus');
 const shiftTasksStatus = document.querySelector('#shiftTasksStatus');
 let employeeDashboardData = null;
+let taskDashboardData = null;
+let ownerDashboardData = null;
 let activeTodayDate = null;
 let shiftReportAvailable = false;
 let canSelectReportClub = false;
@@ -29,16 +31,6 @@ function escapeHtml(value) {
 function number(value) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 })
     .format(Number(value || 0));
-}
-
-function taskAlertTitle(count) {
-  const tail = count % 100;
-  const last = count % 10;
-  if (tail < 11 || tail > 14) {
-    if (last === 1) return `${count} невыполненная задача`;
-    if (last >= 2 && last <= 4) return `${count} невыполненные задачи`;
-  }
-  return `${count} невыполненных задач`;
 }
 
 function reviewAlertTitle(count) {
@@ -112,10 +104,10 @@ function reportAction(report, club) {
   const state = reportState(report);
   const body = `<span><small>${escapeHtml(report.action_label)}</small><strong>${state.icon} ${state.label}</strong></span>`;
   if (report.state === 'completed') {
-    return `<div class="today-report ${state.className}">${body}</div>`;
+    return `<div class="today-report ${report.action} ${state.className}">${body}</div>`;
   }
   const href = `/shift-report?action=${encodeURIComponent(report.action)}&club=${encodeURIComponent(club)}`;
-  return `<a class="today-report ${state.className}" href="${href}">${body}</a>`;
+  return `<a class="today-report ${report.action} ${state.className}" href="${href}">${body}</a>`;
 }
 
 function bookingRows(group) {
@@ -128,6 +120,34 @@ function bookingRows(group) {
       <b>${number(booking.participants)} гост.</b>
     </div>
   `).join('');
+}
+
+function shiftTaskState(task) {
+  if (task.status === 'completed') return { label: 'Готово', className: 'completed', icon: '✓' };
+  if (task.status === 'skipped') return { label: 'Пропущено', className: 'skipped', icon: '—' };
+  if (task.overdue) return { label: 'Просрочено', className: 'overdue', icon: '!' };
+  if (task.status === 'in_progress') return { label: 'В работе', className: 'progress', icon: '●' };
+  return { label: `до ${clock(task.due_at)}`, className: 'pending', icon: '○' };
+}
+
+function todayTasks(club, date) {
+  const tasks = (taskDashboardData?.groups || []).flatMap((group) => (
+    group.clubs.filter((item) => item.club === club && item.date === date).map((item) => ({
+      ...item, title: group.title,
+    }))
+  ));
+  if (!tasks.length) return '';
+  const completed = tasks.filter((task) => task.status === 'completed').length;
+  return `<div class="today-tasks">
+    <div class="today-tasks-head"><span>Задачи смены</span><b>${completed} / ${tasks.length}</b></div>
+    <div class="today-task-list">${tasks.map((task) => {
+    const taskState = shiftTaskState(task);
+    const body = `<i>${taskState.icon}</i><span><strong>${escapeHtml(task.title)}</strong><small>${taskState.label}</small></span><b>›</b>`;
+    return task.can_execute || task.status === 'completed'
+      ? `<a class="today-task ${taskState.className}" href="/shift/tasks?task=${task.id}">${body}</a>`
+      : `<div class="today-task ${taskState.className} readonly">${body}</div>`;
+  }).join('')}</div>
+  </div>`;
 }
 
 function renderToday(contexts, today) {
@@ -162,7 +182,7 @@ function renderToday(contexts, today) {
           ${clubState}
         </div>
         <div class="today-colleagues"><small>На смене</small><strong>${escapeHtml(colleagues)}</strong></div>
-        ${reports}${bookings}
+        ${reports}${todayTasks(context.club, context.date)}${bookings}
       </article>`;
   }).join('');
   section.hidden = false;
@@ -239,22 +259,8 @@ async function loadTaskShortcut() {
 
 function renderShiftAlerts(alerts = {}) {
   const panel = document.querySelector('#shiftAlerts');
-  const tasks = alerts.tasks || { count: 0, overdue: 0, items: [] };
   const reviews = Number(alerts.reviews || 0);
   const rows = [];
-  if (tasks.count) {
-    const onlyTask = tasks.count === 1 ? tasks.items?.[0] : null;
-    const href = onlyTask ? `/shift/tasks?task=${onlyTask.id}` : '/shift/tasks';
-    const deadline = onlyTask
-      ? `${escapeHtml(onlyTask.club)} · до ${clock(onlyTask.due_at)}`
-      : tasks.overdue
-        ? `Просрочено: ${tasks.overdue}`
-        : 'Открыть задачи на сегодня';
-    rows.push(`<a class="shift-alert tasks ${tasks.overdue ? 'overdue' : ''}" href="${href}">
-      <span class="shift-alert-icon">!</span>
-      <span><strong>${taskAlertTitle(tasks.count)}</strong><small>${deadline}</small></span>
-    </a>`);
-  }
   if (reviews) {
     rows.push(`<a class="shift-alert reviews" href="/problems?status=review">
       <span class="shift-alert-icon">?</span>
@@ -393,6 +399,71 @@ function renderEmployeeDashboard(dashboard) {
   reportProblemLink.hidden = false;
 }
 
+function ownerClubRow(club, lateOnly = false) {
+  const opened = club.state === 'completed';
+  const progress = club.state === 'in_progress' || club.state === 'sending';
+  const late = Number(club.late_minutes || 0);
+  if (lateOnly && !(opened && late > 5)) return '';
+  const state = !club.scheduled
+    ? { className: 'missing', icon: '!', label: 'Нет смены в расписании' }
+    : opened
+      ? { className: late > 5 ? 'late' : 'done', icon: '✓', label: late > 5 ? `Опоздание ${late} мин` : `Открыт ${clock(club.opened_at)}` }
+      : progress
+        ? { className: 'progress', icon: '●', label: 'Открытие выполняется' }
+        : { className: 'waiting', icon: '○', label: 'Ещё не открыт' };
+  const actor = opened && club.opened_by ? `<small>${escapeHtml(club.opened_by)}</small>` : '';
+  return `<div class="owner-club-row ${state.className}"><i>${state.icon}</i><span><strong>${escapeHtml(club.club)}</strong>${actor}</span><b>${state.label}</b></div>`;
+}
+
+function ownerTaskGroup(group) {
+  return `<div class="owner-task-group">
+    <div class="owner-task-group-head"><span><strong>${escapeHtml(group.title)}</strong><small>${group.overdue ? `Просрочено: ${group.overdue}` : 'Выполнение по клубам'}</small></span><b>${group.completed}/${group.total}</b></div>
+    <div class="owner-task-clubs">${group.clubs.map((task) => {
+    const taskState = shiftTaskState(task);
+    const body = `<i>${taskState.icon}</i><span><strong>${escapeHtml(task.club)}</strong><small>${taskState.label}${task.completed_by_name ? ` · ${escapeHtml(task.completed_by_name)}` : ''}</small></span>${task.status === 'completed' && task.media_count ? '<b>Отчёт →</b>' : ''}`;
+    return task.status === 'completed'
+      ? `<a class="owner-task-row ${taskState.className}" href="/shift/tasks?task=${task.id}">${body}</a>`
+      : `<div class="owner-task-row ${taskState.className}">${body}</div>`;
+  }).join('')}</div>
+  </div>`;
+}
+
+function renderOwnerOperationDetail(kind) {
+  const panel = document.querySelector('#ownerOperationDetail');
+  document.querySelectorAll('[data-owner-operation]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.ownerOperation === kind);
+  });
+  if (!ownerDashboardData) return;
+  if (kind === 'opened') {
+    panel.innerHTML = `<div class="owner-detail-head"><strong>Открытие клубов</strong><span>${ownerDashboardData.opened} из ${ownerDashboardData.total_clubs}</span></div>${ownerDashboardData.clubs.map((club) => ownerClubRow(club)).join('')}`;
+  } else if (kind === 'late') {
+    const rows = ownerDashboardData.clubs.map((club) => ownerClubRow(club, true)).join('');
+    panel.innerHTML = `<div class="owner-detail-head"><strong>Опоздания сегодня</strong><span>${ownerDashboardData.late}</span></div>${rows || '<div class="owner-detail-empty">Опозданий нет ✓</div>'}`;
+  } else if (kind === 'tasks') {
+    const tasks = ownerDashboardData.tasks || { groups: [] };
+    panel.innerHTML = `<div class="owner-detail-head"><strong>Задачи по клубам</strong><a href="/shift/tasks">Все задачи →</a></div>${tasks.groups.length ? tasks.groups.map(ownerTaskGroup).join('') : '<div class="owner-detail-empty">На сегодня задач нет ✓</div>'}`;
+  } else {
+    panel.innerHTML = `<div class="owner-detail-head"><strong>Решения Taskboard</strong><span>${ownerDashboardData.reviews}</span></div><p class="owner-detail-copy">${ownerDashboardData.reviews ? 'Заявки сотрудников ожидают проверки менеджментом.' : 'Новых решений на проверке нет.'}</p><a class="owner-detail-link" href="/problems?status=review">Открыть Taskboard →</a>`;
+  }
+  panel.dataset.kind = kind;
+  panel.hidden = false;
+}
+
+function renderOwnerDashboard(dashboard) {
+  const section = document.querySelector('#ownerOperations');
+  ownerDashboardData = dashboard;
+  if (!dashboard) {
+    section.hidden = true;
+    return;
+  }
+  document.querySelector('#ownerOperationsDate').textContent = shortDate(dashboard.date);
+  document.querySelector('#ownerOpenedCount').textContent = `${dashboard.opened} / ${dashboard.total_clubs}`;
+  document.querySelector('#ownerLateCount').textContent = dashboard.late;
+  document.querySelector('#ownerTasksCount').textContent = `${dashboard.tasks.completed} / ${dashboard.tasks.total}`;
+  document.querySelector('#ownerReviewsCount').textContent = dashboard.reviews;
+  section.hidden = false;
+}
+
 async function loadShift() {
   const payload = await api('/api/shift');
   if (payload.preview_mode) {
@@ -400,6 +471,7 @@ async function loadShift() {
   }
   document.querySelector('#shiftUserName').textContent = `Команда OMG VR · ${payload.user_name}`;
   document.querySelector('#shiftRole').textContent = payload.role_name;
+  taskDashboardData = payload.task_dashboard || null;
   shiftReportAvailable = Boolean(payload.shift_report_available);
   canSelectReportClub = Boolean(payload.can_select_report_club);
   shiftReportTest.hidden = true;
@@ -413,6 +485,7 @@ async function loadShift() {
     });
   }
   renderEmployeeDashboard(payload.employee_dashboard);
+  renderOwnerDashboard(payload.owner_dashboard);
   renderShiftAlerts(payload.alerts);
   shiftActions.classList.toggle('manager', payload.can_manage);
   shiftActions.hidden = false;
@@ -445,6 +518,19 @@ document.querySelector('#nextWeek').addEventListener('click', () => {
 
 document.querySelector('#currentWeek').addEventListener('click', () => {
   loadSchedule(isoLocalDate(new Date())).catch(showSectionError);
+});
+
+document.querySelector('#ownerOperations').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-owner-operation]');
+  if (!button) return;
+  const panel = document.querySelector('#ownerOperationDetail');
+  const kind = button.dataset.ownerOperation;
+  if (!panel.hidden && panel.dataset.kind === kind) {
+    panel.hidden = true;
+    button.classList.remove('active');
+    return;
+  }
+  renderOwnerOperationDetail(kind);
 });
 
 function showSectionError(error) {

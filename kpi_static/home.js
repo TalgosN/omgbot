@@ -189,7 +189,52 @@ function renderManagement(data) {
   }
 }
 
+function managementTaskState(task) {
+  if (task.status === 'completed') return { label: 'Выполнено', className: 'completed', icon: '✓' };
+  if (task.status === 'skipped') return { label: 'Пропущено', className: 'skipped', icon: '—' };
+  if (task.overdue) return { label: 'Просрочено', className: 'overdue', icon: '!' };
+  if (task.status === 'in_progress') return { label: 'В работе', className: 'progress', icon: '●' };
+  return { label: `до ${timeLabel(task.due_at)}`, className: 'pending', icon: '○' };
+}
+
+function renderManagementShiftTasks(data) {
+  const section = $('#homeTasksSection');
+  const dashboard = data.task_dashboard || { total: 0, completed: 0, groups: [] };
+  $('#homeTasksTitle').textContent = 'Выполнение задач';
+  $('#homeTasksCount').textContent = `${dashboard.completed} / ${dashboard.total}`;
+  $('#homeTasksCount').classList.toggle('warning', dashboard.overdue > 0);
+  if (!dashboard.groups.length) {
+    $('#homeTasksList').innerHTML = '<div class="home-task-empty">На сегодня задач нет <b>✓</b></div>';
+    section.hidden = false;
+    return;
+  }
+  const progress = dashboard.total ? Math.round(dashboard.completed / dashboard.total * 100) : 0;
+  $('#homeTasksList').innerHTML = `
+    <div class="home-task-overall"><span><b>Готово ${dashboard.completed} из ${dashboard.total}</b><small>${dashboard.overdue ? `Просрочено: ${dashboard.overdue}` : 'Выполнение по клубам'}</small></span><strong>${progress}%</strong><i style="--task-progress:${progress}%"></i></div>
+    ${dashboard.groups.map((group) => `
+      <details class="home-task-group${group.overdue ? ' overdue' : ''}">
+        <summary>
+          <span><strong>${escapeHtml(group.title)}</strong><small>${group.completed === group.total ? 'Все клубы выполнили' : `${group.completed} из ${group.total} клубов`}</small></span>
+          <b>${group.completed}/${group.total}</b><i>⌄</i>
+        </summary>
+        <div class="home-task-clubs">${group.clubs.map((task) => {
+    const taskState = managementTaskState(task);
+    const actor = task.completed_by_name || task.completed_by_login || '';
+    const body = `<i>${taskState.icon}</i><span><strong>${escapeHtml(task.club)}</strong><small>${taskState.label}${actor ? ` · ${escapeHtml(actor)}` : ''}</small></span>${task.status === 'completed' && task.media_count ? '<b>Отчёт →</b>' : ''}`;
+    return task.status === 'completed'
+      ? `<a class="home-task-club ${taskState.className}" href="/shift/tasks?task=${task.id}">${body}</a>`
+      : `<div class="home-task-club ${taskState.className}">${body}</div>`;
+  }).join('')}</div>
+      </details>`).join('')}
+    <a class="home-task-more" href="/shift/tasks">Все задачи и история →</a>`;
+  section.hidden = false;
+}
+
 function renderShiftTasks(data) {
+  if (data.role >= 2) {
+    renderManagementShiftTasks(data);
+    return;
+  }
   const section = $('#homeTasksSection');
   const summary = data.shift_tasks || { count: 0, items: [] };
   if (!summary.count) {

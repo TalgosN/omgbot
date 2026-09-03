@@ -1,6 +1,6 @@
 const tg = window.Telegram?.WebApp;
 const dialog = document.querySelector('#taskDialog');
-const state = { scope: 'active', club: '', tasks: [], attachments: [], current: null };
+const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null };
 
 tg?.ready();
 tg?.expand();
@@ -34,6 +34,17 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || 'Не удалось выполнить действие');
   return payload;
+}
+
+async function authenticatedBlob(path) {
+  const response = await fetch(path, {
+    headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'Не удалось загрузить вложение');
+  }
+  return response.blob();
 }
 
 function status(task) {
@@ -124,7 +135,7 @@ async function loadTasks(scope = state.scope) {
   try {
     const payload = await api(`/api/shift/tasks?scope=${scope}`);
     state.tasks = payload.tasks || [];
-    document.querySelector('#taskRole').textContent = payload.can_manage ? 'Менеджерский режим' : 'Моя смена';
+    document.querySelector('#taskRole').textContent = payload.can_manage ? 'Контроль выполнения' : 'Моя смена';
     renderSummary(payload.summary || {});
     renderClubFilters(payload.clubs || [], payload.can_manage);
     renderTasks();
@@ -141,6 +152,53 @@ function clearAttachments() {
   state.attachments.forEach((item) => URL.revokeObjectURL(item.url));
   state.attachments = [];
   renderAttachments();
+}
+
+function clearReportMedia() {
+  state.reportRequest += 1;
+  state.reportUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.reportUrls = [];
+  document.querySelector('#taskReportMedia').innerHTML = '';
+  document.querySelector('#taskReportGallery').hidden = true;
+}
+
+async function loadTaskReport(task) {
+  const requestId = ++state.reportRequest;
+  const gallery = document.querySelector('#taskReportGallery');
+  const mediaPanel = document.querySelector('#taskReportMedia');
+  const telegramLink = document.querySelector('#taskReportTelegram');
+  gallery.hidden = false;
+  mediaPanel.innerHTML = '<div class="task-report-loading">Загружаю фотографии…</div>';
+  telegramLink.hidden = true;
+  const report = await api(`/api/shift/tasks/${task.id}/report`);
+  if (requestId !== state.reportRequest || state.current?.id !== task.id) return;
+  document.querySelector('#taskReportMediaCount').textContent = report.media.length
+    ? `${report.media.length} влож.`
+    : '';
+  if (report.report_url) {
+    telegramLink.href = report.report_url;
+    telegramLink.hidden = false;
+  }
+  if (!report.media.length) {
+    mediaPanel.innerHTML = '<div class="task-report-loading">Вложений в приложении нет</div>';
+    return;
+  }
+  const loaded = await Promise.all(report.media.map(async (media) => ({
+    media,
+    url: URL.createObjectURL(await authenticatedBlob(media.url)),
+  })));
+  if (requestId !== state.reportRequest || state.current?.id !== task.id) {
+    loaded.forEach((item) => URL.revokeObjectURL(item.url));
+    return;
+  }
+  state.reportUrls = loaded.map((item) => item.url);
+  mediaPanel.innerHTML = loaded.map(({ media, url }, index) => {
+    const label = report.requirements?.[index] || `Вложение ${index + 1}`;
+    const preview = media.media_type === 'video'
+      ? `<video src="${url}" controls playsinline preload="metadata" aria-label="Видео ${index + 1}"></video>`
+      : `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Фото ${index + 1}"></a>`;
+    return `<figure>${preview}<figcaption>${escapeHtml(label)}</figcaption></figure>`;
+  }).join('');
 }
 
 function renderAttachments() {
@@ -181,6 +239,7 @@ function addFiles(files) {
 
 function openTask(task) {
   if (state.current?.id !== task.id) clearAttachments();
+  clearReportMedia();
   state.current = task;
   const itemStatus = status(task);
   document.querySelector('#dialogStatus').textContent = itemStatus.label;
@@ -202,8 +261,18 @@ function openTask(task) {
     finished.hidden = false;
     startButton.hidden = true;
     editor.hidden = true;
+    loadTaskReport(task).catch((error) => {
+      document.querySelector('#taskReportMedia').innerHTML = `<div class="task-report-loading error">${escapeHtml(error.message)}</div>`;
+    });
   } else if (task.status === 'skipped') {
     finished.textContent = `Пропустил: ${task.skipped_by_name || task.skipped_by_login || 'сотрудник'}. Причина: ${task.skip_reason || 'не указана'}`;
+    finished.hidden = false;
+    startButton.hidden = true;
+    editor.hidden = true;
+  } else if (!task.can_execute) {
+    finished.textContent = task.overdue
+      ? 'Задача просрочена. Выполнение доступно сотруднику клуба.'
+      : 'Выполнение доступно сотруднику клуба. Здесь открыт режим контроля.';
     finished.hidden = false;
     startButton.hidden = true;
     editor.hidden = true;
@@ -328,6 +397,7 @@ document.querySelector('#taskList').addEventListener('click', (event) => {
   if (task) openTask(task);
 });
 document.querySelector('#closeTaskDialog').addEventListener('click', () => dialog.close());
+dialog.addEventListener('close', clearReportMedia);
 document.querySelector('#startTask').addEventListener('click', startCurrentTask);
 document.querySelector('#openTaskCamera').addEventListener('click', () => document.querySelector('#taskCameraInput').click());
 document.querySelector('#pickTaskFiles').addEventListener('click', () => document.querySelector('#taskFileInput').click());
@@ -343,6 +413,11 @@ document.querySelector('#attachmentList').addEventListener('click', (event) => {
 document.querySelector('#completeTask').addEventListener('click', completeCurrentTask);
 document.querySelector('#showSkipForm').addEventListener('click', () => { document.querySelector('#skipForm').hidden = false; });
 document.querySelector('#skipTask').addEventListener('click', skipCurrentTask);
+document.querySelector('#taskReportTelegram').addEventListener('click', (event) => {
+  if (!tg?.openTelegramLink) return;
+  event.preventDefault();
+  tg.openTelegramLink(event.currentTarget.href);
+});
 
 (async () => {
   const payload = await loadTasks('active');

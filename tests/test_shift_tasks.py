@@ -479,6 +479,71 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(stored, ('completed', '@employee', '-1001'))
         self.assertEqual(media_count, task['required_attachments'])
 
+    def test_management_can_review_tasks_but_cannot_execute_them(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        shift_tasks.ensure_task_instances(
+            '2026-09-01', db_path=self.db_path, now=now,
+        )
+        manager = {
+            'chatid': '202', 'login': '@manager', 'nick_name': 'Менеджер',
+            'status': shift_tasks.ROLE_MANAGER,
+        }
+
+        tasks = shift_tasks.app_task_list(
+            manager, db_path=self.db_path, now=now,
+        )
+
+        self.assertTrue(tasks)
+        self.assertFalse(tasks[0]['can_execute'])
+        with self.assertRaisesRegex(ValueError, 'только для просмотра'):
+            shift_tasks.start_app_task(
+                manager, tasks[0]['id'], db_path=self.db_path,
+            )
+
+    def test_management_can_open_submitted_task_media(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        task_id = shift_tasks.ensure_task_instances(
+            '2026-09-01', db_path=self.db_path, now=now,
+        )[0]
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.execute(
+                '''UPDATE shift_task_instances
+                   SET status='completed', completed_at=?,
+                       completed_by_login='@employee', completed_by_name='Иван',
+                       report_chatid='-100123', report_message_ids='["45"]'
+                   WHERE id=?''',
+                ('2026-09-01 12:30:00', task_id),
+            )
+            conn.execute(
+                '''INSERT INTO shift_task_media (
+                       instance_id, telegram_file_id, telegram_file_unique_id,
+                       media_type, file_size, submitted_by_chatid, created_at,
+                       state)
+                   VALUES (?, 'photo-file', 'photo-unique', 'photo', 100,
+                           '101', '2026-09-01 12:30:00', 'submitted')''',
+                (task_id,),
+            )
+        conn.close()
+        manager = {
+            'chatid': '202', 'login': '@manager', 'status': 2,
+        }
+
+        report = shift_tasks.app_task_report(
+            manager, task_id, db_path=self.db_path, now=now,
+        )
+        media = shift_tasks.app_task_media_file(
+            manager, task_id, report['media'][0]['id'], db_path=self.db_path,
+        )
+
+        self.assertEqual(report['media_count'], 1)
+        self.assertEqual(report['report_message_ids'], ['45'])
+        self.assertEqual(media['telegram_file_id'], 'photo-file')
+
     def test_information_broadcast_can_be_converted_without_copy(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)

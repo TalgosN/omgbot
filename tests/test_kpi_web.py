@@ -367,6 +367,81 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(len(uploads), 1)
         self.assertEqual(uploads[0]['media_type'], 'photo')
 
+    def test_shift_task_dashboard_groups_completion_by_template_and_club(self):
+        tasks = [
+            {
+                'id': 1, 'date': '2026-09-03', 'template_id': 5, 'title': 'Чистота',
+                'club': 'Ленинский', 'status': 'completed',
+                'overdue': False, 'due_at': '2026-09-03 22:00:00',
+                'completed_at': '2026-09-03 18:00:00',
+                'completed_by_name': 'Иван', 'completed_by_login': '@ivan',
+                'media_count': 2, 'can_execute': False,
+            },
+            {
+                'id': 2, 'date': '2026-09-03', 'template_id': 5, 'title': 'Чистота',
+                'club': 'Каширка', 'status': 'pending',
+                'overdue': True, 'due_at': '2026-09-03 22:00:00',
+                'completed_at': None, 'completed_by_name': None,
+                'completed_by_login': None, 'media_count': 0,
+                'can_execute': False,
+            },
+        ]
+        with (
+            kpi_web.app.test_request_context('/'),
+            patch.object(kpi_web, 'app_task_list', return_value=tasks),
+        ):
+            kpi_web.g.kpi_preview = None
+            dashboard = kpi_web._shift_task_dashboard(user(2))
+
+        self.assertEqual(dashboard['completed'], 1)
+        self.assertEqual(dashboard['total'], 2)
+        self.assertEqual(dashboard['overdue'], 1)
+        self.assertEqual(dashboard['groups'][0]['completed'], 1)
+        self.assertEqual(len(dashboard['groups'][0]['clubs']), 2)
+
+    def test_task_report_returns_private_chat_link_and_media_urls(self):
+        report = {
+            'id': 7,
+            'media': [{'id': 9, 'media_type': 'photo', 'file_size': 100}],
+            'report_chatid': '-100123456',
+            'report_message_ids': ['77'],
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, 'app_task_report', return_value=report),
+        ):
+            response = self.client.get(
+                '/api/shift/tasks/7/report', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['report_url'], 'https://t.me/c/123456/77')
+        self.assertEqual(
+            payload['media'][0]['url'], '/api/shift/tasks/7/media/9',
+        )
+
+    def test_task_media_is_downloaded_server_side(self):
+        bot = Mock()
+        bot.get_file.return_value.file_path = 'photos/report.jpg'
+        bot.download_file.return_value = b'jpeg-data'
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(2)),
+            patch.object(kpi_web, '_notification_bot', return_value=bot),
+            patch.object(kpi_web, 'app_task_media_file', return_value={
+                'telegram_file_id': 'photo-file', 'media_type': 'photo',
+            }),
+        ):
+            response = self.client.get(
+                '/api/shift/tasks/7/media/9', headers=self.headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b'jpeg-data')
+        self.assertEqual(response.mimetype, 'image/jpeg')
+
     def test_records_api_is_available_to_every_active_role(self):
         payload = {
             'summary': {'earned': 0, 'total': 31},
@@ -1554,6 +1629,107 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn(b'display:none !important', shift_css.data)
         finally:
             shift_css.close()
+
+    def test_owner_shift_uses_operational_dashboard_without_report_controls(self):
+        task_dashboard = {
+            'total': 5, 'completed': 3, 'active': 2,
+            'overdue': 0, 'skipped': 0, 'groups': [],
+        }
+        owner_dashboard = {
+            'date': '2026-09-03', 'opened': 4, 'total_clubs': 5,
+            'late': 1, 'clubs': [], 'tasks': task_dashboard, 'reviews': 2,
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'get_user', return_value=user(3)),
+            patch.object(
+                kpi_web, '_shift_task_dashboard', return_value=task_dashboard,
+            ),
+            patch.object(
+                kpi_web, '_owner_shift_dashboard', return_value=owner_dashboard,
+            ) as dashboard,
+            patch.object(kpi_web, '_shift_review_count', return_value=2),
+        ):
+            response = self.client.get('/api/shift', headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIsNone(payload['employee_dashboard'])
+        self.assertEqual(payload['owner_dashboard'], owner_dashboard)
+        self.assertFalse(payload['shift_report_available'])
+        self.assertFalse(payload['can_select_report_club'])
+        dashboard.assert_called_once_with(unittest.mock.ANY, task_dashboard)
+
+    def test_owner_operational_dashboard_counts_all_physical_clubs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / 'operations.db'
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                '''
+                CREATE TABLE users (
+                    login TEXT, nick_name TEXT, first_name TEXT
+                );
+                CREATE TABLE clubs (club TEXT, status TEXT);
+                CREATE TABLE shifts (dt_shift TEXT, club TEXT);
+                CREATE TABLE activity (
+                    ID INTEGER PRIMARY KEY, login TEXT, dtrep TEXT,
+                    club TEXT, action TEXT
+                );
+                INSERT INTO users VALUES ('@employee', 'Иван', 'Иван');
+                INSERT INTO clubs VALUES ('Клуб А', 'Открыт');
+                INSERT INTO clubs VALUES ('Клуб Б', 'Закрыт');
+                INSERT INTO shifts VALUES ('2026-09-03', 'Клуб А');
+                '''
+            )
+            conn.commit()
+            conn.close()
+            task_dashboard = {
+                'total': 1, 'completed': 0, 'active': 1,
+                'overdue': 0, 'skipped': 0, 'groups': [],
+            }
+            club_settings = {
+                'Клуб А': {'schedule': {'open_strict': {
+                    'weekdays': '10:00:00', 'weekend': '10:00:00',
+                }}},
+                'Клуб Б': {'schedule': {'open_strict': {
+                    'weekdays': '10:00:00', 'weekend': '10:00:00',
+                }}},
+            }
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'get_clubs', return_value=club_settings),
+                patch.object(
+                    kpi_web, 'BUKZA_CLUB_CODES', {'a': 'Клуб А', 'b': 'Клуб Б'},
+                ),
+                patch.object(kpi_web, '_task_counts', return_value={
+                    'work': 0, 'review': 2,
+                }),
+                kpi_web.app.test_request_context('/'),
+            ):
+                kpi_web.g.kpi_preview = {'date': '2026-09-03'}
+                kpi_web._initialize_shift_report_schema(str(db_path))
+                conn = sqlite3.connect(db_path)
+                with conn:
+                    conn.execute(
+                        '''INSERT INTO shift_webapp_runs (
+                               id, login, chatid, club, action, shift_date,
+                               scenario_version, variant_index, started_at,
+                               completed_at)
+                           VALUES ('run-1', '@employee', '101', 'Клуб А',
+                                   'open', '2026-09-03', 'v1', 0,
+                                   '2026-09-03 10:10:00',
+                                   '2026-09-03 10:20:00')'''
+                    )
+                conn.close()
+                dashboard = kpi_web._owner_shift_dashboard(
+                    user(3), task_dashboard,
+                )
+
+        self.assertEqual(dashboard['opened'], 1)
+        self.assertEqual(dashboard['total_clubs'], 2)
+        self.assertEqual(dashboard['late'], 1)
+        self.assertFalse(dashboard['clubs'][1]['scheduled'])
+        self.assertEqual(dashboard['reviews'], 2)
 
     def test_shift_consumables_are_visible_to_employee_but_managed_by_manager(self):
         inventory = {

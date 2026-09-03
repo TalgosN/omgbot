@@ -106,7 +106,9 @@ from shift_config_store import (
     save_editor_config,
 )
 from shift_tasks import (
+    app_task_media_file,
     app_task_list,
+    app_task_report,
     complete_app_task,
     skip_app_task,
     start_app_task,
@@ -2244,6 +2246,200 @@ def _active_shift_task_summary(user, limit=3):
     }
 
 
+def _shift_task_dashboard(user):
+    current = _effective_now()
+    tasks = app_task_list(
+        user, scope='active', db_path=DB_PATH, now=current,
+        ensure_instances=not bool(getattr(g, 'kpi_preview', None)),
+    )
+    groups = {}
+    for task in tasks:
+        key = str(task['template_id'])
+        group = groups.setdefault(key, {
+            'template_id': int(task['template_id']),
+            'title': task['title'],
+            'total': 0,
+            'completed': 0,
+            'skipped': 0,
+            'overdue': 0,
+            'clubs': [],
+        })
+        status = str(task['status'])
+        group['total'] += 1
+        group['completed'] += int(status == 'completed')
+        group['skipped'] += int(status == 'skipped')
+        group['overdue'] += int(bool(task.get('overdue')))
+        group['clubs'].append({
+            'id': int(task['id']),
+            'date': task['date'],
+            'club': task['club'],
+            'status': status,
+            'overdue': bool(task.get('overdue')),
+            'due_at': task['due_at'],
+            'completed_at': task.get('completed_at'),
+            'completed_by_name': task.get('completed_by_name'),
+            'completed_by_login': task.get('completed_by_login'),
+            'media_count': int(task.get('media_count') or 0),
+            'can_execute': bool(task.get('can_execute')),
+        })
+    ordered_groups = list(groups.values())
+    for group in ordered_groups:
+        group['clubs'].sort(key=lambda item: (
+            item['status'] != 'completed',
+            not item['overdue'],
+            str(item['club']).casefold(),
+        ))
+    total = len(tasks)
+    completed = sum(task['status'] == 'completed' for task in tasks)
+    return {
+        'total': total,
+        'completed': completed,
+        'active': sum(
+            task['status'] in {'pending', 'in_progress'} for task in tasks
+        ),
+        'overdue': sum(bool(task.get('overdue')) for task in tasks),
+        'skipped': sum(task['status'] == 'skipped' for task in tasks),
+        'groups': ordered_groups,
+    }
+
+
+def _local_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(
+            str(value)[:19].replace('T', ' '), '%Y-%m-%d %H:%M:%S',
+        ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
+    except ValueError:
+        return None
+
+
+def _owner_shift_dashboard(user, task_dashboard=None):
+    current = _effective_now()
+    today = current.date().isoformat()
+    configured_clubs = get_clubs()
+    physical_clubs = list(dict.fromkeys(
+        club for club in BUKZA_CLUB_CODES.values()
+        if club in configured_clubs
+    ))
+    _initialize_shift_report_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        users = {
+            str(row['login']).casefold(): (
+                row['nick_name'] or row['first_name'] or row['login']
+            )
+            for row in conn.execute(
+                '''SELECT login, nick_name, first_name FROM users
+                   WHERE login IS NOT NULL'''
+            ).fetchall()
+        }
+        live_statuses = dict(conn.execute(
+            'SELECT club, status FROM clubs'
+        ).fetchall())
+        scheduled = {
+            str(row[0]) for row in conn.execute(
+                '''SELECT DISTINCT club FROM shifts
+                   WHERE date(substr(dt_shift, 1, 10))=date(?)''',
+                (today,),
+            ).fetchall()
+            if row[0]
+        }
+        web_runs = [
+            dict(row) for row in conn.execute(
+                '''SELECT * FROM shift_webapp_runs
+                   WHERE shift_date=? AND action='open'
+                   ORDER BY datetime(started_at), id''',
+                (today,),
+            ).fetchall()
+        ]
+        linked_activity_ids = {
+            int(row['activity_id'])
+            for row in web_runs if row.get('activity_id')
+        }
+        activity_rows = [
+            dict(row) for row in conn.execute(
+                '''SELECT ID AS id, login, dtrep, club, action
+                   FROM activity WHERE date(dtrep)=date(?)
+                   ORDER BY datetime(dtrep), ID''',
+                (today,),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    reports = {}
+    for run in web_runs:
+        club, club_info = _shift_report_test_club(run.get('club'))
+        if club not in physical_clubs:
+            continue
+        started_at = _local_datetime(run.get('started_at'))
+        state = _shift_run_state(run)
+        item = {
+            'club': club,
+            'state': state,
+            'opened_at': run.get('started_at'),
+            'opened_by': users.get(str(run.get('login') or '').casefold())
+                         or run.get('login'),
+            'late_minutes': (
+                _shift_report_late_minutes(club_info, started_at)
+                if started_at else 0
+            ),
+        }
+        previous = reports.get(club)
+        if previous is None or (
+            previous['state'] != 'completed' and state == 'completed'
+        ):
+            reports[club] = item
+
+    for row in activity_rows:
+        if int(row['id']) in linked_activity_ids:
+            continue
+        if _shift_report_action(row.get('action')) != 'open':
+            continue
+        club, club_info = _shift_report_test_club(row.get('club'))
+        if club not in physical_clubs:
+            continue
+        started_at = _local_datetime(row.get('dtrep'))
+        reports.setdefault(club, {
+            'club': club,
+            'state': 'completed',
+            'opened_at': row.get('dtrep'),
+            'opened_by': users.get(str(row.get('login') or '').casefold())
+                         or row.get('login'),
+            'late_minutes': (
+                _shift_report_late_minutes(club_info, started_at)
+                if started_at else 0
+            ),
+        })
+
+    clubs = []
+    for club in physical_clubs:
+        report = reports.get(club, {})
+        clubs.append({
+            'club': club,
+            'state': report.get('state', 'not_started'),
+            'opened_at': report.get('opened_at'),
+            'opened_by': report.get('opened_by'),
+            'late_minutes': int(report.get('late_minutes') or 0),
+            'scheduled': club in scheduled,
+            'live_status': _normalize_legacy_text(
+                live_statuses.get(club) or ''
+            ),
+        })
+    opened = [club for club in clubs if club['state'] == 'completed']
+    return {
+        'date': today,
+        'opened': len(opened),
+        'total_clubs': len(clubs),
+        'late': sum(club['late_minutes'] > 5 for club in opened),
+        'clubs': clubs,
+        'tasks': task_dashboard or _shift_task_dashboard(user),
+        'reviews': _task_counts()['review'],
+    }
+
+
 def _shift_review_count(user):
     role = int(user['status'])
     if role >= ROLE_MANAGER:
@@ -3781,12 +3977,17 @@ def api_home():
     selected_day = today.isoformat()
     role = int(g.kpi_user['status'])
     login = _actor_login()
+    task_dashboard = _shift_task_dashboard(g.kpi_user)
     payload = {
         'date': selected_day,
         'role': role,
         'upcoming_shifts': [],
         'personal_kpi': None,
-        'shift_tasks': _active_shift_task_summary(g.kpi_user),
+        'shift_tasks': (
+            _active_shift_task_summary(g.kpi_user)
+            if role < ROLE_MANAGER else None
+        ),
+        'task_dashboard': task_dashboard,
         'management': None,
         'clubs': [],
     }
@@ -3878,7 +4079,15 @@ def api_shift():
                 _actor_login(), today.strftime('%Y-%m'),
             ),
         }
-    task_summary = _active_shift_task_summary(g.kpi_user)
+    task_dashboard = _shift_task_dashboard(g.kpi_user)
+    task_summary = (
+        _active_shift_task_summary(g.kpi_user)
+        if role < ROLE_MANAGER else {'count': 0, 'overdue': 0, 'items': []}
+    )
+    owner_dashboard = (
+        _owner_shift_dashboard(g.kpi_user, task_dashboard)
+        if role == ROLE_OWNER else None
+    )
     return jsonify({
         'external_url': OMG_SHIFT_URL,
         'preview_mode': bool(g.kpi_preview),
@@ -3889,14 +4098,16 @@ def api_shift():
         ),
         'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
-        'can_select_report_club': role == ROLE_OWNER,
+        'can_select_report_club': False,
         'camera_test_available': bool(
             TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
         ),
-        'shift_report_available': bool(
+        'shift_report_available': role != ROLE_OWNER and bool(
             TELEGRAM_API_KEY and CHATS.get('reports') and CHATS.get('main_group')
         ),
         'employee_dashboard': dashboard,
+        'task_dashboard': task_dashboard,
+        'owner_dashboard': owner_dashboard,
         'alerts': {
             'tasks': task_summary,
             'reviews': _shift_review_count(g.kpi_user),
@@ -3909,9 +4120,13 @@ def api_shift():
 def api_shift_overview():
     login = _actor_login()
     current = _effective_now()
+    contexts = _today_shift_contexts(login, now=current)
+    if int(g.kpi_user['status']) == ROLE_OWNER:
+        for context in contexts:
+            context['report_available'] = False
     return jsonify({
         'date': current.date().isoformat(),
-        'today': _today_shift_contexts(login, now=current),
+        'today': contexts,
         'history': _shift_history(login),
     })
 
@@ -3957,6 +4172,50 @@ def api_shift_tasks():
             'skipped': sum(task['status'] == 'skipped' for task in tasks),
         },
     })
+
+
+def _telegram_private_message_url(chatid, message_ids):
+    chat = str(chatid or '').strip()
+    messages = [str(value) for value in (message_ids or []) if str(value)]
+    if not chat.startswith('-100') or not messages:
+        return None
+    return f'https://t.me/c/{chat[4:]}/{messages[0]}'
+
+
+@app.get('/api/shift/tasks/<int:instance_id>/report')
+@require_user
+def api_shift_task_report(instance_id):
+    task = app_task_report(g.kpi_user, instance_id, db_path=DB_PATH)
+    task['report_url'] = _telegram_private_message_url(
+        task.pop('report_chatid', None),
+        task.pop('report_message_ids', []),
+    )
+    for media in task['media']:
+        media['url'] = (
+            f'/api/shift/tasks/{instance_id}/media/{int(media["id"])}'
+        )
+    return jsonify(task)
+
+
+@app.get('/api/shift/tasks/<int:instance_id>/media/<int:media_id>')
+@require_user
+def api_shift_task_media(instance_id, media_id):
+    media = app_task_media_file(
+        g.kpi_user, instance_id, media_id, db_path=DB_PATH,
+    )
+    bot = _notification_bot()
+    if not bot:
+        return jsonify({'error': 'Вложение временно недоступно.'}), 503
+    try:
+        file_info = bot.get_file(media['telegram_file_id'])
+        content = bot.download_file(file_info.file_path)
+    except Exception as error:
+        print(f'Ошибка загрузки вложения задачи смены: {error}')
+        return jsonify({'error': 'Не удалось загрузить вложение.'}), 502
+    mimetype = (
+        'video/mp4' if media['media_type'] == 'video' else 'image/jpeg'
+    )
+    return send_file(io.BytesIO(content), mimetype=mimetype, max_age=60)
 
 
 @app.post('/api/shift/tasks/<int:instance_id>/start')
