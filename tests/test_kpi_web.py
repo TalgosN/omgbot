@@ -60,6 +60,7 @@ class KpiWebTest(unittest.TestCase):
     def setUp(self):
         kpi_web.app.config['TESTING'] = True
         kpi_web._kpi_cache.clear()
+        kpi_web._employee_preview_sessions.clear()
         self.client = kpi_web.app.test_client()
         self.headers = {'X-Telegram-Init-Data': signed_init_data()}
         self.membership_patch = patch.object(
@@ -70,7 +71,170 @@ class KpiWebTest(unittest.TestCase):
         self.membership_patch.start()
 
     def tearDown(self):
+        kpi_web._employee_preview_sessions.clear()
         self.membership_patch.stop()
+
+    def _preview_database(self, path):
+        conn = sqlite3.connect(path)
+        try:
+            with conn:
+                conn.execute(
+                    '''CREATE TABLE users (
+                           ID INTEGER PRIMARY KEY, chatid TEXT, login TEXT,
+                           nick_name TEXT, first_name TEXT, second_name TEXT,
+                           status INTEGER
+                       )'''
+                )
+                conn.execute(
+                    '''CREATE TABLE shifts (
+                           shift_second_name TEXT, shift_first_name TEXT,
+                           dt_shift TEXT, club TEXT, dur REAL,
+                           shift_login TEXT, shift_start TEXT, shift_end TEXT
+                       )'''
+                )
+                conn.execute(
+                    '''INSERT INTO users
+                       (ID, chatid, login, nick_name, first_name, second_name, status)
+                       VALUES (2, '2002', '@employee', 'Миша', 'Михаил', 'Тестов', 0)'''
+                )
+                conn.execute(
+                    '''INSERT INTO shifts
+                       (shift_second_name, shift_first_name, dt_shift, club, dur,
+                        shift_login, shift_start, shift_end)
+                       VALUES ('Тестов', 'Михаил', '2026-09-03', 'Каширка', 14,
+                               '@employee', '10:00', '00:00')'''
+                )
+        finally:
+            conn.close()
+
+    def test_owner_can_preview_real_employee_shift_without_working_writes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'preview.sqlite3'
+            self._preview_database(db_path)
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(3)),
+            ):
+                options = self.client.get(
+                    '/api/employee-preview/shifts', headers=self.headers,
+                )
+                started = self.client.post(
+                    '/api/employee-preview/start', headers=self.headers,
+                    json={
+                        'employee_login': '@employee',
+                        'date': '2026-09-03',
+                        'club': 'Каширка',
+                    },
+                )
+                me = self.client.get('/api/me', headers=self.headers)
+                blocked = self.client.post(
+                    '/api/penalties', headers=self.headers, json={},
+                )
+                stopped = self.client.post(
+                    '/api/employee-preview/stop', headers=self.headers,
+                    json={},
+                )
+                restored = self.client.get('/api/me', headers=self.headers)
+
+        self.assertEqual(options.status_code, 200)
+        self.assertEqual(len(options.get_json()['shifts']), 1)
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(me.get_json()['role'], 0)
+        self.assertEqual(me.get_json()['login'], '@employee')
+        self.assertEqual(me.get_json()['actual_role'], 3)
+        self.assertEqual(me.get_json()['preview']['club'], 'Каширка')
+        self.assertEqual(blocked.status_code, 409)
+        self.assertTrue(blocked.get_json()['preview_mode'])
+        self.assertEqual(stopped.status_code, 200)
+        self.assertEqual(restored.get_json()['role'], 3)
+
+    def test_preview_notification_is_sent_only_to_owner(self):
+        bot = Mock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'preview.sqlite3'
+            self._preview_database(db_path)
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(3)),
+                patch.object(kpi_web, '_notification_bot', return_value=bot),
+                patch.object(kpi_web, 'app_task_list', return_value=[]),
+            ):
+                self.client.post(
+                    '/api/employee-preview/start', headers=self.headers,
+                    json={
+                        'employee_login': '@employee',
+                        'date': '2026-09-03',
+                        'club': 'Каширка',
+                    },
+                )
+                response = self.client.post(
+                    '/api/employee-preview/notification',
+                    headers=self.headers, json={},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        bot.send_message.assert_called_once()
+        self.assertEqual(bot.send_message.call_args.args[0], '1001')
+        self.assertIn('ТЕСТ', bot.send_message.call_args.args[1])
+
+    def test_preview_shift_report_uses_sandbox_sender(self):
+        scenario = {
+            'action': 'open', 'action_label': 'Открытие', 'club': 'Каширка',
+            'shift': {
+                'date': '2026-09-03', 'club': 'Каширка', 'duration': 14,
+                'start': '10:00', 'end': '00:00',
+            },
+            'variant_index': 0, 'version': 'test-version',
+            'questions': [], 'cleanliness_questions': [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'preview.sqlite3'
+            self._preview_database(db_path)
+            with (
+                patch.object(kpi_web, 'DB_PATH', str(db_path)),
+                patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+                patch.object(kpi_web, 'get_user', return_value=user(3)),
+                patch.object(
+                    kpi_web, '_shift_report_test_scenario',
+                    return_value=dict(scenario),
+                ),
+                patch.object(kpi_web, '_send_shift_report_test') as send_test,
+                patch.object(kpi_web, '_start_shift_report_run') as start_working,
+            ):
+                self.client.post(
+                    '/api/employee-preview/start', headers=self.headers,
+                    json={
+                        'employee_login': '@employee',
+                        'date': '2026-09-03',
+                        'club': 'Каширка',
+                    },
+                )
+                started = self.client.post(
+                    '/api/shift-test/start', headers=self.headers,
+                    json={
+                        'action': 'open', 'club': 'Каширка',
+                        'variant_index': 0, 'version': 'test-version',
+                    },
+                )
+                submitted = self.client.post(
+                    '/api/shift-test/submit', headers=self.headers,
+                    data={'report': json.dumps({
+                        'action': 'open', 'club': 'Каширка',
+                        'variant_index': 0, 'version': 'test-version',
+                        'answers': {}, 'photo_ids': [],
+                        'cleanliness_photo_ids': [],
+                    })},
+                )
+
+        self.assertEqual(started.status_code, 200)
+        self.assertTrue(started.get_json()['preview_mode'])
+        self.assertEqual(submitted.status_code, 200)
+        self.assertTrue(submitted.get_json()['preview_mode'])
+        start_working.assert_not_called()
+        send_test.assert_called_once()
+        self.assertEqual(send_test.call_args.kwargs['chat_id'], '1001')
 
     def test_init_data_signature_and_age_are_validated(self):
         self.assertEqual(
@@ -143,6 +307,21 @@ class KpiWebTest(unittest.TestCase):
             )
         finally:
             home.close()
+
+    def test_app_pages_load_employee_preview_controls(self):
+        for path in (
+            '/', '/kpi', '/problems', '/records', '/shift',
+            '/shift/consumables', '/shift/tasks', '/shift-config',
+            '/shift-report', '/camera-test',
+        ):
+            response = self.client.get(path)
+            try:
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    b'/static/employee_preview.js', response.data,
+                )
+            finally:
+                response.close()
 
     def test_shift_tasks_api_returns_shared_task_statuses(self):
         tasks = [{

@@ -395,6 +395,9 @@ function renderEmployeeDashboard(dashboard) {
 
 async function loadShift() {
   const payload = await api('/api/shift');
+  if (payload.preview_mode) {
+    document.querySelector('#shiftReportDescription').textContent = 'Тестовый прогон работает полностью, но результат придёт только владельцу в ЛС и не изменит рабочие данные.';
+  }
   document.querySelector('#shiftUserName').textContent = `Команда OMG VR · ${payload.user_name}`;
   document.querySelector('#shiftRole').textContent = payload.role_name;
   shiftReportAvailable = Boolean(payload.shift_report_available);

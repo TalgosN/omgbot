@@ -1090,10 +1090,13 @@ def _app_task_payload(instance, current):
     }
 
 
-def app_task_list(user, scope='active', db_path=DB_PATH, now=None):
+def app_task_list(
+    user, scope='active', db_path=DB_PATH, now=None, ensure_instances=True,
+):
     current = _now(now)
     initialize_shift_tasks_schema(db_path)
-    ensure_task_instances(current.date(), db_path=db_path, now=current)
+    if ensure_instances:
+        ensure_task_instances(current.date(), db_path=db_path, now=current)
     actor = _app_actor(user)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

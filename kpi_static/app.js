@@ -1223,6 +1223,14 @@ async function initialize() {
   updateChartOptions();
   try {
     state.me = await api('/api/me');
+    if (state.me.preview?.date) {
+      state.day = state.me.preview.date;
+      state.month = state.day.slice(0, 7);
+      $('#datePicker').value = state.day;
+      $('#dateDisplay').textContent = numericDayLabel(state.day);
+      $('#analyticsMonth').value = state.month;
+      syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
+    }
     $('#kpiUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#userBadge').textContent = state.me.role_name;
     $('#userBadge').classList.remove('skeleton');

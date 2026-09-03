@@ -16,7 +16,15 @@ from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
 import telebot
-from flask import Flask, g, jsonify, request, send_file, send_from_directory
+from flask import (
+    Flask,
+    g,
+    has_request_context,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+)
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -64,6 +72,7 @@ from kpi_calculator import (
 )
 from permissions import (
     ACTIVE_ROLES,
+    ROLE_EMPLOYEE,
     ROLE_MANAGER,
     ROLE_NAMES,
     ROLE_OWNER,
@@ -157,6 +166,8 @@ _shift_report_test_sent_at = {}
 _shift_report_test_lock = threading.Lock()
 _shift_schedule_cache = {}
 _shift_schedule_cache_lock = threading.Lock()
+_employee_preview_sessions = {}
+_employee_preview_lock = threading.Lock()
 SHIFT_SCHEDULE_CACHE_SECONDS = 30
 
 app = Flask(__name__, static_folder=None)
@@ -606,7 +617,7 @@ def _validate_init_data(init_data, bot_token, now=None):
     }
 
 
-def _request_user():
+def _authenticated_request_user():
     auth = _validate_init_data(
         request.headers.get('X-Telegram-Init-Data', ''),
         TELEGRAM_API_KEY,
@@ -623,6 +634,71 @@ def _request_user():
     ):
         return None
     return dict(user)
+
+
+def _preview_employee(shift):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            '''SELECT employee.*,
+                      date(substr(shift_row.dt_shift, 1, 10)) AS preview_date,
+                      shift_row.club AS preview_club,
+                      MIN(shift_row.shift_start) AS preview_start,
+                      MAX(shift_row.shift_end) AS preview_end,
+                      ROUND(SUM(COALESCE(shift_row.dur, 0)), 1) AS preview_duration
+               FROM shifts shift_row
+               JOIN users employee ON (
+                    shift_row.shift_login IS NOT NULL
+                    AND lower(shift_row.shift_login)=lower(employee.login)
+               ) OR (
+                    shift_row.shift_login IS NULL
+                    AND shift_row.shift_second_name=employee.second_name
+                    AND shift_row.shift_first_name=employee.first_name
+               )
+               WHERE employee.status=? AND lower(employee.login)=lower(?)
+                 AND date(substr(shift_row.dt_shift, 1, 10))=date(?)
+                 AND lower(trim(shift_row.club))=lower(trim(?))
+               GROUP BY employee.ID, preview_date, shift_row.club
+               ORDER BY employee.ID LIMIT 1''',
+            (
+                ROLE_EMPLOYEE, shift['employee_login'], shift['date'],
+                shift['club'],
+            ),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    result = dict(row)
+    result['status'] = ROLE_EMPLOYEE
+    return result
+
+
+def _preview_session(owner_chatid):
+    with _employee_preview_lock:
+        session = _employee_preview_sessions.get(str(owner_chatid))
+        return dict(session) if session else None
+
+
+def _request_user():
+    actual_user = _authenticated_request_user()
+    if not actual_user:
+        return None
+    g.kpi_actual_user = actual_user
+    g.kpi_preview = None
+    if int(actual_user['status']) != ROLE_OWNER:
+        return actual_user
+    preview = _preview_session(actual_user['chatid'])
+    if not preview:
+        return actual_user
+    employee = _preview_employee(preview)
+    if not employee:
+        with _employee_preview_lock:
+            _employee_preview_sessions.pop(str(actual_user['chatid']), None)
+        return actual_user
+    g.kpi_preview = preview
+    return employee
 
 
 def _main_group_membership_bot():
@@ -644,6 +720,36 @@ def require_user(handler):
         if not user:
             return jsonify({'error': 'Откройте приложение через Telegram-бота.'}), 401
         g.kpi_user = user
+        if (
+            g.kpi_preview
+            and request.method not in {'GET', 'HEAD', 'OPTIONS'}
+            and request.path not in {
+                '/api/shift-test/start',
+                '/api/shift-test/submit',
+            }
+        ):
+            return jsonify({
+                'error': 'Тестовый режим: рабочие изменения отключены.',
+                'preview_mode': True,
+            }), 409
+        return handler(*args, **kwargs)
+    return wrapped
+
+
+def require_actual_owner(handler):
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        user = _authenticated_request_user()
+        if not user:
+            return jsonify({
+                'error': 'Откройте приложение через Telegram-бота.',
+            }), 401
+        if int(user['status']) != ROLE_OWNER:
+            return jsonify({
+                'error': 'Тестовый режим доступен только владельцам.',
+            }), 403
+        g.kpi_actual_user = user
+        g.kpi_preview = _preview_session(user['chatid'])
         return handler(*args, **kwargs)
     return wrapped
 
@@ -815,8 +921,22 @@ def _plain_task_feedback(value):
     return html.unescape(without_tags).strip()
 
 
+def _effective_now():
+    current = datetime.now(ZoneInfo('Europe/Moscow'))
+    preview = getattr(g, 'kpi_preview', None) if has_request_context() else None
+    if not preview:
+        return current
+    try:
+        selected = datetime.strptime(preview['date'], '%Y-%m-%d').date()
+    except (KeyError, TypeError, ValueError):
+        return current
+    return current.replace(
+        year=selected.year, month=selected.month, day=selected.day,
+    )
+
+
 def _moscow_today():
-    return datetime.now(ZoneInfo('Europe/Moscow')).date()
+    return _effective_now().date()
 
 
 def _upcoming_shifts(login, limit=3, date_from=None, date_to=None):
@@ -2086,10 +2206,11 @@ def _task_counts():
 
 
 def _active_shift_task_summary(user, limit=3):
-    current = datetime.now(ZoneInfo('Europe/Moscow'))
+    current = _effective_now()
     tasks = [
         task for task in app_task_list(
             user, scope='active', db_path=DB_PATH, now=current,
+            ensure_instances=not bool(getattr(g, 'kpi_preview', None)),
         )
         if task['status'] in {'pending', 'in_progress'}
     ]
@@ -2541,13 +2662,19 @@ def _shift_report_test_messages(scenario, answers):
         ) or 'время не указано'
     )
     heading_emoji = '🌅' if scenario['action_label'] == 'Открытие' else '🌙'
-    heading_lines = [
+    heading_lines = []
+    if scenario.get('preview_mode'):
+        heading_lines.extend([
+            '🧪 <b>ТЕСТОВЫЙ РЕЖИМ · без записи в рабочие отчёты</b>',
+            '',
+        ])
+    heading_lines.extend([
         f"{heading_emoji} <b>{html.escape(scenario['action_label'])} смены</b>",
         '',
         f"📍 <b>Клуб:</b> {html.escape(scenario['club'])}",
         f"👤 <b>Сотрудник:</b> {html.escape(str(name))} · {html.escape(login)}",
         f"📅 <b>Дата:</b> {html.escape(str(shift.get('date') or '—'))}",
-    ]
+    ])
     if scenario.get('started_at') and scenario.get('finished_at'):
         heading_lines.extend([
             f"⏰ <b>Начато:</b> {html.escape(scenario['started_at'][11:16])}",
@@ -3477,10 +3604,150 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+def _employee_preview_options():
+    today = datetime.now(ZoneInfo('Europe/Moscow')).date()
+    date_from = (today - timedelta(days=14)).isoformat()
+    date_to = (today + timedelta(days=45)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            '''SELECT employee.login AS employee_login,
+                      COALESCE(NULLIF(employee.nick_name, ''),
+                               NULLIF(employee.first_name, ''),
+                               employee.login) AS employee_name,
+                      date(substr(shift_row.dt_shift, 1, 10)) AS shift_date,
+                      shift_row.club,
+                      MIN(shift_row.shift_start) AS shift_start,
+                      MAX(shift_row.shift_end) AS shift_end,
+                      ROUND(SUM(COALESCE(shift_row.dur, 0)), 1) AS duration
+               FROM shifts shift_row
+               JOIN users employee ON (
+                    shift_row.shift_login IS NOT NULL
+                    AND lower(shift_row.shift_login)=lower(employee.login)
+               ) OR (
+                    shift_row.shift_login IS NULL
+                    AND shift_row.shift_second_name=employee.second_name
+                    AND shift_row.shift_first_name=employee.first_name
+               )
+               WHERE employee.status=?
+                 AND date(substr(shift_row.dt_shift, 1, 10)) BETWEEN date(?) AND date(?)
+                 AND shift_row.club IS NOT NULL AND trim(shift_row.club)<>''
+               GROUP BY employee.ID, shift_date, shift_row.club
+               ORDER BY shift_date, employee_name, shift_row.club''',
+            (ROLE_EMPLOYEE, date_from, date_to),
+        ).fetchall()
+    finally:
+        conn.close()
+    options = [{
+        'employee_login': row['employee_login'],
+        'employee_name': row['employee_name'],
+        'date': row['shift_date'],
+        'club': row['club'],
+        'start': row['shift_start'],
+        'end': row['shift_end'],
+        'duration': float(row['duration'] or 0),
+    } for row in rows]
+    options.sort(key=lambda item: (
+        abs((datetime.strptime(item['date'], '%Y-%m-%d').date() - today).days),
+        item['date'] < today.isoformat(),
+        str(item['employee_name']).casefold(),
+        str(item['club']).casefold(),
+    ))
+    return options
+
+
+@app.get('/api/employee-preview/shifts')
+@require_actual_owner
+def api_employee_preview_shifts():
+    return jsonify({'shifts': _employee_preview_options()})
+
+
+@app.post('/api/employee-preview/start')
+@require_actual_owner
+def api_employee_preview_start():
+    payload = request.get_json(silent=True) or {}
+    requested = {
+        'employee_login': str(payload.get('employee_login') or '').strip(),
+        'date': str(payload.get('date') or '').strip(),
+        'club': str(payload.get('club') or '').strip(),
+    }
+    employee = _preview_employee(requested)
+    if not employee:
+        return jsonify({
+            'error': 'Смена сотрудника не найдена или больше недоступна.',
+        }), 404
+    session = {
+        **requested,
+        'start': employee.get('preview_start'),
+        'end': employee.get('preview_end'),
+        'duration': float(employee.get('preview_duration') or 0),
+    }
+    with _employee_preview_lock:
+        _employee_preview_sessions[str(g.kpi_actual_user['chatid'])] = session
+    return jsonify({'preview': session})
+
+
+@app.post('/api/employee-preview/stop')
+@require_actual_owner
+def api_employee_preview_stop():
+    with _employee_preview_lock:
+        _employee_preview_sessions.pop(str(g.kpi_actual_user['chatid']), None)
+    return jsonify({'stopped': True})
+
+
+@app.post('/api/employee-preview/notification')
+@require_actual_owner
+def api_employee_preview_notification():
+    preview = g.kpi_preview
+    if not preview:
+        return jsonify({'error': 'Сначала включите тестовый режим.'}), 409
+    employee = _preview_employee(preview)
+    if not employee:
+        return jsonify({'error': 'Выбранная смена больше недоступна.'}), 404
+    current = _effective_now()
+    tasks = [
+        task for task in app_task_list(
+            employee, scope='active', db_path=DB_PATH, now=current,
+            ensure_instances=False,
+        )
+        if task['club'] == preview['club']
+        and task['status'] in {'pending', 'in_progress'}
+    ]
+    lines = [
+        '🧪 <b>ТЕСТ · уведомление сотрудника</b>',
+        '',
+        f'👤 {html.escape(str(employee.get("nick_name") or employee.get("first_name") or employee["login"]))}',
+        f'📍 {html.escape(preview["club"])}',
+        f'📅 {datetime.strptime(preview["date"], "%Y-%m-%d").strftime("%d.%m.%Y")}',
+    ]
+    if tasks:
+        task = tasks[0]
+        lines.extend([
+            '',
+            '📋 <b>Задача доступна</b>',
+            f'<b>{html.escape(task["title"])}</b>',
+            f'⏰ Выполнить до {html.escape(task["due_at"][11:16])}',
+        ])
+        if len(tasks) > 1:
+            lines.append(f'Ещё задач на этой смене: {len(tasks) - 1}')
+    else:
+        lines.extend(['', '✅ Активных задач для этой смены нет.'])
+    bot = _notification_bot()
+    if not bot:
+        return jsonify({'error': 'Telegram-бот временно недоступен.'}), 503
+    bot.send_message(
+        str(g.kpi_actual_user['chatid']), '\n'.join(lines), parse_mode='HTML',
+    )
+    return jsonify({'sent': True, 'tasks': len(tasks)})
+
+
 @app.get('/api/me')
 @require_user
 def api_me():
     role = int(g.kpi_user['status'])
+    actual_user = g.kpi_actual_user
+    preview = g.kpi_preview
     return jsonify({
         'telegram_id': g.kpi_user['chatid'],
         'login': g.kpi_user['login'],
@@ -3493,6 +3760,16 @@ def api_me():
         'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
         'can_edit_settings': role == ROLE_OWNER,
+        'actual_role': int(actual_user['status']),
+        'can_preview_employee': int(actual_user['status']) == ROLE_OWNER,
+        'preview': ({
+            **preview,
+            'employee_name': (
+                g.kpi_user.get('nick_name')
+                or g.kpi_user.get('first_name')
+                or g.kpi_user['login']
+            ),
+        } if preview else None),
     })
 
 
@@ -3604,6 +3881,7 @@ def api_shift():
     task_summary = _active_shift_task_summary(g.kpi_user)
     return jsonify({
         'external_url': OMG_SHIFT_URL,
+        'preview_mode': bool(g.kpi_preview),
         'user_name': (
             g.kpi_user.get('nick_name')
             or g.kpi_user.get('first_name')
@@ -3630,9 +3908,10 @@ def api_shift():
 @require_user
 def api_shift_overview():
     login = _actor_login()
+    current = _effective_now()
     return jsonify({
-        'date': _moscow_today().isoformat(),
-        'today': _today_shift_contexts(login),
+        'date': current.date().isoformat(),
+        'today': _today_shift_contexts(login, now=current),
         'history': _shift_history(login),
     })
 
@@ -3651,7 +3930,15 @@ def api_shift_tasks():
     scope = str(request.args.get('scope') or 'active').strip().lower()
     if scope not in {'active', 'history'}:
         raise ValueError('Неизвестный раздел задач')
-    tasks = app_task_list(g.kpi_user, scope=scope, db_path=DB_PATH)
+    task_options = {}
+    if g.kpi_preview:
+        task_options = {
+            'now': _effective_now(),
+            'ensure_instances': False,
+        }
+    tasks = app_task_list(
+        g.kpi_user, scope=scope, db_path=DB_PATH, **task_options,
+    )
     club = str(request.args.get('club') or '').strip()
     if club and int(g.kpi_user['status']) >= ROLE_MANAGER:
         tasks = [task for task in tasks if task['club'] == club]
@@ -3852,14 +4139,16 @@ def api_shift_test_scenario():
     variant = request.args.get('variant')
     requested_club = str(request.args.get('club') or '').strip() or None
     run_id = str(request.args.get('run_id') or '').strip()
-    if run_id:
+    preview_mode = bool(g.kpi_preview)
+    current = _effective_now()
+    if run_id and not preview_mode:
         scenario = _shift_report_run_scenario(run_id)
         if scenario:
             if action and scenario['action'] != action:
                 raise ValueError('Сохранённый отчёт относится к другому действию')
             return jsonify(scenario)
-    scenario = _latest_shift_report_run_scenario(
-        action, requested_club=requested_club,
+    scenario = None if preview_mode else _latest_shift_report_run_scenario(
+        action, requested_club=requested_club, now=current,
     )
     if scenario:
         return jsonify(scenario)
@@ -3867,7 +4156,7 @@ def api_shift_test_scenario():
         int(g.kpi_user['status']) == ROLE_OWNER
         and not requested_club
         and not _select_shift_report_test_shift(
-            _actor_login(), action=action,
+            _actor_login(), action=action, now=current,
         )
     ):
         clubs = _shift_report_test_owner_clubs(action)
@@ -3883,21 +4172,41 @@ def api_shift_test_scenario():
     scenario = _shift_report_test_scenario(
         action,
         variant_index=variant if variant not in (None, '') else None,
+        now=current,
         requested_club=requested_club,
     )
+    if preview_mode:
+        scenario['production_mode'] = False
+        scenario['preview_mode'] = True
     return jsonify(scenario)
 
 
 @app.post('/api/shift-test/start')
 @require_user
 def api_shift_test_start():
+    payload = request.get_json(silent=True) or {}
+    if g.kpi_preview:
+        scenario = _shift_report_test_scenario(
+            str(payload.get('action') or '').strip(),
+            variant_index=payload.get('variant_index'),
+            now=_effective_now(),
+            requested_club=str(payload.get('club') or '').strip() or None,
+        )
+        if str(payload.get('version') or '') != scenario['version']:
+            raise ValueError('Сценарий смены изменился. Начните заново')
+        return jsonify({
+            'started': True,
+            'started_at': _effective_now().strftime('%Y-%m-%d %H:%M:%S'),
+            'early_close': False,
+            'task_warning': None,
+            'preview_mode': True,
+        })
     if (
         not TELEGRAM_API_KEY
         or not CHATS.get('reports')
         or not CHATS.get('main_group')
     ):
         raise ValueError('Рабочие чаты открытия и закрытия не настроены')
-    payload = request.get_json(silent=True) or {}
     action = str(payload.get('action') or '').strip()
     run_id = str(payload.get('run_id') or '')
     if payload.get('variant_index') is None:
@@ -3931,6 +4240,42 @@ def api_shift_test_start():
 @require_user
 def api_shift_test_submit():
     request_started = time.monotonic()
+    if g.kpi_preview:
+        try:
+            payload = json.loads(request.form.get('report') or '{}')
+        except json.JSONDecodeError as error:
+            raise ValueError('Отчёт передан неверно') from error
+        scenario = _shift_report_test_scenario(
+            str(payload.get('action') or '').strip(),
+            variant_index=payload.get('variant_index'),
+            now=_effective_now(),
+            requested_club=str(payload.get('club') or '').strip() or None,
+        )
+        if str(payload.get('version') or '') != scenario['version']:
+            raise ValueError('Сценарий смены изменился. Начните заново')
+        scenario['preview_mode'] = True
+        answers, photos, cleanliness_photos = _shift_report_test_data(
+            scenario, payload,
+        )
+        if cleanliness_photos:
+            photos = [*cleanliness_photos, *photos]
+        try:
+            _send_shift_report_test(
+                scenario,
+                answers,
+                photos,
+                chat_id=str(g.kpi_actual_user['chatid']),
+            )
+        except RuntimeError as error:
+            return jsonify({'error': str(error)}), 502
+        return jsonify({
+            'sent': True,
+            'completed': True,
+            'already_completed': False,
+            'photos': len(photos),
+            'cleanliness_photos': len(cleanliness_photos),
+            'preview_mode': True,
+        })
     if not CHATS.get('reports') or not CHATS.get('main_group'):
         raise ValueError('Рабочие чаты открытия и закрытия не настроены')
     try:
