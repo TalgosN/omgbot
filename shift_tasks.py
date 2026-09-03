@@ -1417,7 +1417,7 @@ def _admin_task_days_keyboard(selected=''):
         markup.add(types.InlineKeyboardButton(
             'Сохранить дни', callback_data=f'stadmin_daysave_{selected}',
         ))
-    markup.add(types.InlineKeyboardButton('Отмена', callback_data='stadmin_abort'))
+    markup.add(types.InlineKeyboardButton('✖️ Отмена', callback_data='stadmin_abort'))
     return markup
 
 
@@ -1437,16 +1437,42 @@ def _admin_clubs_keyboard(selected=None):
         markup.add(types.InlineKeyboardButton(
             f'Продолжить · {len(selected)}', callback_data='stadmin_clubsave',
         ))
-    markup.add(types.InlineKeyboardButton('Отмена', callback_data='stadmin_abort'))
+    markup.add(types.InlineKeyboardButton('✖️ Отмена', callback_data='stadmin_abort'))
     return markup
+
+
+def _admin_cancel_markup(callback_data='stadmin_abort'):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(
+        '✖️ Отмена',
+        callback_data=callback_data,
+    ))
+    return markup
+
+
+def _clear_admin_step(chat_id, bot):
+    try:
+        bot.clear_step_handler_by_chat_id(chat_id)
+    except Exception:
+        pass
+
+
+def _delete_admin_message(message, bot):
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
 
 
 def start_task_creation(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    _task_admin_drafts[message.chat.id] = {'clubs': []}
+    _task_admin_drafts[message.chat.id] = {
+        'clubs': [],
+        'return_to': 'task_list',
+    }
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('Вернуться')
+    markup.add('✖️ Отмена')
     sent = bot.send_message(
         message.chat.id,
         '<b>Новая задача смены</b>\n\nВведите короткое название — его увидят сотрудники в карточке.',
@@ -1482,9 +1508,10 @@ def start_task_conversion(message, bot, broadcast_id):
         'freq_days': row['freq_days'] or '',
         'status': int(row['status'] or 0),
         'created_by': actor['login'] if actor else None,
+        'return_to': 'broadcast_card',
     }
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('Вернуться')
+    markup.add('✖️ Отмена')
     sent = bot.send_message(
         message.chat.id,
         f'<b>Рассылка #{broadcast_id} → задача</b>\n\n'
@@ -1495,15 +1522,21 @@ def start_task_conversion(message, bot, broadcast_id):
 
 
 def _admin_abort(message, bot):
-    _task_admin_drafts.pop(message.chat.id, None)
-    from admin_panel import broadcast_menu
-    broadcast_menu(message, bot)
+    draft = _task_admin_drafts.pop(message.chat.id, None) or {}
+    if draft.get('return_to') == 'broadcast_card' and draft.get('conversion_broadcast_id'):
+        from admin_panel import bc_view_card
+        bc_view_card(message, int(draft['conversion_broadcast_id']), bot)
+        return
+    if draft.get('return_to') == 'template_card' and draft.get('template_id'):
+        _task_template_card(message, int(draft['template_id']), bot)
+        return
+    show_task_templates(message, bot)
 
 
 def _admin_task_title(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    if message.text == 'Вернуться':
+    if message.text in {'✖️ Отмена', 'Вернуться'}:
         _admin_abort(message, bot)
         return
     title = str(message.text or '').strip()
@@ -1514,6 +1547,8 @@ def _admin_task_title(message, bot):
     draft = _task_admin_drafts[message.chat.id]
     draft['title'] = title
     if draft.get('conversion_broadcast_id'):
+        from menu import hide_reply_keyboard
+        hide_reply_keyboard(message.chat.id, bot)
         bot.send_message(
             message.chat.id,
             'Выберите клубы, в которых появится задача:',
@@ -1530,7 +1565,7 @@ def _admin_task_title(message, bot):
 def _admin_task_instructions(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    if message.text == 'Вернуться':
+    if message.text in {'✖️ Отмена', 'Вернуться'}:
         _admin_abort(message, bot)
         return
     instructions = str(message.text or '').strip()
@@ -1539,6 +1574,8 @@ def _admin_task_instructions(message, bot):
         bot.register_next_step_handler(sent, _admin_task_instructions, bot)
         return
     _task_admin_drafts[message.chat.id]['instructions'] = instructions
+    from menu import hide_reply_keyboard
+    hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(
         message.chat.id,
         'Выберите клубы, в которых появится задача:',
@@ -1557,7 +1594,7 @@ def _valid_time(value):
 def _admin_task_start_time(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    if message.text == 'Вернуться':
+    if message.text in {'✖️ Отмена', 'Вернуться'}:
         _admin_abort(message, bot)
         return
     value = str(message.text or '').strip()
@@ -1569,6 +1606,7 @@ def _admin_task_start_time(message, bot):
     sent = bot.send_message(
         message.chat.id,
         'До какого времени задача должна быть выполнена? Например: 20:00',
+        reply_markup=_admin_cancel_markup(),
     )
     bot.register_next_step_handler(sent, _admin_task_due_time, bot)
 
@@ -1576,7 +1614,7 @@ def _admin_task_start_time(message, bot):
 def _admin_task_due_time(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    if message.text == 'Вернуться':
+    if message.text in {'✖️ Отмена', 'Вернуться'}:
         _admin_abort(message, bot)
         return
     due = str(message.text or '').strip()
@@ -1599,12 +1637,21 @@ def _admin_task_due_time(message, bot):
     )
 
 
-def _prompt_task_announcement(chat_id, bot):
+def _prompt_task_announcement(chat_id, bot, source_message=None):
     markup = types.InlineKeyboardMarkup()
     markup.row(
         types.InlineKeyboardButton('Да', callback_data='stadmin_announce_yes'),
         types.InlineKeyboardButton('Нет', callback_data='stadmin_announce_no'),
     )
+    markup.add(types.InlineKeyboardButton(
+        '✖️ Отмена',
+        callback_data='stadmin_abort',
+    ))
+    if source_message is not None:
+        try:
+            bot.delete_message(chat_id, source_message.message_id)
+        except Exception:
+            pass
     bot.send_message(
         chat_id,
         'Дублировать короткое объявление о задаче в рабочую группу?',
@@ -1664,12 +1711,29 @@ def _save_task_template(chat_id, bot, announce_main):
         if not draft.get('conversion_broadcast_id') or draft.get('status', 1)
         else 'Рассылка была на паузе, поэтому задача тоже сохранена на паузе.'
     )
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            '⚙️ Открыть задачу',
+            callback_data=f'stadmin_manage_{template_id}',
+        ),
+        types.InlineKeyboardButton(
+            '⬅️ К списку задач',
+            callback_data='stadmin_list',
+        ),
+        types.InlineKeyboardButton(
+            '🏠 В управление',
+            callback_data='nav:admin',
+        ),
+    )
+    from menu import hide_reply_keyboard
+    hide_reply_keyboard(chat_id, bot)
     bot.send_message(
         chat_id,
         f'✅ Задача #{template_id} '
         f'{"создана из рассылки" if draft.get("conversion_broadcast_id") else "создана"}. '
         f'{active_note}',
-        reply_markup=types.ReplyKeyboardRemove(),
+        reply_markup=markup,
     )
 
 
@@ -1686,9 +1750,6 @@ def show_task_templates(message, bot):
         ).fetchall()
     finally:
         conn.close()
-    if not rows:
-        bot.send_message(message.chat.id, 'Задач пока нет.')
-        return
     lines = ['📋 <b>Задачи смены</b>', '']
     markup = types.InlineKeyboardMarkup()
     for row in rows:
@@ -1700,6 +1761,18 @@ def show_task_templates(message, bot):
         markup.add(types.InlineKeyboardButton(
             f'Настроить #{row["id"]}', callback_data=f'stadmin_manage_{row["id"]}',
         ))
+    if not rows:
+        lines.append('Задач пока нет.')
+    markup.add(types.InlineKeyboardButton(
+        '➕ Новая задача',
+        callback_data='stadmin_create',
+    ))
+    markup.add(types.InlineKeyboardButton(
+        '⬅️ В управление',
+        callback_data='nav:admin',
+    ))
+    from menu import hide_reply_keyboard
+    hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(
         message.chat.id, '\n\n'.join(lines), parse_mode='HTML', reply_markup=markup,
     )
@@ -1765,8 +1838,23 @@ def _task_template_card(message, template_id, bot):
 
 def _admin_edit_value_prompt(call, bot, field, prompt):
     bot.answer_callback_query(call.id)
-    sent = bot.send_message(call.message.chat.id, prompt)
-    bot.register_next_step_handler(sent, _admin_save_template_value, int(call.data.rsplit('_', 1)[1]), field, bot)
+    template_id = int(call.data.rsplit('_', 1)[1])
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    sent = bot.send_message(
+        call.message.chat.id,
+        prompt,
+        reply_markup=_admin_cancel_markup(f'stadmin_manage_{template_id}'),
+    )
+    bot.register_next_step_handler(
+        sent,
+        _admin_save_template_value,
+        template_id,
+        field,
+        bot,
+    )
 
 
 def _admin_save_template_value(message, template_id, field, bot):
@@ -1930,6 +2018,7 @@ def _admin_requirements_prompt(call, bot, template_id, club):
         f'<b>{html.escape(club)}</b>\n\nОтправьте новый список: один фотопункт на строку. Допустимо от 1 до 10 пунктов.\n\n'
         + '\n'.join(f'{index}. {html.escape(point)}' for index, point in enumerate(points, 1)),
         parse_mode='HTML',
+        reply_markup=_admin_cancel_markup(f'stadmin_manage_{template_id}'),
     )
     bot.register_next_step_handler(sent, _admin_save_requirements, template_id, club, bot)
 
@@ -1982,7 +2071,16 @@ def register_shift_task_admin_handlers(bot):
         chat_id = call.message.chat.id
         if data == 'stadmin_abort':
             bot.answer_callback_query(call.id)
+            _clear_admin_step(chat_id, bot)
+            _delete_admin_message(call.message, bot)
             _admin_abort(call.message, bot)
+            return
+        if data == 'stadmin_create':
+            bot.answer_callback_query(call.id)
+            _clear_admin_step(chat_id, bot)
+            _delete_admin_message(call.message, bot)
+            call.message.from_user = call.from_user
+            start_task_creation(call.message, bot)
             return
         if data.startswith('stadmin_club_'):
             draft = _task_admin_drafts.get(chat_id)
@@ -2023,18 +2121,26 @@ def register_shift_task_admin_handlers(bot):
                     conn.close()
                 _task_admin_drafts.pop(chat_id, None)
                 bot.answer_callback_query(call.id, 'Клубы обновлены.')
+                _delete_admin_message(call.message, bot)
                 _task_template_card(call.message, template_id, bot)
                 return
             if draft.get('conversion_broadcast_id'):
                 bot.answer_callback_query(call.id)
+                _delete_admin_message(call.message, bot)
                 sent = bot.send_message(
                     chat_id,
                     f'Рассылка появляется в {draft["time"]}. До какого времени задача должна быть выполнена?',
+                    reply_markup=_admin_cancel_markup(),
                 )
                 bot.register_next_step_handler(sent, _admin_task_due_time, bot)
                 return
             bot.answer_callback_query(call.id)
-            sent = bot.send_message(chat_id, 'Во сколько показать задачу сотрудникам? Например: 12:00')
+            _delete_admin_message(call.message, bot)
+            sent = bot.send_message(
+                chat_id,
+                'Во сколько показать задачу сотрудникам? Например: 12:00',
+                reply_markup=_admin_cancel_markup(),
+            )
             bot.register_next_step_handler(sent, _admin_task_start_time, bot)
             return
         if data.startswith('stadmin_daytoggle_'):
@@ -2073,19 +2179,23 @@ def register_shift_task_admin_handlers(bot):
                     conn.close()
                 _task_admin_drafts.pop(chat_id, None)
                 bot.answer_callback_query(call.id, 'Дни выполнения обновлены.')
+                _delete_admin_message(call.message, bot)
                 _task_template_card(call.message, template_id, bot)
                 return
             actor = _actor_snapshot(call)
             draft['created_by'] = actor['login'] if actor else None
             bot.answer_callback_query(call.id)
-            _prompt_task_announcement(chat_id, bot)
+            _prompt_task_announcement(chat_id, bot, source_message=call.message)
             return
         if data.startswith('stadmin_announce_'):
             bot.answer_callback_query(call.id)
+            _delete_admin_message(call.message, bot)
             _save_task_template(chat_id, bot, data.endswith('_yes'))
             return
         if data == 'stadmin_list':
             bot.answer_callback_query(call.id)
+            _clear_admin_step(chat_id, bot)
+            _delete_admin_message(call.message, bot)
             show_task_templates(call.message, bot)
             return
         match = re.fullmatch(r'stadmin_(manage|toggle|time|due|title|text|editclubs|frequency|requirements|history)_(\d+)', data)
@@ -2094,6 +2204,8 @@ def register_shift_task_admin_handlers(bot):
             template_id = int(raw_id)
             if action == 'manage':
                 bot.answer_callback_query(call.id)
+                _clear_admin_step(chat_id, bot)
+                _delete_admin_message(call.message, bot)
                 _task_template_card(call.message, template_id, bot)
             elif action == 'toggle':
                 conn = sqlite3.connect(DB_PATH)
@@ -2107,6 +2219,7 @@ def register_shift_task_admin_handlers(bot):
                 finally:
                     conn.close()
                 bot.answer_callback_query(call.id, 'Статус изменён.')
+                _delete_admin_message(call.message, bot)
                 _task_template_card(call.message, template_id, bot)
             elif action == 'time':
                 _admin_edit_value_prompt(call, bot, 'time', 'Введите новое время появления в формате ЧЧ:ММ.')
@@ -2124,14 +2237,23 @@ def register_shift_task_admin_handlers(bot):
                     selected = json.loads(row['clubs_json'] or '[]') if row else []
                 finally:
                     conn.close()
-                _task_admin_drafts[chat_id] = {'editing_template_id': template_id, 'clubs': selected}
+                _task_admin_drafts[chat_id] = {
+                    'editing_template_id': template_id,
+                    'template_id': template_id,
+                    'return_to': 'template_card',
+                    'clubs': selected,
+                }
                 bot.answer_callback_query(call.id)
+                _delete_admin_message(call.message, bot)
                 bot.send_message(chat_id, 'Выберите новый список клубов:', reply_markup=_admin_clubs_keyboard(selected))
             elif action == 'frequency':
                 _task_admin_drafts[chat_id] = {
                     'editing_frequency_id': template_id,
+                    'template_id': template_id,
+                    'return_to': 'template_card',
                 }
                 bot.answer_callback_query(call.id)
+                _delete_admin_message(call.message, bot)
                 bot.send_message(
                     chat_id,
                     'Выберите новые дни выполнения:',
@@ -2139,8 +2261,10 @@ def register_shift_task_admin_handlers(bot):
                 )
             elif action == 'history':
                 bot.answer_callback_query(call.id)
+                _delete_admin_message(call.message, bot)
                 _task_template_history(call.message, template_id, bot)
             else:
+                _delete_admin_message(call.message, bot)
                 _admin_requirement_clubs(call, bot, template_id)
             return
         req_match = re.fullmatch(r'stadmin_reqclub_(\d+)_(\d+)', data)
@@ -2151,4 +2275,5 @@ def register_shift_task_admin_handlers(bot):
                 bot.answer_callback_query(call.id, 'Список клубов устарел.', show_alert=True)
                 return
             bot.answer_callback_query(call.id)
+            _delete_admin_message(call.message, bot)
             _admin_requirements_prompt(call, bot, template_id, clubs[index])

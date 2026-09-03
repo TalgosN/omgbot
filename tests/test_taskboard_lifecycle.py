@@ -200,6 +200,34 @@ class TaskboardLifecycleTest(unittest.TestCase):
         self.assertIs(bot.send_photo.call_args.kwargs['reply_markup'], detail_markup)
         markup.assert_called_once_with('work', 1)
 
+    def test_readonly_close_restores_main_menu_after_keyboard_was_removed(self):
+        handlers = []
+        bot = Mock()
+        bot.callback_query_handler.side_effect = (
+            lambda **_kwargs: lambda handler: handlers.append(handler) or handler
+        )
+        self.taskboard.register_readonly_callback(bot)
+        hello = Mock()
+        menu = types.ModuleType('menu')
+        menu.hello = hello
+        call = types.SimpleNamespace(
+            id='callback',
+            data='readonly_tasks:close',
+            from_user=types.SimpleNamespace(id=123),
+            message=types.SimpleNamespace(
+                id=77,
+                message_id=77,
+                chat=types.SimpleNamespace(id=123),
+            ),
+        )
+
+        with patch.dict(sys.modules, {'menu': menu}):
+            handlers[0](call)
+
+        bot.clear_step_handler_by_chat_id.assert_called_once_with(123)
+        bot.delete_message.assert_called_once_with(123, 77)
+        hello.assert_called_once_with(123, bot)
+
     def test_review_is_closed_on_fourteenth_day(self):
         conn = sqlite3.connect(self.db_path)
         conn.executemany(

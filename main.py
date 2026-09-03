@@ -578,6 +578,11 @@ def start(message):
     hello(message.from_user.id, bot)
 
 
+def _restore_private_navigation(message):
+    if message.chat.id > 0:
+        hello(message.chat.id, bot)
+
+
 @bot.message_handler(commands=['weather'])
 def weather(message):
     if require_role(message, bot, ROLE_EMPLOYEE):
@@ -587,6 +592,7 @@ def weather(message):
             bot.send_message(message.chat.id,text)
         except Exception:
             bot.send_message(message.chat.id,"Прости, не знаю!")
+        _restore_private_navigation(message)
 
 @bot.message_handler(commands=['today'])
 def cmd_today_schedule(message):
@@ -605,6 +611,7 @@ def cmd_today_schedule(message):
             bot.send_message(message.chat.id, text)
         except Exception as e:
             bot.send_message(message.chat.id, f"Произошла ошибка при получении расписания: {e}")
+        _restore_private_navigation(message)
 
 
 @bot.message_handler(commands=['bukza_test'])
@@ -645,6 +652,7 @@ def repair_list(message):
         text = "\n".join(text_lines) if text_lines else "Нет активных задач по ремонту"
 
         bot.send_message(message.chat.id, f'Вот список текущих ремонтов:\n{text}', parse_mode='HTML')
+        _restore_private_navigation(message)
 
 
 def _run_private_menu_command(message, callback):
@@ -710,6 +718,40 @@ def shift_flow_callback(call):
     check_club(message, action, bot)
 
 
+@bot.callback_query_handler(func=lambda call: str(call.data or '').startswith('nav:'))
+def navigation_callback(call):
+    if not require_role(call, bot, ROLE_EMPLOYEE):
+        return
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        try:
+            bot.edit_message_reply_markup(
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+    call.message.from_user = call.from_user
+    if call.data == 'nav:help':
+        from menu import help as show_help
+        show_help(bot, call.message)
+    elif call.data == 'nav:admin':
+        if require_role(call, bot, ROLE_MANAGER):
+            from menu import admin_menu
+            admin_menu(call.message, bot)
+        else:
+            hello(call.message.chat.id, bot)
+    else:
+        hello(call.message.chat.id, bot)
+
+
 @bot.message_handler(commands=['schedule'])
 def command_schedule(message):
     from rasp import rasp
@@ -730,8 +772,14 @@ def command_account(message):
 
 @bot.message_handler(commands=['consumables'])
 def command_consumables(message):
-    from consumables import consumables_menu
-    _run_private_menu_command(message, lambda: consumables_menu(message, bot))
+    def show_migration_notice():
+        bot.send_message(
+            message.chat.id,
+            'Расходники перенесены в приложение OMG VR.',
+        )
+        open_kpi_app(message)
+
+    _run_private_menu_command(message, show_migration_notice)
 
 
 @bot.message_handler(commands=['steam'])
@@ -746,7 +794,7 @@ def command_help(message):
     _run_private_menu_command(message, lambda: show_help(bot, message))
 
 
-@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Админ панель', '📦 Расходники', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
+@bot.message_handler(func=lambda message: message.text in ['👨🏻‍💻 Смена', '🚩 Доска проблем', '🎮 Steam Tracker', '👤 Аккаунт', '🗓 Расписание', '💲 Финансы', '🧑🏻‍💻 Управление', '🧑🏻‍💻 Админ панель', '🆘 Помощь', '⚙️ Обновить настройки', OWNER_EMPLOYEE_MODE_BUTTON, OWNER_MODE_BUTTON])
 def handle_main_menu(message):
     if require_role(message, bot, ROLE_EMPLOYEE):
         bot.clear_step_handler_by_chat_id(message.chat.id)
@@ -890,6 +938,7 @@ def roll(message):
     emoji = random.choice(emojis['roll'])
             
     send_react(message,emoji)
+    _restore_private_navigation(message)
 
 
 @bot.message_handler(commands=['kpi', 'app'])
@@ -906,12 +955,17 @@ def open_kpi_app(message):
             message.chat.id,
             'OMG VR Mini App ещё не подключён к HTTPS-ссылке.',
         )
+        _restore_private_navigation(message)
         return
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton(
         '🟣 Открыть OMG VR',
         web_app=telebot.types.WebAppInfo(webapp_url),
     ))
+    if message.chat.id > 0:
+        from menu import add_navigation_buttons, hide_reply_keyboard
+        add_navigation_buttons(markup)
+        hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(
         message.chat.id,
         'Внутреннее приложение OMG VR:',

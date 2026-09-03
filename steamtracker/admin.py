@@ -280,6 +280,16 @@ def _hide_reply_keyboard(chat_id: int, bot) -> None:
         _delete_message(chat_id, message_id, bot)
 
 
+def _back_markup(callback_data: str, text: str = '⬅️ Назад'):
+    types = _telegram_types()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(
+        text,
+        callback_data=callback_data,
+    ))
+    return markup
+
+
 def promotion_admin_menu(message, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
@@ -2254,6 +2264,10 @@ def request_game_search(message, bot, *, source_message=None):
         message.chat.id,
         bot,
         f"Введите часть названия или AppID.{scope}",
+        reply_markup=_back_markup(
+            f"{CALLBACK_PREFIX}:catalog:"
+            f"{'all' if _is_manager(user) else 'active'}:0"
+        ),
         source_message=source_message,
     )
     bot.register_next_step_handler(prompt, show_game_search_results, bot)
@@ -2307,6 +2321,9 @@ def request_game_field(call, bot, field: str, app_id: int):
         call.message.chat.id,
         bot,
         prompts[field],
+        reply_markup=_back_markup(
+            f"{CALLBACK_PREFIX}:game:{app_id}",
+        ),
         source_message=call.message,
     )
     bot.register_next_step_handler(
@@ -2756,6 +2773,7 @@ def request_tracker_setting(call, bot, key: str):
         call.message.chat.id,
         bot,
         prompts[key],
+        reply_markup=_back_markup(f"{CALLBACK_PREFIX}:settings:0"),
         source_message=call.message,
     )
     bot.register_next_step_handler(
@@ -2935,6 +2953,7 @@ def request_account_add(message, bot, *, source_message=None):
             f"Допустимые клубы: {escape(clubs)}"
         ),
         parse_mode="HTML",
+        reply_markup=_back_markup(f"{CALLBACK_PREFIX}:accounts:0"),
         source_message=source_message,
     )
     bot.register_next_step_handler(prompt, save_account_add, bot)
@@ -2984,6 +3003,9 @@ def request_account_edit(call, bot, steam_id: str):
             f"Допустимые клубы: {escape(', '.join(get_clublist()))}"
         ),
         parse_mode="HTML",
+        reply_markup=_back_markup(
+            f"{CALLBACK_PREFIX}:account:{steam_id}",
+        ),
         source_message=call.message,
     )
     bot.register_next_step_handler(

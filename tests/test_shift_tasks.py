@@ -110,6 +110,35 @@ class ShiftTasksTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_admin_task_list_hides_reply_keyboard_and_has_create_and_back(self):
+        bot = FakeBot()
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=123),
+            from_user=SimpleNamespace(id=123, username='manager'),
+        )
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+
+        with patch.object(shift_tasks, 'DB_PATH', self.db_path), patch.object(
+            shift_tasks,
+            'require_role',
+            return_value={'status': shift_tasks.ROLE_MANAGER},
+        ):
+            shift_tasks.show_task_templates(message, bot)
+
+        self.assertTrue(any(
+            entry[3].get('reply_markup').__class__.__name__ == 'ReplyKeyboardRemove'
+            for entry in bot.messages
+            if entry[0] == 'message' and entry[3].get('reply_markup') is not None
+        ))
+        markup = bot.messages[-1][3]['reply_markup']
+        callbacks = [
+            button.callback_data
+            for row in markup.keyboard
+            for button in row
+        ]
+        self.assertIn('stadmin_create', callbacks)
+        self.assertIn('nav:admin', callbacks)
+
     def test_schema_seeds_editable_cleanliness_and_migrates_deep_cleaning(self):
         conn = sqlite3.connect(self.db_path)
         with conn:

@@ -100,12 +100,19 @@ def admin_func_handler(message, bot):
         from admin_panel import broadcast_menu
         broadcast_menu(message, bot)
 
+    elif a == '✅ Задачи смены':
+        from shift_tasks import show_task_templates
+        show_task_templates(message, bot)
+
     elif a in {'🎮 Steam Tracker', '📣 Промо'}:
         from steamtracker.admin import promotion_admin_menu
         promotion_admin_menu(message, bot)
 
-    elif a == '🧰 Дополнительно':
+    elif a in {'⚙️ Система и тесты', '🧰 Дополнительно'}:
         admin_extra_menu(message, bot)
+
+    elif a == '👥 Сотрудники и роли':
+        staff_management_menu(message, bot)
         
     elif a == '⚙️ Обновить настройки':
         handle_update_config(message, bot)
@@ -125,7 +132,7 @@ def admin_func_handler(message, bot):
     elif a == '📝 Сценарии смен':
         open_shift_config(message, bot)
         
-    elif a == '⬅️ Вернуться':
+    elif a in {'🏠 Главное меню', '⬅️ Вернуться'}:
         from menu import hello
         hello(message.chat.id, bot)
     
@@ -186,6 +193,12 @@ def open_shift_config(message, bot):
         '📝 Открыть редактор сценариев',
         web_app=types.WebAppInfo(f'{webapp_url.rstrip("/")}/shift-config'),
     ))
+    markup.add(types.InlineKeyboardButton(
+        '⬅️ В управление',
+        callback_data='nav:admin',
+    ))
+    from menu import hide_reply_keyboard
+    hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(
         message.chat.id,
         'Вопросы и чек-листы открытия и закрытия смен:',
@@ -204,7 +217,7 @@ def admin_extra_menu(message, bot):
     markup.add(*buttons)
     msg = bot.send_message(
         message.chat.id,
-        '🧰 Дополнительные функции',
+        '⚙️ Система и тесты',
         reply_markup=markup,
     )
     bot.register_next_step_handler(msg, admin_extra_menu_handler, bot)
@@ -213,7 +226,7 @@ def admin_extra_menu(message, bot):
 def admin_extra_menu_handler(message, bot):
     if not require_role(message, bot, ROLE_MANAGER):
         return
-    if message.text == '⬅️ Назад в админку':
+    if message.text in {'⬅️ Назад в управление', '⬅️ Назад в админку'}:
         from menu import admin_menu
         admin_menu(message, bot)
         return
@@ -228,6 +241,37 @@ def admin_extra_menu_handler(message, bot):
         admin_func_handler(message, bot)
         return
     admin_extra_menu(message, bot)
+
+
+def staff_management_menu(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        '🔄 Сотрудники OMG Shift',
+        '👥 Управление ролями',
+        '⬅️ Назад в управление',
+    )
+    sent = bot.send_message(
+        message.chat.id,
+        '👥 Сотрудники и роли',
+        reply_markup=markup,
+    )
+    bot.register_next_step_handler(sent, staff_management_handler, bot)
+
+
+def staff_management_handler(message, bot):
+    if not require_role(message, bot, ROLE_OWNER):
+        return
+    if message.text == '🔄 Сотрудники OMG Shift':
+        handle_shifton_employee_sync(message, bot)
+    elif message.text == '👥 Управление ролями':
+        role_management_menu(message, bot)
+    elif message.text == '⬅️ Назад в управление':
+        from menu import admin_menu
+        admin_menu(message, bot)
+    else:
+        staff_management_menu(message, bot)
 
 
 def birthday_test_prompt(message, bot):
@@ -538,7 +582,7 @@ def role_management_menu(message, bot):
     if not require_role(message, bot, ROLE_OWNER):
         return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add('📜 Последние изменения', '⬅️ Назад в админку')
+    markup.add('📜 Последние изменения', '⬅️ Назад к сотрудникам')
     msg = bot.send_message(message.chat.id, 'Введите Telegram username сотрудника, например @username:', reply_markup=markup)
     bot.register_next_step_handler(msg, role_select_user, bot)
 
@@ -546,9 +590,8 @@ def role_management_menu(message, bot):
 def role_select_user(message, bot):
     if not require_role(message, bot, ROLE_OWNER):
         return
-    if message.text == '⬅️ Назад в админку':
-        from menu import admin_menu
-        admin_menu(message, bot)
+    if message.text in {'⬅️ Назад к сотрудникам', '⬅️ Назад в админку'}:
+        staff_management_menu(message, bot)
         return
     if message.text == '📜 Последние изменения':
         show_role_audit(message, bot)
@@ -573,7 +616,7 @@ def role_select_user(message, bot):
 
     current_name = ROLE_NAMES.get(target['status'], 'Не назначена')
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add(*ROLE_BUTTONS.keys(), '⬅️ Назад в админку')
+    markup.add(*ROLE_BUTTONS.keys(), '⬅️ Назад к сотрудникам')
     msg = bot.send_message(
         message.chat.id,
         f'{target["second_name"] or ""} {target["first_name"] or ""} ({target["login"]})\n'
@@ -586,9 +629,8 @@ def role_select_user(message, bot):
 def role_apply(message, target_id, bot):
     if not require_role(message, bot, ROLE_OWNER):
         return
-    if message.text == '⬅️ Назад в админку':
-        from menu import admin_menu
-        admin_menu(message, bot)
+    if message.text in {'⬅️ Назад к сотрудникам', '⬅️ Назад в админку'}:
+        role_management_menu(message, bot)
         return
     if message.text not in ROLE_BUTTONS:
         bot.send_message(message.chat.id, 'Выберите роль с клавиатуры.')
@@ -774,7 +816,7 @@ def handle_shifton_employee_sync(message, bot):
             message_id=progress.message_id,
             parse_mode='HTML',
         )
-    admin_extra_menu(message, bot)
+    staff_management_menu(message, bot)
 
 
 def collect_openrouter_health(api_key, model=None, session=requests):
@@ -1041,13 +1083,12 @@ def broadcast_menu(message, bot):
         return
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(
-        '➕ Инфо-рассылка', '✅ Новая задача',
-        '📣 Текущие рассылки', '📋 Задачи смены',
-        '⬅️ Назад в админку',
+        '➕ Инфо-рассылка', '📣 Текущие рассылки',
+        '⬅️ Назад в управление',
     )
     msg = bot.send_message(
         message.chat.id,
-        "Рассылки и задачи смены 💌\n\nИнфо-рассылка просто публикуется в рабочей группе. Задача требует отчёт и хранит выполнение.",
+        "Информационные рассылки 💌",
         reply_markup=markup,
     )
     bot.register_next_step_handler(msg, broadcast_menu_handler, bot)
@@ -1060,13 +1101,7 @@ def broadcast_menu_handler(message, bot):
         bc_add_text(message, bot)
     elif a in {'📋 Текущие рассылки', '📣 Текущие рассылки'}:
         bc_show_active(message, bot)
-    elif a == '✅ Новая задача':
-        from shift_tasks import start_task_creation
-        start_task_creation(message, bot)
-    elif a == '📋 Задачи смены':
-        from shift_tasks import show_task_templates
-        show_task_templates(message, bot)
-    elif a == '⬅️ Назад в админку':
+    elif a in {'⬅️ Назад в управление', '⬅️ Назад в админку'}:
         from menu import admin_menu
         admin_menu(message, bot)
     else:
@@ -1143,6 +1178,8 @@ def bc_save_time(message, text, photo_id, bot):
     temp_broadcasts[message.chat.id] = {'text': text, 'photo': photo_id, 'time': time_str}
     
     # Отправляем новую инлайн-клавиатуру с днями
+    from menu import hide_reply_keyboard
+    hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(message.chat.id, "Выберите дни недели для рассылки:", reply_markup=generate_days_keyboard(""))
 
 
@@ -1317,6 +1354,26 @@ def register_broadcast_callbacks(bot):
                 return
                 
             if data.startswith("delete_"):
+                b_id = int(data.split("_")[1])
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton(
+                        text="🗑 Да, удалить",
+                        callback_data=f"bc_confirmdelete_{b_id}",
+                    ),
+                    types.InlineKeyboardButton(
+                        text="⬅️ Отмена",
+                        callback_data=f"bc_manage_{b_id}",
+                    ),
+                )
+                bot.edit_message_reply_markup(
+                    call.message.chat.id,
+                    call.message.id,
+                    reply_markup=markup,
+                )
+                return
+
+            if data.startswith("confirmdelete_"):
                 b_id = int(data.split("_")[1])
                 conn = sqlite3.connect('db/omgbot.sql')
                 cur = conn.cursor()

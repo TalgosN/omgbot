@@ -5,15 +5,38 @@ import threading
 from constants import CHATS
 from permissions import ROLE_EMPLOYEE
 
+CANCEL_REGISTRATION = '✖️ Отменить регистрацию'
+
+
+def _registration_markup():
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(CANCEL_REGISTRATION)
+    return markup
+
+
+def _registration_cancelled(message, bot):
+    if message.text != CANCEL_REGISTRATION:
+        return False
+    bot.clear_step_handler_by_chat_id(message.chat.id)
+    bot.send_message(
+        message.chat.id,
+        'Регистрация отменена. Чтобы начать заново, отправьте /start.',
+        reply_markup=types.ReplyKeyboardRemove(),
+    )
+    return True
+
+
 def start_auth(message,bot):
    
-    bot.send_message(message.chat.id, 'Привет! Давай познакомимся.\n\nДля начала напиши своё имя. При сохранении бот сверит имя и фамилию с OMG Shift по твоему Telegram username.')
+    bot.send_message(message.chat.id, 'Привет! Давай познакомимся.\n\nДля начала напиши своё имя. При сохранении бот сверит имя и фамилию с OMG Shift по твоему Telegram username.', reply_markup=_registration_markup())
     bot.register_next_step_handler(message, ask_full_name,bot)
 
     
     
         
 def ask_full_name(message,bot):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())<50:
         first_name = message.text.strip()
         bot.send_message(message.chat.id, f'Приятно познакомится, {first_name}\n\nНапиши, пожалуйста, фамилию')
@@ -24,6 +47,8 @@ def ask_full_name(message,bot):
 
     
 def ask_nickname (message,bot,first_name):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())<50:
         second_name = message.text.strip()
         bot.send_message(message.chat.id, f'Отлично, записал!\n\nА теперь подумай, {first_name}, и скажи, как тебя записать в таблицах? Это имя можно будет поменять, но ты не думай, что можно написать ерунду! Имя должно быть уникальным, поэтому, если у тебя есть тёска, придумай что-нибудь особенное!')
@@ -33,6 +58,8 @@ def ask_nickname (message,bot,first_name):
         bot.register_next_step_handler(message, ask_nickname,bot,first_name)
     
 def ask_bday (message,bot,first_name,second_name):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())<50:
         nick_name = message.text.strip().capitalize()
         bot.send_message(message.chat.id, f'Ух, круто, {nick_name}! Буду теперь называть тебя так!\n\nКогда у тебя день Рождения? У меня, например 13.08.2024. Напиши дату также, пожалуйста! Хочу заранее подготовить для тебя подарок')
@@ -42,6 +69,8 @@ def ask_bday (message,bot,first_name,second_name):
         bot.register_next_step_handler(message, ask_bday,bot,first_name,second_name)
  
 def ask_number (message,bot,first_name,second_name,nick_name):
+    if _registration_cancelled(message, bot):
+        return
     try:
         list1 = message.text.split('.')
         
@@ -54,6 +83,8 @@ def ask_number (message,bot,first_name,second_name,nick_name):
 
     
 def ask_status (message,bot,first_name,second_name,nick_name,bday):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())==12 and message.text.strip().startswith("+7") and message.text.strip()[1:].isdigit():
         number = message.text.strip()
         
@@ -71,6 +102,8 @@ def ask_status (message,bot,first_name,second_name,nick_name,bday):
 
 
 def ask_mail (message,bot,first_name,second_name,nick_name,bday,number):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())<50 and message.text.strip().endswith("@gmail.com"):
         email = message.text.strip()
         bot.send_message(message.chat.id, 'Записал, спасибо! Дай мне секунду, я всё проверю...')
@@ -94,7 +127,7 @@ def check_user(message,bot, first_name,second_name,nick_name,bday,number,email,s
         bot.send_message(message.chat.id, f'Вроде все в порядке! Давай посмотрим запись')
         bot.send_message(message.chat.id, f'Имя: {first_name}\nФамилия: {second_name}\nНик: {nick_name}\nДень рождения: {bday}\nНомер телефона: {number}\nЭл. адрес: {email}')
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Всё в порядке!', 'Нет, я хочу кое-что поменять!')
+        markup.add('Всё в порядке!', 'Нет, я хочу кое-что поменять!', CANCEL_REGISTRATION)
         bot.send_message(message.chat.id, f'Проверь, всё верно?',reply_markup=markup)
         bot.register_next_step_handler(message, confirm,bot,first_name,second_name,nick_name,bday,number,email,status)
 
@@ -106,6 +139,8 @@ def check_user(message,bot, first_name,second_name,nick_name,bday,number,email,s
         bot.register_next_step_handler(message, edit_nick,bot,first_name,second_name,nick_name,bday,number,email,status)
 
 def confirm (message,bot, first_name,second_name,nick_name,bday,number,email,status):
+    if _registration_cancelled(message, bot):
+        return
     if message.text=='Всё в порядке!':
         bot.send_message(message.chat.id, f'Отлично! Сейчас запишу...')
         send_user(message,bot, first_name,second_name,nick_name,bday,number,email,status)
@@ -116,7 +151,7 @@ def confirm (message,bot, first_name,second_name,nick_name,bday,number,email,sta
         start_auth(message,bot)
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Всё в порядке!', 'Нет, я хочу кое-что поменять!')
+        markup.add('Всё в порядке!', 'Нет, я хочу кое-что поменять!', CANCEL_REGISTRATION)
         bot.send_message(message.chat.id, f'Не понял тебя. Всё в порядке?',reply_markup=markup)
         bot.register_next_step_handler(message, confirm,bot,first_name,second_name,nick_name,bday,number,email,status)
 
@@ -176,6 +211,8 @@ def send_user(message,bot, first_name,second_name,nick_name,bday,number,email,st
 
         
 def edit_nick(message,bot, first_name,second_name,nick_name,bday,number,email,status):
+    if _registration_cancelled(message, bot):
+        return
     if len(message.text.strip())<50:
         nick_name = message.text.strip().capitalize() 
         bot.send_message(message.chat.id, f'Сейчас проверю...')

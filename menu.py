@@ -33,7 +33,6 @@ GOOGLE_SHEET_LINKS = (
     ('👥 Сотрудники', 'https://docs.google.com/spreadsheets/d/1KyApsY0L_TL_WhpJDagB2VSZuvyxs4vb1aicgAHtUPk/edit?gid=0#gid=0'),
     ('⚙️ Виарыч', 'https://docs.google.com/spreadsheets/d/1LxBCPpWXtpS_EVhGUNuH2k4HtPnsu53ZF-4QaRET08Q/edit?gid=1951407525#gid=1951407525'),
     ('🚪 Открытия и закрытия', 'https://docs.google.com/spreadsheets/d/1JHOLFykKPbQ0Ou2zqq4GMPTVHFst8iFJxHkpMVjFlYk/edit?gid=972562992#gid=972562992'),
-    ('📦 Расходники', 'https://docs.google.com/spreadsheets/d/1abZHTzME77-GHuU9L-32nANki671cSq3TPHIrWmXjZY/edit?gid=787957765#gid=787957765'),
 )
 
 
@@ -71,6 +70,33 @@ def _main_menu_button(text):
     return text
 
 
+def hide_reply_keyboard(chat_id, bot):
+    sent = bot.send_message(
+        chat_id,
+        'Открываю раздел…',
+        reply_markup=telebot.types.ReplyKeyboardRemove(),
+    )
+    message_id = getattr(sent, 'message_id', None)
+    if message_id is not None:
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+
+def add_navigation_buttons(markup, *, back_callback=None):
+    if back_callback:
+        markup.add(telebot.types.InlineKeyboardButton(
+            '⬅️ Назад',
+            callback_data=back_callback,
+        ))
+    markup.add(telebot.types.InlineKeyboardButton(
+        '🏠 Главное меню',
+        callback_data='nav:home',
+    ))
+    return markup
+
+
 def open_problems_app(message, bot):
     problems_url = _webapp_url('problems')
     if not problems_url:
@@ -90,6 +116,8 @@ def open_problems_app(message, bot):
             '📋 Быстрый просмотр в боте',
             callback_data='readonly_tasks:work',
         ))
+    add_navigation_buttons(markup)
+    hide_reply_keyboard(message.chat.id, bot)
     bot.send_message(
         message.chat.id,
         'Доска проблем:',
@@ -170,13 +198,9 @@ def func(message, bot):
             from finance import finance
             finance(message, bot)
     
-    elif a == "🧑🏻‍💻 Админ панель": # Кнопка для админов
+    elif a in {"🧑🏻‍💻 Управление", "🧑🏻‍💻 Админ панель"}: # Кнопка для админов
         if require_role(message, bot, ROLE_MANAGER):
             admin_menu(message, bot)
-    
-    elif a == '📦 Расходники':
-        from consumables import consumables_menu
-        consumables_menu(message, bot)
 
     elif a == '🆘 Помощь':
         help(bot, message)
@@ -194,7 +218,7 @@ def admin_menu(message, bot):
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     buttons = owner_admin_funclist if user['status'] >= ROLE_OWNER else admin_funclist
     markup.add(*buttons)
-    msg = bot.send_message(message.chat.id, 'Панель администратора 🧑🏻‍💻', reply_markup=markup)
+    msg = bot.send_message(message.chat.id, 'Управление 🧑🏻‍💻', reply_markup=markup)
     bot.register_next_step_handler(msg, admin_func_handler, bot)
 
 def help(bot, message):
@@ -296,9 +320,8 @@ def help_handler(message, bot):
             '🗓 <b>Расписание</b> — посмотреть смены из OMG Shift.\n'
             '🚩 <b>Доска проблем</b> — сообщить о проблеме или проверить задачи.\n'
             '👤 <b>Аккаунт</b> — профиль, синхронизация и статистика.\n'
-            '📦 <b>Расходники</b> — проверить или изменить остатки.\n\n'
             'Команды: /start, /menu, /app, /kpi, /shift, /schedule, /problems, '
-            '/account, /consumables, /steam, /weather, /today, /repair, /help и /roll.'
+            '/account, /steam, /weather, /today, /repair, /help и /roll.'
         )
         reply_markup = None
     elif message.text == '🏷 KPI и хештеги':
@@ -310,7 +333,11 @@ def help_handler(message, bot):
             'OMG Shift и рабочие Google-таблицы открываются кнопками ниже. '
             'Доступ к таблицам определяется правами Google-аккаунта.'
         )
-        reply_markup = resource_links_markup()
+        reply_markup = add_navigation_buttons(
+            resource_links_markup(),
+            back_callback='nav:help',
+        )
+        hide_reply_keyboard(message.chat.id, bot)
     elif message.text == '🛟 Если что-то не работает':
         text = (
             '<b>🛟 Если что-то не работает</b>\n\n'

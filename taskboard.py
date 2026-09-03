@@ -357,6 +357,9 @@ def func_task(message,bot):
 
     elif message.text=='✔ Выполненные':
         show_done_tasks(message,0,bot)
+
+    elif message.text == '🏠 Главное меню':
+        returnback(message, bot)
     
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
@@ -1102,11 +1105,18 @@ def register_readonly_callback(bot):
             return
         bot.answer_callback_query(call.id)
         if call.data == 'readonly_tasks:close':
-            bot.edit_message_reply_markup(
-                call.message.chat.id,
-                call.message.id,
-                reply_markup=None,
-            )
+            bot.clear_step_handler_by_chat_id(call.message.chat.id)
+            try:
+                bot.delete_message(call.message.chat.id, call.message.id)
+            except Exception:
+                bot.edit_message_reply_markup(
+                    call.message.chat.id,
+                    call.message.id,
+                    reply_markup=None,
+                )
+            call.message.from_user = call.from_user
+            from menu import hello
+            hello(call.message.chat.id, bot)
             return
         if call.data.startswith('readonly_task:'):
             try:

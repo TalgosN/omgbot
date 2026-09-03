@@ -39,6 +39,7 @@ def load_menu_module():
         InlineKeyboardButton=Button,
         KeyboardButton=Button,
         WebAppInfo=WebAppInfo,
+        ReplyKeyboardRemove=lambda: 'remove-keyboard',
     )
     telebot.telebot = telebot
 
@@ -158,6 +159,17 @@ class HelpMenuTest(unittest.TestCase):
             open_button.web_app.url,
             'https://bot.omg-vr.ru/problems',
         )
+        callbacks = [
+            button.callback_data
+            for row in inline_markup.rows
+            for button in row
+            if getattr(button, 'callback_data', None)
+        ]
+        self.assertIn('nav:home', callbacks)
+        self.assertTrue(any(
+            call.kwargs.get('reply_markup') == 'remove-keyboard'
+            for call in bot.send_message.call_args_list
+        ))
 
     def test_problem_menu_offers_manager_readonly_view(self):
         bot = Mock()
@@ -179,13 +191,14 @@ class HelpMenuTest(unittest.TestCase):
             markup = self.menu.resource_links_markup()
 
         buttons = [button for row in markup.rows for button in row]
-        self.assertEqual(len(buttons), 8)
+        self.assertEqual(len(buttons), 7)
         self.assertEqual(buttons[0].url, self.menu.OMG_SHIFT_URL)
         self.assertTrue(any(
             button.url.endswith('/current-steam-sheet/edit')
             for button in buttons
         ))
         self.assertFalse(any('Расписание' in button.text for button in buttons))
+        self.assertFalse(any('Расходники' in button.text for button in buttons))
 
     def test_main_menu_opens_steamtracker_for_employee(self):
         tracker_admin = types.ModuleType('steamtracker.admin')
@@ -235,14 +248,28 @@ class HelpMenuTest(unittest.TestCase):
             ['Кнопка сотрудника', self.menu.OWNER_MODE_BUTTON],
         )
 
-    def test_steamtracker_follows_schedule_in_every_main_menu(self):
+    def test_main_menu_common_sections_have_expected_order(self):
         import constants
 
+        expected = (
+            '👨🏻‍💻 Смена',
+            '🗓 Расписание',
+            '🚩 Доска проблем',
+            '🎮 Steam Tracker',
+            '👤 Аккаунт',
+            '🆘 Помощь',
+        )
         for buttons in constants.funclist.values():
-            self.assertEqual(
-                buttons.index('🎮 Steam Tracker'),
-                buttons.index('🗓 Расписание') + 1,
-            )
+            self.assertEqual(buttons[:len(expected)], expected)
+
+    def test_admin_menu_separates_tasks_system_and_owner_staff(self):
+        import constants
+
+        self.assertIn('✅ Задачи смены', constants.admin_funclist)
+        self.assertIn('⚙️ Система и тесты', constants.admin_funclist)
+        self.assertNotIn('👥 Сотрудники и роли', constants.admin_funclist)
+        self.assertIn('👥 Сотрудники и роли', constants.owner_admin_funclist)
+        self.assertIn('🏠 Главное меню', constants.owner_admin_funclist)
 
 
 if __name__ == '__main__':

@@ -572,7 +572,7 @@ def inkass (start_dt,end_dt,message,bot):
     file.close()  
     
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add('Да','Нет')
+    markup.add('✅ Внести', '⬅️ Назад')
     
     if os.stat("./Reports/Errors_Inkass.txt").st_size == 0:
         bot.send_message(message.chat.id, 'Все прошло без ошибок! Желаете внести в ФТ?',reply_markup=markup)
@@ -586,13 +586,13 @@ def inkass (start_dt,end_dt,message,bot):
 def confirm_inkass(message,inkass,bot,start_dt):
     if not require_role(message, bot, ROLE_OWNER):
         return
-    if message.text=='Нет':
+    if message.text in {'⬅️ Назад', 'Нет'}:
         finance(message,bot)
-    elif message.text=='Да':
+    elif message.text in {'✅ Внести', 'Да'}:
         insert_inkass(message,inkass, bot,start_dt)
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add('Да','Нет')
+        markup.add('✅ Внести', '⬅️ Назад')
         bot.send_message(message.chat.id, 'Желаете внести в ФТ?',reply_markup=markup)
         bot.register_next_step_handler(message,confirm_inkass,inkass,bot,start_dt)
 
