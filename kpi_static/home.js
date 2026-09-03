@@ -17,6 +17,15 @@ function escapeHtml(value) {
 
 function percent(value) { return `${Math.round(Number(value || 0) * 100)}%`; }
 function number(value) { return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(Number(value || 0)); }
+function plural(value, one, few, many) {
+  const count = Math.abs(Number(value || 0));
+  const tail = count % 100;
+  const last = count % 10;
+  if (tail >= 11 && tail <= 14) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
 function dateLabel(value) {
   const [year, month, day] = value.split('-').map(Number);
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })
@@ -180,6 +189,43 @@ function renderManagement(data) {
   }
 }
 
+function renderShiftTasks(data) {
+  const section = $('#homeTasksSection');
+  const summary = data.shift_tasks || { count: 0, items: [] };
+  if (!summary.count) {
+    section.hidden = true;
+    return;
+  }
+  const items = summary.items || [];
+  $('#homeTasksCount').textContent = summary.overdue
+    ? `${summary.count} · просрочено: ${summary.overdue}`
+    : `${summary.count} ${plural(summary.count, 'задача', 'задачи', 'задач')}`;
+  $('#homeTasksList').innerHTML = items.map((task) => {
+    const taskClass = task.overdue
+      ? 'overdue'
+      : task.due_soon
+        ? 'due-soon'
+        : task.status === 'in_progress'
+          ? 'progress'
+          : 'pending';
+    const taskStatus = task.overdue
+      ? 'Просрочена'
+      : task.due_soon
+        ? 'Срок скоро'
+        : task.status === 'in_progress'
+          ? 'В работе'
+          : `до ${timeLabel(task.due_at)}`;
+    return `<a class="home-task-card ${taskClass}" href="/shift/tasks?task=${task.id}">
+      <i class="home-task-marker"></i>
+      <span class="home-task-copy"><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.club)} · до ${timeLabel(task.due_at)}</span></span>
+      <b class="home-task-status">${taskStatus}</b>
+    </a>`;
+  }).join('') + (summary.count > items.length
+    ? `<a class="home-task-more" href="/shift/tasks">Показать все задачи · ещё ${summary.count - items.length}</a>`
+    : '');
+  section.hidden = false;
+}
+
 function renderClubs(data, bookingsData = null) {
   if (!data?.clubs.length) return;
   $('#clubsSection').hidden = false;
@@ -260,6 +306,7 @@ async function load() {
     }).format(new Date());
     renderPersonal(data);
     renderManagement(data);
+    renderShiftTasks(data);
     renderClubs(data);
     await loadBookings();
   } catch (error) {

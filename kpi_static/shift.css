@@ -16,6 +16,20 @@
 .shift-report-test-actions a.open { background:linear-gradient(145deg,#21b8a8,#08766f); }
 .shift-report-test-actions a.close { background:linear-gradient(145deg,#5367d8,#29398d); }
 .shift-report-test-actions span { font-size:15px; }
+.shift-alerts { display:grid; gap:8px; margin:0 0 12px; }
+.shift-alerts[hidden] { display:none !important; }
+.shift-alert { position:relative; display:grid; min-height:68px; padding:11px 38px 11px 12px; grid-template-columns:40px minmax(0,1fr); align-items:center; gap:11px; overflow:hidden; border:1px solid var(--line); border-radius:17px; color:var(--ink); text-decoration:none; background:linear-gradient(145deg,rgba(31,23,42,.98),rgba(17,12,25,.99)); box-shadow:0 14px 34px rgba(0,0,0,.25); }
+.shift-alert::after { position:absolute; top:50%; right:14px; color:#d9c7ff; font-size:19px; content:'›'; transform:translateY(-50%); }
+.shift-alert-icon { display:grid; width:40px; height:40px; place-items:center; border-radius:13px; font-size:17px; font-weight:900; }
+.shift-alert strong,.shift-alert small { display:block; }
+.shift-alert strong { font-size:13px; }
+.shift-alert small { margin-top:5px; color:var(--muted); font-size:9px; }
+.shift-alert.tasks { border-color:rgba(255,193,77,.3); background:radial-gradient(circle at 0 50%,rgba(255,193,77,.1),transparent 10rem),linear-gradient(145deg,rgba(31,23,42,.98),rgba(17,12,25,.99)); }
+.shift-alert.tasks .shift-alert-icon { color:#ffd477; background:rgba(255,193,77,.12); }
+.shift-alert.tasks.overdue { border-color:rgba(255,120,150,.36); background:radial-gradient(circle at 0 50%,rgba(255,120,150,.11),transparent 10rem),linear-gradient(145deg,rgba(31,23,42,.98),rgba(17,12,25,.99)); }
+.shift-alert.tasks.overdue .shift-alert-icon { color:#ff9daf; background:rgba(255,120,150,.12); }
+.shift-alert.reviews { border-color:rgba(168,121,255,.32); background:radial-gradient(circle at 0 50%,rgba(168,121,255,.12),transparent 10rem),linear-gradient(145deg,rgba(31,23,42,.98),rgba(17,12,25,.99)); }
+.shift-alert.reviews .shift-alert-icon { color:#c7a9ff; background:rgba(168,121,255,.12); }
 .shift-actions { display:grid; gap:10px; }
 .shift-actions[hidden] { display:none !important; }
 .shift-action { position:relative; display:grid; min-height:78px; padding:13px 14px; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:12px; overflow:hidden; border:1px solid var(--line); border-radius:18px; color:var(--ink); text-decoration:none; background:linear-gradient(110deg,rgba(77,224,199,.07),rgba(3,27,34,.5)); box-shadow:0 10px 28px rgba(0,0,0,.12); }

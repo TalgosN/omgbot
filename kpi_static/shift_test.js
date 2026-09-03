@@ -25,8 +25,8 @@ const runtime = {
 
 tg?.ready();
 tg?.expand();
-tg?.setHeaderColor('#031b22');
-tg?.setBackgroundColor('#031b22');
+tg?.setHeaderColor('#0d0913');
+tg?.setBackgroundColor('#0d0913');
 
 function requestAppFullscreen() {
   tg?.expand();

@@ -22,7 +22,8 @@
 .task-group.overdue { border-color:rgba(255,193,77,.32); background:linear-gradient(120deg,rgba(255,193,77,.09),rgba(3,27,34,.58)); }
 .task-group.completed { border-color:rgba(110,242,178,.22); }
 .task-group.skipped { border-color:rgba(197,180,255,.22); opacity:.86; }
-.task-group-toggle { display:grid; width:100%; min-height:86px; padding:13px; grid-template-columns:38px minmax(0,1fr) auto; align-items:center; gap:10px; border:0; color:var(--ink); text-align:left; background:transparent; }
+.task-group-toggle { display:grid; width:100%; min-height:86px; padding:13px; grid-template-columns:38px minmax(0,1fr) auto; align-items:center; gap:10px; border:0; color:var(--ink); text-align:left; background:transparent; touch-action:manipulation; -webkit-tap-highlight-color:rgba(168,121,255,.14); }
+.task-group-toggle:active { background:rgba(168,121,255,.08); }
 .task-group-icon { display:grid; width:38px; height:38px; place-items:center; border:1px solid rgba(77,224,199,.2); border-radius:12px; color:#7ce5d8; background:rgba(77,224,199,.09); font-size:15px; font-weight:850; }
 .task-group.completed .task-group-icon { color:#8ef3bd; background:rgba(110,242,178,.1); }
 .task-group.overdue .task-group-icon { color:#ffd477; background:rgba(255,193,77,.1); }

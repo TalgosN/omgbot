@@ -2085,6 +2085,74 @@ def _task_counts():
     return result
 
 
+def _active_shift_task_summary(user, limit=3):
+    current = datetime.now(ZoneInfo('Europe/Moscow'))
+    tasks = [
+        task for task in app_task_list(
+            user, scope='active', db_path=DB_PATH, now=current,
+        )
+        if task['status'] in {'pending', 'in_progress'}
+    ]
+    tasks.sort(key=lambda task: (
+        not bool(task.get('overdue')),
+        str(task.get('due_at') or ''),
+        int(task['id']),
+    ))
+    items = []
+    for task in tasks[:limit]:
+        try:
+            due_at = datetime.strptime(
+                task['due_at'], '%Y-%m-%d %H:%M:%S',
+            ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
+            due_soon = current < due_at <= current + timedelta(hours=1)
+        except (TypeError, ValueError):
+            due_soon = False
+        items.append({
+            'id': int(task['id']),
+            'title': task['title'],
+            'club': task['club'],
+            'due_at': task['due_at'],
+            'status': task['status'],
+            'overdue': bool(task.get('overdue')),
+            'due_soon': due_soon,
+        })
+    return {
+        'count': len(tasks),
+        'overdue': sum(bool(task.get('overdue')) for task in tasks),
+        'items': items,
+    }
+
+
+def _shift_review_count(user):
+    role = int(user['status'])
+    if role >= ROLE_MANAGER:
+        return _task_counts()['review']
+    today = _moscow_today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        clubs = {
+            str(row[0]) for row in conn.execute(
+                '''SELECT DISTINCT club FROM shifts
+                   WHERE date(substr(dt_shift, 1, 10))=date(?)
+                     AND ((shift_login IS NOT NULL
+                           AND lower(shift_login)=lower(?))
+                          OR (shift_login IS NULL
+                              AND shift_second_name=?
+                              AND shift_first_name=?))''',
+                (
+                    today, str(user.get('login') or ''),
+                    str(user.get('second_name') or ''),
+                    str(user.get('first_name') or ''),
+                ),
+            ).fetchall()
+            if row[0]
+        }
+    finally:
+        conn.close()
+    counts = _problem_counts_by_club()
+    return sum(int(counts.get(club, {}).get('review', 0)) for club in clubs)
+
+
 def _team_snapshot(month, selected_day):
     logins = _active_employee_logins()
     rows = calculate_monthly_kpi(
@@ -3441,6 +3509,7 @@ def api_home():
         'role': role,
         'upcoming_shifts': [],
         'personal_kpi': None,
+        'shift_tasks': _active_shift_task_summary(g.kpi_user),
         'management': None,
         'clubs': [],
     }
@@ -3532,6 +3601,7 @@ def api_shift():
                 _actor_login(), today.strftime('%Y-%m'),
             ),
         }
+    task_summary = _active_shift_task_summary(g.kpi_user)
     return jsonify({
         'external_url': OMG_SHIFT_URL,
         'user_name': (
@@ -3549,6 +3619,10 @@ def api_shift():
             TELEGRAM_API_KEY and CHATS.get('reports') and CHATS.get('main_group')
         ),
         'employee_dashboard': dashboard,
+        'alerts': {
+            'tasks': task_summary,
+            'reviews': _shift_review_count(g.kpi_user),
+        },
     })
 
 

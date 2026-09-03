@@ -110,6 +110,19 @@ class ShiftTasksTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def _add_shift(self, club='Ленинский', login='@employee'):
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.execute(
+                '''INSERT INTO shifts
+                   (dt_shift, club, dur, source, shift_login,
+                    shift_start, shift_end)
+                   VALUES ('2026-09-01', ?, 10, 'omg_shift', ?,
+                           '10:00', '20:00')''',
+                (club, login),
+            )
+        conn.close()
+
     def test_admin_task_list_hides_reply_keyboard_and_has_create_and_back(self):
         bot = FakeBot()
         message = SimpleNamespace(
@@ -210,6 +223,7 @@ class ShiftTasksTest(unittest.TestCase):
 
     def test_schema_discards_legacy_bot_drafts_and_reopens_instances(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
         shift_tasks.ensure_task_instances(
             '2026-09-01', db_path=self.db_path,
             now=datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),
@@ -298,6 +312,49 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(instances, 1)
         self.assertEqual(notifications, 1)
 
+    def test_main_group_announcement_combines_clubs_and_mentions(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift('Ленинский', '@employee')
+        self._add_shift('Марьино', '@second')
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.execute(
+                '''INSERT INTO users
+                   (ID, login, first_name, second_name, nick_name, status, chatid)
+                   VALUES (1, '@employee', 'Иван', 'Иванов', 'Иван', 0, '101')'''
+            )
+            conn.execute(
+                '''INSERT INTO users
+                   (ID, login, first_name, second_name, nick_name, status, chatid)
+                   VALUES (2, '@second', 'Пётр', 'Петров', 'Пётр', 0, '102')'''
+            )
+            conn.execute(
+                '''INSERT INTO broadcasts (
+                       text, photo, time, freq_type, freq_days, status, kind,
+                       title, clubs_json, due_time, announce_main
+                   ) VALUES ('Проверить клуб', 'None', '12:00', 'daily', '',
+                             1, 'task', 'Проверка клуба', ?, '20:00', 1)''',
+                (json.dumps(['Ленинский', 'Марьино'], ensure_ascii=False),),
+            )
+        conn.close()
+        bot = FakeBot()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+
+        with patch.object(shift_tasks, 'CHATS', {
+            'main_group': '-1002', 'reports': '-1001',
+        }):
+            shift_tasks.process_shift_tasks(
+                bot, now=now, db_path=self.db_path,
+            )
+
+        announcements = [
+            message for message in bot.messages
+            if message[0] == 'message' and message[1] == '-1002'
+        ]
+        self.assertEqual(len(announcements), 1)
+        self.assertIn('@omgvr_len', announcements[0][2])
+        self.assertIn('@omgvr_mar', announcements[0][2])
+
     def test_first_scheduler_run_does_not_backfill_already_expired_tasks(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
         bot = FakeBot()
@@ -314,8 +371,25 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(bot.messages, [])
 
+    def test_scheduler_does_not_create_tasks_for_club_without_shift(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        bot = FakeBot()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+
+        shift_tasks.process_shift_tasks(bot, now=now, db_path=self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute(
+            '''SELECT COUNT(*) FROM shift_task_instances
+               WHERE occurrence_date='2026-09-01' '''
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(bot.messages, [])
+
     def test_close_warning_is_recorded_once_and_does_not_block(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
         shift_tasks.ensure_task_instances(
             '2026-09-01', db_path=self.db_path,
             now=datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow')),

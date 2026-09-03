@@ -4,8 +4,8 @@ const state = { scope: 'active', club: '', tasks: [], attachments: [], current: 
 
 tg?.ready();
 tg?.expand();
-tg?.setHeaderColor('#052c32');
-tg?.setBackgroundColor('#052c32');
+tg?.setHeaderColor('#0d0913');
+tg?.setBackgroundColor('#0d0913');
 tg?.BackButton?.show();
 tg?.BackButton?.onClick(() => window.location.assign('/shift'));
 
@@ -99,15 +99,16 @@ function renderTasks() {
           <b>${task.status === 'completed' ? '✓' : task.status === 'skipped' ? '—' : clock(task.due_at)}</b>
         </button>`;
       }).join('');
+      const directTask = group.tasks.length === 1 ? group.tasks[0] : null;
       return `<article class="task-group ${groupClass}">
-        <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" aria-expanded="false">
+        <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" data-direct-task="${directTask?.id || ''}" aria-expanded="false">
           <span class="task-group-icon">${completed.length === group.tasks.length ? '✓' : completed.length}</span>
           <span class="task-group-copy">
             <small>${state.scope === 'history' ? shortDate(group.date) : `${group.tasks.length} клуб.`}</small>
             <strong>${escapeHtml(group.title)}</strong>
             <em>${escapeHtml(performerLine)}</em>
           </span>
-          <span class="task-group-progress"><b>${groupLabel}</b><i>⌄</i></span>
+          <span class="task-group-progress"><b>${directTask ? status(directTask).label : `${groupLabel} · открыть`}</b><i>${directTask ? '→' : '⌄'}</i></span>
         </button>
         <div class="task-group-details" hidden>${rows}</div>
       </article>`;
@@ -307,6 +308,12 @@ document.querySelector('#clubFilters').addEventListener('click', (event) => {
 document.querySelector('#taskList').addEventListener('click', (event) => {
   const toggle = event.target.closest('[data-group]');
   if (toggle) {
+    const directTaskId = Number(toggle.dataset.directTask || 0);
+    if (directTaskId) {
+      const task = state.tasks.find((item) => item.id === directTaskId);
+      if (task) openTask(task);
+      return;
+    }
     const group = toggle.closest('.task-group');
     const details = group.querySelector('.task-group-details');
     const expanded = toggle.getAttribute('aria-expanded') === 'true';

@@ -17,8 +17,8 @@ let canSelectReportClub = false;
 
 tg?.ready();
 tg?.expand();
-tg?.setHeaderColor('#052c32');
-tg?.setBackgroundColor('#052c32');
+tg?.setHeaderColor('#0d0913');
+tg?.setBackgroundColor('#0d0913');
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -29,6 +29,26 @@ function escapeHtml(value) {
 function number(value) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 })
     .format(Number(value || 0));
+}
+
+function taskAlertTitle(count) {
+  const tail = count % 100;
+  const last = count % 10;
+  if (tail < 11 || tail > 14) {
+    if (last === 1) return `${count} невыполненная задача`;
+    if (last >= 2 && last <= 4) return `${count} невыполненные задачи`;
+  }
+  return `${count} невыполненных задач`;
+}
+
+function reviewAlertTitle(count) {
+  const tail = count % 100;
+  const last = count % 10;
+  if (tail < 11 || tail > 14) {
+    if (last === 1) return `${count} решение ждёт подтверждения`;
+    if (last >= 2 && last <= 4) return `${count} решения ждут подтверждения`;
+  }
+  return `${count} решений ждут подтверждения`;
 }
 
 function dateLabel(value) {
@@ -217,6 +237,34 @@ async function loadTaskShortcut() {
   shiftTasksStatus.classList.toggle('warning', overdue > 0);
 }
 
+function renderShiftAlerts(alerts = {}) {
+  const panel = document.querySelector('#shiftAlerts');
+  const tasks = alerts.tasks || { count: 0, overdue: 0, items: [] };
+  const reviews = Number(alerts.reviews || 0);
+  const rows = [];
+  if (tasks.count) {
+    const onlyTask = tasks.count === 1 ? tasks.items?.[0] : null;
+    const href = onlyTask ? `/shift/tasks?task=${onlyTask.id}` : '/shift/tasks';
+    const deadline = onlyTask
+      ? `${escapeHtml(onlyTask.club)} · до ${clock(onlyTask.due_at)}`
+      : tasks.overdue
+        ? `Просрочено: ${tasks.overdue}`
+        : 'Открыть задачи на сегодня';
+    rows.push(`<a class="shift-alert tasks ${tasks.overdue ? 'overdue' : ''}" href="${href}">
+      <span class="shift-alert-icon">!</span>
+      <span><strong>${taskAlertTitle(tasks.count)}</strong><small>${deadline}</small></span>
+    </a>`);
+  }
+  if (reviews) {
+    rows.push(`<a class="shift-alert reviews" href="/problems?status=review">
+      <span class="shift-alert-icon">?</span>
+      <span><strong>${reviewAlertTitle(reviews)}</strong><small>Проверить в Taskboard</small></span>
+    </a>`);
+  }
+  panel.innerHTML = rows.join('');
+  panel.hidden = !rows.length;
+}
+
 function parseLocalDate(value) {
   const [year, month, day] = value.split('-').map(Number);
   return new Date(year, month - 1, day);
@@ -362,6 +410,7 @@ async function loadShift() {
     });
   }
   renderEmployeeDashboard(payload.employee_dashboard);
+  renderShiftAlerts(payload.alerts);
   shiftActions.classList.toggle('manager', payload.can_manage);
   shiftActions.hidden = false;
   loadTaskShortcut().catch(() => {

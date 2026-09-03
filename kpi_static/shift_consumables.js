@@ -6,8 +6,8 @@ const errorCard = document.querySelector('#consumablesError');
 
 tg?.ready();
 tg?.expand();
-tg?.setHeaderColor('#052c32');
-tg?.setBackgroundColor('#052c32');
+tg?.setHeaderColor('#0d0913');
+tg?.setBackgroundColor('#0d0913');
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({

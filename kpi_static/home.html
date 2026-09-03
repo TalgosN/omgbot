@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
-  <link rel="stylesheet" href="/static/home.css?v=20260902-1">
+  <link rel="stylesheet" href="/static/home.css?v=20260903-1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -66,6 +66,14 @@
       </div>
     </nav>
 
+    <section id="homeTasksSection" class="home-tasks-section" hidden>
+      <div class="section-heading compact">
+        <div><p class="eyebrow">OMG Shift</p><h2>Задачи сегодня</h2></div>
+        <span id="homeTasksCount" class="home-tasks-count"></span>
+      </div>
+      <div id="homeTasksList" class="home-task-list"></div>
+    </section>
+
     <section id="clubsSection" hidden>
       <div class="section-heading">
         <div><p class="eyebrow">В реальном времени</p><h2>Сегодня в клубах</h2></div>
@@ -102,6 +110,6 @@
 
     <div id="homeError" class="error-card" hidden></div>
   </main>
-  <script src="/static/home.js"></script>
+  <script src="/static/home.js?v=20260903-1"></script>
 </body>
 </html>

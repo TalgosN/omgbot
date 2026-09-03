@@ -265,8 +265,16 @@ function renderFilters() {
 }
 
 function applyUrlFilters() {
-  const club = new URLSearchParams(window.location.search).get('club');
+  const params = new URLSearchParams(window.location.search);
+  const club = params.get('club');
   if (club && state.meta.clubs.includes(club)) $('#clubFilter').value = club;
+  const status = params.get('status');
+  if (['work', 'review', 'done'].includes(status)) {
+    state.status = status;
+    document.querySelectorAll('#problemTabs button').forEach((button) => {
+      button.classList.toggle('active', button.dataset.status === status);
+    });
+  }
 }
 
 function taskTypeBadgeClass(type) {

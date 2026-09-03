@@ -2,8 +2,8 @@ const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
 tg?.ready();
 tg?.expand();
-tg?.setHeaderColor('#021f25');
-tg?.setBackgroundColor('#031b22');
+tg?.setHeaderColor('#0d0913');
+tg?.setBackgroundColor('#0d0913');
 
 let state = null;
 let selectedClub = 0;

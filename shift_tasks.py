@@ -72,6 +72,9 @@ LEGACY_CLUB_MENTIONS = {
     '@omgvr_prokshino': 'Прокшино',
     '@omgvr_dmi': 'Дмитровка',
 }
+CLUB_MAIN_MENTIONS = {
+    club: mention for mention, club in LEGACY_CLUB_MENTIONS.items()
+}
 
 LEGACY_MARYINO_SPECIALS = {
     10: (
@@ -409,6 +412,16 @@ def _template_clubs(template):
     return [str(club) for club in clubs if str(club) in available]
 
 
+def _club_has_scheduled_shift(conn, occurrence_date, club):
+    return conn.execute(
+        '''SELECT 1 FROM shifts
+           WHERE date(substr(dt_shift, 1, 10))=date(?)
+             AND lower(trim(club))=lower(trim(?))
+           LIMIT 1''',
+        (str(occurrence_date), str(club)),
+    ).fetchone() is not None
+
+
 def _requirements_for(conn, template_id, club):
     return [
         row[0] for row in conn.execute(
@@ -455,6 +468,8 @@ def ensure_task_instances(
                 if skip_expired and day == current.date() and current >= due_at:
                     continue
                 for club in _template_clubs(template):
+                    if not _club_has_scheduled_shift(conn, day.isoformat(), club):
+                        continue
                     requirements = _requirements_for(conn, template['id'], club)
                     cursor = conn.execute(
                         '''INSERT OR IGNORE INTO shift_task_instances (
@@ -515,23 +530,7 @@ def _scheduled_recipients(conn, instance):
            ORDER BY employee.login''',
         (instance['occurrence_date'], instance['club'], ROLE_EMPLOYEE),
     ).fetchall()
-    recipients = [tuple(row) for row in rows]
-    if recipients:
-        return recipients
-    opener = conn.execute(
-        '''SELECT CAST(employee.chatid AS TEXT), employee.login,
-                  COALESCE(NULLIF(employee.nick_name, ''),
-                           NULLIF(employee.first_name, ''), employee.login)
-           FROM activity activity_row
-           JOIN users employee ON lower(employee.login)=lower(activity_row.login)
-           WHERE date(activity_row.dtrep)=date(?)
-             AND lower(trim(activity_row.club))=lower(trim(?))
-             AND activity_row.action LIKE '%Открыть%'
-             AND employee.status>=? AND employee.chatid IS NOT NULL
-           ORDER BY datetime(activity_row.dtrep) DESC LIMIT 1''',
-        (instance['occurrence_date'], instance['club'], ROLE_EMPLOYEE),
-    ).fetchone()
-    return [tuple(opener)] if opener else []
+    return [tuple(row) for row in rows]
 
 
 def _instance_requirements(instance):
@@ -660,18 +659,39 @@ def _announce_main(bot, conn, instance):
         'SELECT announce_main FROM broadcasts WHERE id=?',
         (instance['template_id'],),
     ).fetchone()
-    if not template or not template[0] or instance['main_announced_at']:
+    if not template or not template[0]:
         return
+    instances = conn.execute(
+        '''SELECT * FROM shift_task_instances
+           WHERE template_id=? AND occurrence_date=? ORDER BY id''',
+        (instance['template_id'], instance['occurrence_date']),
+    ).fetchall()
+    active_instances = [
+        row for row in instances
+        if _club_has_scheduled_shift(
+            conn, row['occurrence_date'], row['club'],
+        )
+    ]
+    if not active_instances or any(row['main_announced_at'] for row in instances):
+        return
+    clubs = list(dict.fromkeys(str(row['club']) for row in active_instances))
+    club_labels = ' '.join(
+        CLUB_MAIN_MENTIONS.get(club, html.escape(club)) for club in clubs
+    )
     bot.send_message(
         CHATS['main_group'],
-        f'📋 <b>Задача на сегодня · {html.escape(instance["club"])}</b>\n\n'
+        f'📋 <b>Задача на сегодня</b>\n\n'
         f'{html.escape(instance["title"])}\n'
-        f'Выполнить до {html.escape(instance["due_at"][11:16])}.',
+        f'⏰ Выполнить до {html.escape(instance["due_at"][11:16])}\n\n'
+        f'{club_labels}',
         parse_mode='HTML',
     )
+    instance_ids = [int(row['id']) for row in instances]
+    placeholders = ','.join('?' for _ in instance_ids)
     conn.execute(
-        'UPDATE shift_task_instances SET main_announced_at=? WHERE id=?',
-        (_timestamp(), instance['id']),
+        f'''UPDATE shift_task_instances SET main_announced_at=?
+            WHERE id IN ({placeholders})''',
+        (_timestamp(), *instance_ids),
     )
 
 
@@ -710,6 +730,10 @@ def process_shift_tasks(bot, now=None, db_path=DB_PATH):
         ).fetchall()
         with conn:
             for instance in instances:
+                if not _club_has_scheduled_shift(
+                    conn, instance['occurrence_date'], instance['club'],
+                ):
+                    continue
                 available = datetime.strptime(
                     instance['available_at'], '%Y-%m-%d %H:%M:%S',
                 ).replace(tzinfo=MOSCOW)
@@ -717,7 +741,13 @@ def process_shift_tasks(bot, now=None, db_path=DB_PATH):
                     instance['due_at'], '%Y-%m-%d %H:%M:%S',
                 ).replace(tzinfo=MOSCOW)
                 if current < available:
+                    scheduled_chatids = {
+                        str(recipient[0])
+                        for recipient in _scheduled_recipients(conn, instance)
+                    }
                     for recipient in _opening_recipients(conn, instance):
+                        if str(recipient[0]) not in scheduled_chatids:
+                            continue
                         try:
                             sent += int(_send_direct_notification(
                                 bot, conn, instance, 'opening', recipient,
@@ -905,6 +935,13 @@ def pending_tasks_for_close(club, occurrence_date, db_path=DB_PATH):
                 '''SELECT * FROM shift_task_instances
                    WHERE occurrence_date=? AND lower(trim(club))=lower(trim(?))
                      AND status IN ('pending', 'in_progress')
+                     AND EXISTS (
+                         SELECT 1 FROM shifts shift_row
+                         WHERE date(substr(shift_row.dt_shift, 1, 10))=
+                               date(shift_task_instances.occurrence_date)
+                           AND lower(trim(shift_row.club))=
+                               lower(trim(shift_task_instances.club))
+                     )
                    ORDER BY due_at, id''',
                 (str(occurrence_date), club),
             ).fetchall()
@@ -1079,7 +1116,12 @@ def app_task_list(user, scope='active', db_path=DB_PATH, now=None):
         return [
             _app_task_payload(row, current)
             for row in rows
-            if _task_accessible_to_actor(conn, row, actor)
+            if (
+                row['status'] not in ('pending', 'in_progress')
+                or _club_has_scheduled_shift(
+                    conn, row['occurrence_date'], row['club'],
+                )
+            ) and _task_accessible_to_actor(conn, row, actor)
         ]
     finally:
         conn.close()
@@ -1640,8 +1682,12 @@ def _admin_task_due_time(message, bot):
 def _prompt_task_announcement(chat_id, bot, source_message=None):
     markup = types.InlineKeyboardMarkup()
     markup.row(
-        types.InlineKeyboardButton('Да', callback_data='stadmin_announce_yes'),
-        types.InlineKeyboardButton('Нет', callback_data='stadmin_announce_no'),
+        types.InlineKeyboardButton(
+            'Только создать задачу', callback_data='stadmin_announce_no',
+        ),
+        types.InlineKeyboardButton(
+            'Задача + объявление', callback_data='stadmin_announce_yes',
+        ),
     )
     markup.add(types.InlineKeyboardButton(
         '✖️ Отмена',
@@ -1654,7 +1700,7 @@ def _prompt_task_announcement(chat_id, bot, source_message=None):
             pass
     bot.send_message(
         chat_id,
-        'Дублировать короткое объявление о задаче в рабочую группу?',
+        'Отправить одно объявление с тегами выбранных клубов в рабочую группу?',
         reply_markup=markup,
     )
 
