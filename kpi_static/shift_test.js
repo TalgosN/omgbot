@@ -36,7 +36,44 @@ function requestAppFullscreen() {
   }
 }
 
-tg?.onEvent?.('fullscreenFailed', () => tg.expand());
+function syncCameraViewport() {
+  const numeric = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  const isIos = tg?.platform === 'ios';
+  const reportedTop = Math.max(
+    numeric(tg?.safeAreaInset?.top),
+    numeric(tg?.contentSafeAreaInset?.top),
+  );
+  const reportedBottom = Math.max(
+    numeric(tg?.safeAreaInset?.bottom),
+    numeric(tg?.contentSafeAreaInset?.bottom),
+  );
+  const fallbackTop = isIos ? (tg?.isFullscreen ? 56 : 88) : 0;
+  const fallbackBottom = isIos ? 34 : 0;
+  const heights = [
+    numeric(tg?.viewportHeight),
+    numeric(window.visualViewport?.height),
+    numeric(window.innerHeight),
+  ].filter((value) => value > 0);
+  const visibleHeight = heights.length ? Math.floor(Math.min(...heights)) : 0;
+  const root = document.documentElement.style;
+  root.setProperty('--camera-runtime-safe-top', `${Math.max(reportedTop, fallbackTop)}px`);
+  root.setProperty('--camera-runtime-safe-bottom', `${Math.max(reportedBottom, fallbackBottom)}px`);
+  if (visibleHeight) root.setProperty('--camera-viewport-height', `${visibleHeight}px`);
+}
+
+tg?.onEvent?.('fullscreenFailed', () => {
+  tg.expand();
+  syncCameraViewport();
+});
+for (const eventName of [
+  'viewportChanged', 'safeAreaChanged', 'contentSafeAreaChanged',
+  'fullscreenChanged',
+]) {
+  tg?.onEvent?.(eventName, syncCameraViewport);
+}
+window.addEventListener('resize', syncCameraViewport);
+window.visualViewport?.addEventListener('resize', syncCameraViewport);
+syncCameraViewport();
 requestAppFullscreen();
 
 function escapeHtml(value) {
@@ -544,6 +581,7 @@ function stopCamera() {
 
 async function openCamera() {
   requestAppFullscreen();
+  syncCameraViewport();
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     $('#systemCamera').hidden = false;
     renderPhotoReady('Встроенная камера недоступна. Выберите фото с телефона.');
@@ -563,6 +601,7 @@ async function openCamera() {
     const video = $('#cameraView');
     video.srcObject = runtime.stream;
     await video.play();
+    syncCameraViewport();
     updateCameraInstruction();
     $('#cameraStage').hidden = false;
   } catch (error) {

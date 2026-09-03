@@ -36,8 +36,8 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="batchReplaceInput"', html)
         self.assertIn('id="photoProcessing"', html)
         self.assertIn('id="cameraSavingText"', html)
-        self.assertIn('/static/shift_test.css?v=20260902-3', html)
-        self.assertIn('/static/shift_test.js?v=20260903-1', html)
+        self.assertIn('/static/shift_test.css?v=20260903-1', html)
+        self.assertIn('/static/shift_test.js?v=20260903-2', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)
@@ -65,6 +65,9 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('setCameraFeedback(true, \'Фото сохранено · следующий пункт\'', script)
         self.assertIn('setPhotoProcessing(true, \'Обрабатываем фотографию…\'', script)
         self.assertIn('var(--tg-content-safe-area-inset-top,0px)', styles)
+        self.assertIn('var(--camera-viewport-height)', styles)
+        self.assertIn("tg?.onEvent?.(eventName, syncCameraViewport)", script)
+        self.assertIn("tg?.contentSafeAreaInset?.top", script)
 
     def test_review_answers_can_be_edited_individually(self):
         html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')

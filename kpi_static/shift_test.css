@@ -16,6 +16,9 @@
   --danger:#ff7896;
   --app-safe-top:max(env(safe-area-inset-top,0px),var(--tg-safe-area-inset-top,0px),var(--tg-content-safe-area-inset-top,0px));
   --app-safe-bottom:max(env(safe-area-inset-bottom,0px),var(--tg-safe-area-inset-bottom,0px),var(--tg-content-safe-area-inset-bottom,0px));
+  --camera-safe-top:max(var(--app-safe-top),var(--camera-runtime-safe-top,0px));
+  --camera-safe-bottom:max(var(--app-safe-bottom),var(--camera-runtime-safe-bottom,0px));
+  --camera-viewport-height:var(--tg-viewport-height,100dvh);
 }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
@@ -151,18 +154,18 @@ body[data-workflow-step="closing"] .progress-track i { background:linear-gradien
 .photo-review button { width:100%; min-height:31px; margin-top:7px; border:0; border-radius:10px; color:#a7eee4; background:rgba(33,184,168,.11); font-size:8px; font-weight:800; }
 .photo-review .empty-review { grid-column:1/-1; padding:14px; color:var(--muted); font-size:9px; text-align:center; }
 .test-notice { margin:14px 0 0; padding:11px 12px; border-radius:13px; color:#b9cbd0; background:rgba(83,103,216,.1); font-size:8px; line-height:1.5; }
-.camera-stage { position:fixed; top:0; right:0; left:0; z-index:60; height:100vh; height:var(--tg-viewport-stable-height,100dvh); overflow:hidden; color:white; background:#000; touch-action:none; user-select:none; }
+.camera-stage { position:fixed; top:0; right:0; left:0; z-index:60; height:var(--camera-viewport-height); max-height:100dvh; overflow:hidden; color:white; background:#000; touch-action:none; user-select:none; }
 .camera-stage video { width:100%; height:100%; object-fit:cover; }
 .camera-shade { position:absolute; inset:0; pointer-events:none; background:linear-gradient(to bottom,rgba(0,0,0,.72),transparent 35%,transparent 56%,rgba(0,0,0,.82)); }
-.camera-instruction { position:absolute; top:calc(var(--app-safe-top) + 14px); left:58px; right:58px; max-height:calc(var(--tg-viewport-stable-height,100dvh) - var(--app-safe-top) - 225px); overflow:auto; text-align:center; overscroll-behavior:contain; }
+.camera-instruction { position:absolute; top:calc(var(--camera-safe-top) + 14px); left:58px; right:58px; max-height:calc(var(--camera-viewport-height) - var(--camera-safe-top) - var(--camera-safe-bottom) - 190px); overflow:auto; text-align:center; overscroll-behavior:contain; }
 .camera-instruction span,.camera-instruction strong,.camera-instruction small { display:block; }
 .camera-instruction span { color:#9ef3e7; font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
 .camera-stage:not(.cleanliness-camera) .camera-instruction span { color:#b8c0ff; }
 .camera-instruction strong { margin-top:8px; font-size:15px; line-height:1.38; }
 .camera-instruction small { margin-top:7px; color:rgba(255,255,255,.7); font-size:9px; }
-.close-camera { position:absolute; top:calc(var(--app-safe-top) + 10px); right:14px; width:40px; height:40px; border:1px solid rgba(255,255,255,.25); border-radius:14px; color:white; background:rgba(0,0,0,.4); font-size:24px; }
-.camera-file-button { position:absolute; left:16px; bottom:calc(var(--app-safe-bottom) + 44px); z-index:1; min-height:40px; padding:0 12px; border:1px solid rgba(255,255,255,.24); border-radius:13px; color:white; background:rgba(0,0,0,.48); font-size:9px; font-weight:800; }
-.camera-controls { position:absolute; left:0; right:0; bottom:calc(var(--app-safe-bottom) + 25px); display:grid; justify-items:center; gap:10px; }
+.close-camera { position:absolute; top:calc(var(--camera-safe-top) + 10px); right:14px; width:40px; height:40px; border:1px solid rgba(255,255,255,.25); border-radius:14px; color:white; background:rgba(0,0,0,.4); font-size:24px; }
+.camera-file-button { position:absolute; left:16px; bottom:calc(var(--camera-safe-bottom) + 44px); z-index:1; min-height:40px; padding:0 12px; border:1px solid rgba(255,255,255,.24); border-radius:13px; color:white; background:rgba(0,0,0,.48); font-size:9px; font-weight:800; }
+.camera-controls { position:absolute; left:0; right:0; bottom:calc(var(--camera-safe-bottom) + 25px); display:grid; justify-items:center; gap:10px; }
 .camera-controls > span { color:rgba(255,255,255,.76); font-size:9px; }
 .shutter { display:grid; width:82px; height:82px; padding:7px; place-items:center; border:3px solid white; border-radius:50%; background:rgba(0,0,0,.2); }
 .shutter i { width:62px; height:62px; border-radius:50%; background:white; transition:.12s ease; }
