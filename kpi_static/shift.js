@@ -382,19 +382,16 @@ function renderEmployeeDashboard(dashboard) {
     <h2>Смен пока нет</h2>
     <div class="nearest-shift-meta"><span>В опубликованном расписании новых смен не найдено</span></div>
   `;
-  document.querySelector('#upcomingShiftList').innerHTML = shifts.length > 1
-    ? shifts.slice(1).map((shift) => `
+  const followingShifts = shifts.slice(1, 3);
+  document.querySelector('.shift-dashboard-detail').hidden = !followingShifts.length;
+  document.querySelector('#upcomingShiftList').innerHTML = followingShifts.length
+    ? followingShifts.map((shift) => `
       <article class="upcoming-shift">
         <div><strong>${escapeHtml(shift.club)}</strong><span>${dateLabel(shift.date)}</span></div>
         <small>${shiftTime(shift)}${number(shift.duration)} ч</small>
       </article>
     `).join('')
-    : '<div class="shift-empty">Других смен в расписании пока нет</div>';
-  const summary = dashboard.month_summary || {};
-  document.querySelector('#shiftMonthSummary').innerHTML = `
-    <div><span>Смен</span><strong>${number(summary.shifts)}</strong></div>
-    <div><span>Часов</span><strong>${number(summary.hours)}</strong></div>
-  `;
+    : '';
   document.querySelector('#employeeShiftDashboard').hidden = false;
   reportProblemLink.hidden = false;
 }
@@ -486,8 +483,9 @@ async function loadShift() {
   }
   renderEmployeeDashboard(payload.employee_dashboard);
   renderOwnerDashboard(payload.owner_dashboard);
-  renderShiftAlerts(payload.alerts);
+  renderShiftAlerts(payload.can_manage ? {} : payload.alerts);
   shiftActions.classList.toggle('manager', payload.can_manage);
+  shiftActions.classList.toggle('employee', !payload.can_manage);
   shiftActions.hidden = false;
   loadTaskShortcut().catch(() => {
     shiftTasksStatus.textContent = 'Открыть →';

@@ -15,6 +15,14 @@ function storedManagerFiltersCollapsed() {
   }
 }
 
+function storedKpiExplanationOpen() {
+  try {
+    return localStorage.getItem('omg-kpi-explanation') === 'open';
+  } catch (_error) {
+    return false;
+  }
+}
+
 const state = {
   me: null,
   day: localIsoDate(),
@@ -436,27 +444,37 @@ function renderMyKpi() {
         Открыть полную карточку
       </button>
     </article>
-    <section class="explanation-card">
-      <div class="explanation-heading">
+    <details id="kpiExplanation" class="explanation-card"${storedKpiExplanationOpen() ? ' open' : ''}>
+      <summary class="explanation-heading">
         <div>
           <p class="eyebrow">Расшифровка</p>
           <h2>Из чего сложился KPI</h2>
         </div>
-        <strong>${percent(explanation.total_pct)}</strong>
+        <span class="explanation-summary-value"><strong>${percent(explanation.total_pct)}</strong><b aria-hidden="true">⌄</b></span>
+      </summary>
+      <div class="explanation-body">
+        <p class="formula-note">
+          Основные показатели делятся на норму для фактических смен.
+          Нажмите показатель, чтобы увидеть исходные записи.
+        </p>
+        <div class="explanation-list">
+          ${metrics.map((item) => explanationMetric(item)).join('')}
+        </div>
+        <div class="formula-total">
+          <span>Вклад показателей</span>
+          <strong>${percent(explanation.metric_contribution_pct)}</strong>
+        </div>
       </div>
-      <p class="formula-note">
-        Основные показатели делятся на норму для фактических смен.
-        Нажмите показатель, чтобы увидеть исходные записи.
-      </p>
-      <div class="explanation-list">
-        ${metrics.map((item) => explanationMetric(item)).join('')}
-      </div>
-      <div class="formula-total">
-        <span>Вклад показателей</span>
-        <strong>${percent(explanation.metric_contribution_pct)}</strong>
-      </div>
-    </section>
+    </details>
   `;
+  const explanationCard = document.querySelector('#kpiExplanation');
+  explanationCard?.addEventListener('toggle', () => {
+    try {
+      localStorage.setItem('omg-kpi-explanation', explanationCard.open ? 'open' : 'closed');
+    } catch {
+      // Private browsing may block localStorage.
+    }
+  });
 }
 
 function renderManagerFilters() {

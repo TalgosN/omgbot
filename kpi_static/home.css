@@ -117,7 +117,7 @@ button, input, select, textarea { font: inherit; }
 .home-task-overall > i { position:absolute; right:0; bottom:0; left:0; height:4px; background:linear-gradient(90deg,var(--purple) var(--task-progress),rgba(112,70,217,.1) var(--task-progress)); }
 .home-task-group { overflow:hidden; border:1px solid var(--line); border-radius:17px; background:var(--surface); box-shadow:var(--shadow); }
 .home-task-group.overdue { border-color:rgba(214,75,113,.22); }
-.home-task-group > summary { display:grid; min-height:67px; padding:12px 13px; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:9px; cursor:pointer; list-style:none; }
+.home-task-group > summary { display:grid; min-height:56px; padding:10px 13px; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:9px; cursor:pointer; list-style:none; }
 .home-task-group > summary::-webkit-details-marker { display:none; }
 .home-task-group > summary span strong,.home-task-group > summary span small { display:block; }
 .home-task-group > summary span strong { font-size:13px; }

@@ -6,7 +6,6 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .problem-title { min-width:0; }
 .problem-title h1 { margin:0; font-family:Furore,"Russo One",sans-serif; font-size:clamp(24px,7.6vw,42px); font-weight:400; line-height:1; letter-spacing:.015em; white-space:nowrap; text-shadow:0 0 30px rgba(216,122,255,.48); }
 .problem-title .eyebrow { overflow:hidden; color:#d7a4f2; text-overflow:ellipsis; white-space:nowrap; }
-.problem-intro .eyebrow { color:#d7a4f2; }
 .primary-button { justify-self:end; min-height:46px; padding:0 13px; border:0; border-radius:13px; color:white; background:linear-gradient(145deg,var(--purple),var(--purple-dark)); font-size:14px; font-weight:800; cursor:pointer; }
 .primary-button.wide { width: 100%; min-height: 46px; margin-top: 8px; font-size: 11px; }
 .header-actions { display:grid; grid-template-columns:1fr; gap:7px; margin-top:14px; }
@@ -14,8 +13,9 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .secondary-button { min-height:46px; padding:0 10px; border:1px solid var(--line); border-radius:13px; color:#e0b5f5; background:rgba(31,12,59,.78); font-size:13px; font-weight:800; cursor:pointer; backdrop-filter:blur(14px); }
 .equipment-mode-button { border-color:rgba(112,215,255,.25); color:#9ce5ff; background:linear-gradient(145deg,rgba(40,116,152,.2),rgba(31,12,59,.8)); }
 .hidden { display: none !important; }
-.problem-intro { margin:22px 0 18px; }
-.problem-intro > p:last-child { max-width: 620px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.problem-intro { display:grid; margin:12px 0; padding:10px 11px; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:9px; border:1px solid var(--line); border-radius:13px; background:rgba(31,12,59,.58); }
+.problem-intro > span { display:grid; width:24px; height:24px; place-items:center; border-radius:8px; color:#d7a4f2; background:rgba(162,77,225,.13); font-size:10px; font-weight:800; }
+.problem-intro > p { max-width:620px; margin:0; color:var(--muted); font-size:9px; line-height:1.4; }
 .board-view-tabs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; margin-bottom:12px; padding:4px; border:1px solid var(--line); border-radius:15px; background:rgba(31,12,59,.76); }
 .board-view-tabs button { min-width:0; min-height:44px; border:0; border-radius:11px; color:var(--muted); background:transparent; font-size:13px; font-weight:800; cursor:pointer; }
 .board-view-tabs button.active { color:white; background:linear-gradient(145deg,var(--purple),var(--purple-dark)); }

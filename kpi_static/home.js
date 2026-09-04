@@ -214,7 +214,7 @@ function renderManagementShiftTasks(data) {
     ${dashboard.groups.map((group) => `
       <details class="home-task-group${group.overdue ? ' overdue' : ''}">
         <summary>
-          <span><strong>${escapeHtml(group.title)}</strong><small>${group.completed === group.total ? 'Все клубы выполнили' : `${group.completed} из ${group.total} клубов`}</small></span>
+          <span><strong>${escapeHtml(group.title)}</strong>${group.overdue ? `<small>Просрочено в ${group.overdue} ${plural(group.overdue, 'клубе', 'клубах', 'клубах')}</small>` : (group.skipped ? `<small>Пропущено: ${group.skipped}</small>` : '')}</span>
           <b>${group.completed}/${group.total}</b><i>⌄</i>
         </summary>
         <div class="home-task-clubs">${group.clubs.map((task) => {

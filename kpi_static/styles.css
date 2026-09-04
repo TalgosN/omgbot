@@ -315,6 +315,13 @@ input, textarea {
   gap: 12px;
 }
 
+.explanation-card > summary { cursor:pointer; list-style:none; }
+.explanation-card > summary::-webkit-details-marker { display:none; }
+.explanation-summary-value { display:flex; flex:none; align-items:center; gap:8px; }
+.explanation-summary-value b { color:#b9a8ff; font-size:18px; font-weight:500; transition:transform .18s ease; }
+.explanation-card[open] .explanation-summary-value b { transform:rotate(180deg); }
+.explanation-body { padding-top:2px; }
+
 .my-score-grid {
   display: grid;
   grid-template-columns: 1.25fr 0.75fr 1fr;
