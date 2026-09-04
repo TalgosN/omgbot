@@ -495,7 +495,7 @@ class KpiWebTest(unittest.TestCase):
                 can_manage=role >= kpi_web.ROLE_MANAGER,
             )
 
-    def test_kpi_and_taskboard_mobile_controls_use_full_width_layouts(self):
+    def test_kpi_and_taskboard_mobile_controls_use_compact_layouts(self):
         response = self.client.get('/kpi')
         try:
             kpi_html = response.get_data(as_text=True)
@@ -503,16 +503,17 @@ class KpiWebTest(unittest.TestCase):
             self.assertIn('id="kpiUserName"', kpi_html)
             self.assertLess(
                 kpi_html.index('id="dateDisplay"'),
-                kpi_html.index('id="managerFilters"'),
-            )
-            self.assertLess(
-                kpi_html.index('id="managerFilters"'),
                 kpi_html.index('id="summary"'),
             )
             self.assertLess(
-                kpi_html.index('class="sort-controls"'),
+                kpi_html.index('id="summary"'),
                 kpi_html.index('id="searchInput"'),
             )
+            self.assertLess(
+                kpi_html.index('id="searchInput"'),
+                kpi_html.index('id="sortSelect"'),
+            )
+            self.assertIn('id="managerFiltersToggle"', kpi_html)
             self.assertLess(
                 kpi_html.index('class="settings-card custom-goals-settings"'),
                 kpi_html.index('id="settingsMetrics"'),

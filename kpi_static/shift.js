@@ -372,15 +372,19 @@ function renderEmployeeDashboard(dashboard) {
     : '';
   document.querySelector('#nearestShift').innerHTML = nearest ? `
     <p class="eyebrow">${relativeDateLabel(nearest.date, dashboard.today)}</p>
-    <h2>${escapeHtml(nearest.club)}</h2>
-    <div class="nearest-shift-meta">
-      <strong>${dateLabel(nearest.date)}</strong>
-      <span>${shiftTime(nearest)}${number(nearest.duration)} ч</span>
+    <div class="nearest-shift-line">
+      <h2>${escapeHtml(nearest.club)}</h2>
+      <div class="nearest-shift-meta">
+        <strong>${dateLabel(nearest.date)}</strong>
+        <span>${shiftTime(nearest)}${number(nearest.duration)} ч</span>
+      </div>
     </div>
   ` : `
     <p class="eyebrow">Ближайшая смена</p>
-    <h2>Смен пока нет</h2>
-    <div class="nearest-shift-meta"><span>В опубликованном расписании новых смен не найдено</span></div>
+    <div class="nearest-shift-line empty">
+      <h2>Смен пока нет</h2>
+      <div class="nearest-shift-meta"><span>В опубликованном расписании новых смен не найдено</span></div>
+    </div>
   `;
   const followingShifts = shifts.slice(1, 3);
   document.querySelector('.shift-dashboard-detail').hidden = !followingShifts.length;

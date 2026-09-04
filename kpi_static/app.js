@@ -429,7 +429,6 @@ function renderMyKpi() {
         <div>
           <span>Смены</span>
           <strong>${number(employee.shifts)}</strong>
-          <small>взвешенные ${number(employee.weighted_shifts)}</small>
         </div>
       </div>
       <div class="pace-card">
@@ -479,14 +478,16 @@ function renderMyKpi() {
 
 function renderManagerFilters() {
   const panel = $('#managerFilters');
+  const toggle = $('#managerFiltersToggle');
   if (!state.me?.can_manage) {
     panel.hidden = true;
+    toggle.hidden = true;
     return;
   }
-  panel.hidden = false;
-  panel.classList.toggle('collapsed', state.managerFiltersCollapsed);
-  $('#managerFilterContent').hidden = state.managerFiltersCollapsed;
-  $('#managerFiltersToggle').setAttribute(
+  toggle.hidden = false;
+  panel.hidden = state.managerFiltersCollapsed;
+  $('#managerFilterContent').hidden = false;
+  toggle.setAttribute(
     'aria-expanded', String(!state.managerFiltersCollapsed),
   );
   const clubs = [...new Set(
@@ -508,8 +509,7 @@ function renderManagerFilters() {
     state.filters.zone,
     state.filters.attention,
   ].filter(Boolean).length;
-  $('#managerFiltersCount').textContent = activeFilterCount
-    ? `Выбрано: ${activeFilterCount}` : 'Фильтры';
+  $('#managerFiltersCount').textContent = activeFilterCount || '';
   $('#ratingTitle').textContent = state.filters.attention
     ? 'Требует внимания'
     : 'Рейтинг команды';
@@ -1336,13 +1336,8 @@ $('#resetFilters').addEventListener('click', () => {
 
 $('#exportKpiExcel').addEventListener('click', exportKpiExcel);
 
-document.querySelector('.sort-controls').addEventListener('click', (event) => {
-  const button = event.target.closest('[data-sort]');
-  if (!button) return;
-  state.sort = button.dataset.sort;
-  document.querySelectorAll('.sort-button').forEach(
-    (item) => item.classList.toggle('active', item === button),
-  );
+$('#sortSelect').addEventListener('change', (event) => {
+  state.sort = event.target.value;
   renderEmployees();
 });
 

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Russo+One&display=swap" rel="stylesheet">
   <link href="https://fonts.cdnfonts.com/css/furore" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260904-1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260904-3">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -50,21 +50,40 @@
     </section>
 
     <section id="ratingView" hidden>
+      <section id="summary" class="summary-grid" aria-live="polite"></section>
+
+      <section class="toolbar rating-search">
+        <label class="search">
+          <span>⌕</span>
+          <input id="searchInput" type="search" placeholder="Найти сотрудника">
+        </label>
+        <span id="resultCount" class="result-count"></span>
+      </section>
+
+      <section class="rating-controls" aria-label="Управление рейтингом">
+        <label class="rating-sort">
+          <span>Сортировка</span>
+          <select id="sortSelect">
+            <option value="rating">По рейтингу</option>
+            <option value="shifts">По сменам</option>
+            <option value="name">По имени</option>
+          </select>
+          <b aria-hidden="true">⌄</b>
+        </label>
+        <button id="managerFiltersToggle" class="manager-filters-toggle" type="button" aria-expanded="false" hidden>
+          <span>Фильтры</span>
+          <strong id="managerFiltersCount"></strong>
+          <b aria-hidden="true">⌄</b>
+        </button>
+      </section>
+
       <section id="managerFilters" class="manager-filters" hidden>
         <div class="manager-filter-heading">
           <div>
-            <p class="eyebrow">Менеджерский режим</p>
+            <p class="eyebrow">Управление рейтингом</p>
             <h2 id="ratingTitle">Рейтинг команды</h2>
           </div>
-          <button id="managerFiltersToggle" class="manager-filters-toggle" type="button" aria-expanded="false">
-            <span id="managerFiltersCount"></span>
-            <b aria-hidden="true">⌄</b>
-          </button>
         </div>
-        <button id="exportKpiExcel" class="manager-export-button" type="button">
-          <span><strong>Отправить Excel</strong><small>Полный месяц · придёт в чат с ботом</small></span>
-          <b>→ XLSX</b>
-        </button>
         <div id="managerFilterContent" class="manager-filter-content">
           <div class="filter-grid">
             <label class="control-field">
@@ -84,30 +103,17 @@
               </select>
             </label>
           </div>
-          <button id="resetFilters" class="reset-filters" type="button">Сбросить фильтры</button>
-          <button id="attentionToggle" class="attention-toggle" type="button">
-            Требует внимания <strong id="attentionCount">0</strong>
+          <div class="manager-filter-actions">
+            <button id="attentionToggle" class="attention-toggle" type="button">
+              Требует внимания <strong id="attentionCount">0</strong>
+            </button>
+            <button id="resetFilters" class="reset-filters" type="button">Сбросить</button>
+          </div>
+          <button id="exportKpiExcel" class="manager-export-button" type="button">
+            <span><strong>Отправить Excel</strong><small>Полный месяц · придёт в чат с ботом</small></span>
+            <b>→ XLSX</b>
           </button>
         </div>
-      </section>
-
-      <section id="summary" class="summary-grid" aria-live="polite"></section>
-
-      <section class="sort-controls" aria-label="Сортировка рейтинга">
-        <span>Сортировка</span>
-        <div class="sort-buttons">
-          <button class="sort-button active" type="button" data-sort="rating">Рейтинг</button>
-          <button class="sort-button" type="button" data-sort="shifts">Смены</button>
-          <button class="sort-button" type="button" data-sort="name">По имени</button>
-        </div>
-      </section>
-
-      <section class="toolbar">
-        <label class="search">
-          <span>⌕</span>
-          <input id="searchInput" type="search" placeholder="Найти сотрудника">
-        </label>
-        <span id="resultCount" class="result-count"></span>
       </section>
 
       <section id="employeeList" class="employee-list" aria-live="polite">
@@ -413,7 +419,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>
-  <script src="/static/app.js?v=20260904-1"></script>
+  <script src="/static/app.js?v=20260904-3"></script>
   <script src="/static/swipe_navigation.js"></script>
   <script src="/static/employee_preview.js?v=20260903-1"></script>
 </body>

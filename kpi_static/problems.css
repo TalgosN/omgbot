@@ -8,8 +8,9 @@ body::before { position:fixed; inset:-4vh -3vw; z-index:0; overflow:hidden; colo
 .problem-title .eyebrow { overflow:hidden; color:#d7a4f2; text-overflow:ellipsis; white-space:nowrap; }
 .primary-button { justify-self:end; min-height:46px; padding:0 13px; border:0; border-radius:13px; color:white; background:linear-gradient(145deg,var(--purple),var(--purple-dark)); font-size:14px; font-weight:800; cursor:pointer; }
 .primary-button.wide { width: 100%; min-height: 46px; margin-top: 8px; font-size: 11px; }
-.header-actions { display:grid; grid-template-columns:1fr; gap:7px; margin-top:14px; }
+.header-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin-top:14px; }
 .header-actions button { width:100%; }
+.header-actions .primary-button { grid-column:1/-1; }
 .secondary-button { min-height:46px; padding:0 10px; border:1px solid var(--line); border-radius:13px; color:#e0b5f5; background:rgba(31,12,59,.78); font-size:13px; font-weight:800; cursor:pointer; backdrop-filter:blur(14px); }
 .equipment-mode-button { border-color:rgba(112,215,255,.25); color:#9ce5ff; background:linear-gradient(145deg,rgba(40,116,152,.2),rgba(31,12,59,.8)); }
 .hidden { display: none !important; }
