@@ -14,6 +14,8 @@ const runtime = {
   photoDatabase: null,
   stream: null,
   capturing: false,
+  submitting: false,
+  cameraRequest: 0,
   retakeQuestionId: null,
   editingAnswerQuestionId: null,
   reviewUrls: [],
@@ -111,26 +113,37 @@ function setPhotoProcessing(visible, message = 'Обрабатываем фот�
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      'X-Telegram-Init-Data': tg?.initData || '',
-      ...(options.headers || {}),
-    },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.error || 'Не удалось выполнить запрос');
-    error.code = payload.code || '';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(path, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'X-Telegram-Init-Data': tg?.initData || '',
+        ...(options.headers || {}),
+      },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload.error || 'Не удалось выполнить запрос');
+      error.code = payload.code || '';
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Сервер не ответил вовремя. Повторите попытку.');
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return payload;
 }
 
 function uploadForm(path, form, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', path);
+    xhr.timeout = 180000;
     xhr.setRequestHeader('X-Telegram-Init-Data', tg?.initData || '');
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) {
@@ -142,7 +155,7 @@ function uploadForm(path, form, onProgress) {
       let payload = {};
       try { payload = JSON.parse(xhr.responseText || '{}'); }
       catch (_error) { /* The status below provides the fallback message. */ }
-      if (xhr.status >= 200 && xhr.status < 300) {
+      if (xhr.status >= 200 && xhr.status < 300 && payload.sent === true && payload.completed === true) {
         resolve(payload);
         return;
       }
@@ -152,6 +165,7 @@ function uploadForm(path, form, onProgress) {
     });
     xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время отправки')));
     xhr.addEventListener('abort', () => reject(new Error('Отправка отменена')));
+    xhr.addEventListener('timeout', () => reject(new Error('Сервер не подтвердил завершение. Черновик сохранён — повторите отправку.')));
     xhr.send(form);
   });
 }
@@ -241,6 +255,7 @@ function clearDraftPhotos(draft) {
     cursor.onerror = () => reject(cursor.error);
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Удаление фотографий прервано'));
   });
 }
 
@@ -571,6 +586,7 @@ function updateCameraInstruction() {
 }
 
 function stopCamera() {
+  runtime.cameraRequest += 1;
   runtime.stream?.getTracks().forEach((track) => track.stop());
   runtime.stream = null;
   $('#cameraView').srcObject = null;
@@ -580,6 +596,8 @@ function stopCamera() {
 }
 
 async function openCamera() {
+  if ($('#openCamera').disabled || runtime.stream) return;
+  const cameraRequest = ++runtime.cameraRequest;
   requestAppFullscreen();
   syncCameraViewport();
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -590,7 +608,7 @@ async function openCamera() {
   $('#openCamera').disabled = true;
   try { tg?.disableVerticalSwipes?.(); } catch (_error) { /* Older clients. */ }
   try {
-    runtime.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: 'environment' },
         width: { ideal: 1600 },
@@ -598,13 +616,21 @@ async function openCamera() {
       },
       audio: false,
     });
+    if (cameraRequest !== runtime.cameraRequest || document.hidden) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    runtime.stream = stream;
     const video = $('#cameraView');
     video.srcObject = runtime.stream;
+    $('#cameraStage').hidden = false;
     await video.play();
+    if (cameraRequest !== runtime.cameraRequest) return;
     syncCameraViewport();
     updateCameraInstruction();
     $('#cameraStage').hidden = false;
   } catch (error) {
+    if (cameraRequest !== runtime.cameraRequest) return;
     stopCamera();
     $('#systemCamera').hidden = false;
     renderPhotoReady('Telegram не дал встроенной камере доступ. Можно выбрать фото с телефона.');
@@ -683,11 +709,16 @@ async function imageSource(file) {
   }
   const url = URL.createObjectURL(file);
   const image = new Image();
-  await new Promise((resolve, reject) => {
-    image.onload = resolve;
-    image.onerror = () => reject(new Error('Не удалось прочитать фотографию'));
-    image.src = url;
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('Не удалось прочитать фотографию'));
+      image.src = url;
+    });
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
   return {
     source: image,
     width: image.naturalWidth,
@@ -712,7 +743,8 @@ async function saveCapturedPhoto(blob) {
     ? questions.find((item) => item.id === runtime.retakeQuestionId)
     : questions[runtime.draft.photo_index];
   await putPhoto(question.id, blob);
-  tg?.HapticFeedback?.notificationOccurred('success');
+  try { tg?.HapticFeedback?.notificationOccurred('success'); }
+  catch (_error) { /* Saving the photo does not depend on haptic feedback. */ }
 
   if (runtime.retakeQuestionId) {
     runtime.retakeQuestionId = null;
@@ -964,6 +996,7 @@ async function beginShift(earlyConfirmed = false) {
   const cleanlinessStart = runtime.scenario.action === 'close'
     && runtime.draft.cleanliness_photo_ids.length < cleanlinessQuestions().length;
   const button = cleanlinessStart ? $('#startCleanliness') : $('#startQuestions');
+  if (button.disabled) return;
   const idleLabel = cleanlinessStart
     ? 'Начать отчёт о чистоте'
     : runtime.scenario.action === 'close'
@@ -1012,6 +1045,8 @@ async function beginShift(earlyConfirmed = false) {
 }
 
 async function submitReport() {
+  if (runtime.submitting || !runtime.draft) return;
+  runtime.submitting = true;
   const button = $('#sendReport');
   button.disabled = true;
   button.textContent = 'Отправляем…';
@@ -1042,16 +1077,31 @@ async function submitReport() {
         ? `Загружаем фотографии · ${progress}%`
         : 'Фотографии загружены · отправляем отчёт';
     });
-    await deleteDraft();
-    runtime.draft = null;
-    releaseReviewUrls();
-    setStage('successStage');
-    tg?.HapticFeedback?.notificationOccurred('success');
+    await showReportSuccess();
   } catch (error) {
+    try {
+      const scenario = await fetchScenario(null, runtime.scenario.club, runtime.draft.id);
+      if (scenario.completed && scenario.run_id === runtime.draft.id) {
+        await showReportSuccess();
+        return;
+      }
+    } catch (_statusError) { /* Keep the draft until completion is confirmed. */ }
     toast(error.message, true);
     button.disabled = false;
     button.textContent = 'Завершить отчёт';
+  } finally {
+    runtime.submitting = false;
   }
+}
+
+async function showReportSuccess() {
+  try { await deleteDraft(); }
+  catch (error) { console.warn('Не удалось очистить отправленный черновик', error); }
+  runtime.draft = null;
+  releaseReviewUrls();
+  setStage('successStage');
+  try { tg?.HapticFeedback?.notificationOccurred('success'); }
+  catch (_error) { /* Completion does not depend on haptic feedback. */ }
 }
 
 $('#startCleanliness').addEventListener('click', () => beginShift());
@@ -1324,6 +1374,10 @@ $('#discardDraft').addEventListener('click', async () => {
 
 window.addEventListener('omg:navigation-back', (event) => {
   event.preventDefault();
+  if (runtime.submitting) {
+    toast('Дождитесь подтверждения отправки отчёта');
+    return;
+  }
   if (!$('#batchReviewStage').hidden) {
     renderBatchOrder();
     return;
@@ -1341,6 +1395,7 @@ window.addEventListener('pagehide', () => {
   releaseBatchReviewUrls();
 });
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !runtime.stream) runtime.cameraRequest += 1;
   if (document.hidden && runtime.stream) {
     stopCamera();
     renderPhotoReady('Серия сохранена. Нажмите кнопку, чтобы продолжить.');
@@ -1380,6 +1435,12 @@ async function initialize() {
   }
   setPageCopy();
   $('#loadingCard').hidden = true;
+
+  if (runtime.scenario.completed) {
+    runtime.draft = localDraft;
+    await showReportSuccess();
+    return;
+  }
 
   if (!compatibleDraft(localDraft)) {
     if (localDraft) await deleteDraft(localDraft);

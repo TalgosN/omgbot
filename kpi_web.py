@@ -166,6 +166,7 @@ _camera_test_sent_at = {}
 _camera_test_lock = threading.Lock()
 _shift_report_test_sent_at = {}
 _shift_report_test_lock = threading.Lock()
+_shift_report_submitting = set()
 _shift_schedule_cache = {}
 _shift_schedule_cache_lock = threading.Lock()
 _employee_preview_sessions = {}
@@ -1435,6 +1436,7 @@ def _shift_report_run_scenario(run_id):
         'production_mode': True,
         'run_id': run['id'],
         'started_at': run['started_at'],
+        'completed': bool(run['completed_at']),
         'action': run['action'],
         'action_label': 'Открытие' if run['action'] == 'open' else 'Закрытие',
         'club': run['club'],
@@ -1467,7 +1469,7 @@ def _latest_shift_report_run_scenario(action, requested_club=None, now=None):
         query = '''
             SELECT id FROM shift_webapp_runs
             WHERE lower(login)=lower(?) AND action=?
-              AND finished_at IS NULL AND completed_at IS NULL
+              AND completed_at IS NULL
               AND datetime(started_at) >= datetime(?)
         '''
         values = [_actor_login(), action, cutoff]
@@ -3205,9 +3207,13 @@ def _complete_shift_report_run(
                     except Exception as error:
                         print(f'Ошибка записи нала из Mini App: {error}')
                 activity_id = cursor.lastrowid
+                db_conn.execute(
+                    'UPDATE shift_webapp_runs SET activity_id=? WHERE id=?',
+                    (activity_id, run_id),
+                )
         finally:
             db_conn.close()
-        mark(activity_id=activity_id)
+        run['activity_id'] = activity_id
 
     if not run.get('sheet_synced_at'):
         step_started = time.monotonic()
@@ -4549,6 +4555,8 @@ def api_shift_test_submit():
         raise ValueError('Начало открытия или закрытия не найдено')
     if action != scenario['action']:
         raise ValueError('Отчёт относится к другому действию')
+    if scenario.get('completed'):
+        return jsonify({'sent': True, 'completed': True, 'already_completed': True})
     answers, photos, cleanliness_photos = _shift_report_test_data(
         scenario, payload,
     )
@@ -4558,14 +4566,14 @@ def api_shift_test_submit():
         f'{len(photos) + len(cleanliness_photos)} фото'
     )
 
-    actor = f'{_actor_login()}:{action}'
-    now = time.monotonic()
+    actor = f'{_actor_login()}:{payload["run_id"]}'
     with _shift_report_test_lock:
-        previous = _shift_report_test_sent_at.get(actor, 0)
-        if now - previous < CAMERA_TEST_COOLDOWN_SECONDS:
+        if actor in _shift_report_submitting:
             return jsonify({
-                'error': 'Подождите несколько секунд перед повторной отправкой.'
-            }), 429
+                'error': 'Отчёт ещё отправляется. Подождите и проверьте повторно.',
+                'code': 'report_in_progress',
+            }), 409
+        _shift_report_submitting.add(actor)
     try:
         result = _complete_shift_report_run(
             scenario, payload, answers, photos, cleanliness_photos,
@@ -4575,8 +4583,9 @@ def api_shift_test_submit():
         return jsonify({
             'error': f'Не удалось завершить отчёт: {error}'
         }), 502
-    with _shift_report_test_lock:
-        _shift_report_test_sent_at[actor] = now
+    finally:
+        with _shift_report_test_lock:
+            _shift_report_submitting.discard(actor)
     print(
         f'Отчёт смены {payload.get("run_id")}: запрос всего '
         f'{time.monotonic() - request_started:.2f} с'
