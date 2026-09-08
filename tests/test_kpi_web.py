@@ -1700,7 +1700,7 @@ class KpiWebTest(unittest.TestCase):
                 patch.object(kpi_web, 'DB_PATH', str(db_path)),
                 patch.object(kpi_web, 'get_clubs', return_value=club_settings),
                 patch.object(
-                    kpi_web, 'BUKZA_CLUB_CODES', {'a': 'Клуб А', 'b': 'Клуб Б'},
+                    kpi_web, 'BOOKING_CLUBS', ('Клуб А', 'Клуб Б'),
                 ),
                 patch.object(kpi_web, '_task_counts', return_value={
                     'work': 0, 'review': 2,
@@ -2144,7 +2144,7 @@ class KpiWebTest(unittest.TestCase):
             'booking_format': 'Мероприятие',
             'participants': 12,
             'number': '12345',
-            'url': 'https://my.bukza.com/order/12345',
+            'url': 'https://bronix.omg-vr.ru/bookings/12345',
         }
         with (
             patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
@@ -2154,7 +2154,7 @@ class KpiWebTest(unittest.TestCase):
                 '_today_shift_clubs',
                 return_value=['Коллцентр'],
             ),
-            patch.object(kpi_web, 'upcoming_unpaid_orders', return_value=[order]),
+            patch.object(kpi_web, 'upcoming_unpaid_bookings', return_value=[order]),
             patch.object(kpi_web, 'booking_freshness', return_value={
                 'last_synced_at': '2026-08-08T12:00:00+03:00',
                 'age_minutes': 1,
@@ -2187,7 +2187,7 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(payload['mode'], 'management')
         self.assertEqual(payload['groups'], groups)
         grouped.assert_called_once_with(
-            list(kpi_web.BUKZA_CLUB_CODES.values()),
+            list(kpi_web.BOOKING_CLUBS),
             unittest.mock.ANY,
         )
         shifts.assert_not_called()

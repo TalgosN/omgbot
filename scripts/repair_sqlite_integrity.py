@@ -1,4 +1,4 @@
-"""Safely repairs the known SQLite freelist and Bukza index inconsistencies."""
+"""Safely repairs known SQLite freelist and booking index inconsistencies."""
 
 import argparse
 import json
@@ -11,8 +11,8 @@ from pathlib import Path
 
 DEFAULT_DB_PATH = Path('db/omgbot.sql')
 TARGET_INDEXES = (
-    'idx_bukza_order_history_order',
-    'idx_bukza_orders_reservation_at',
+    'idx_booking_order_history_booking',
+    'idx_booking_orders_reservation_at',
 )
 INDEX_ISSUES = {
     f'wrong # of entries in index {index}' for index in TARGET_INDEXES
@@ -50,7 +50,7 @@ def backup_database(source):
 
 def _table_counts(connection):
     result = {}
-    for table in ('bukza_orders', 'bukza_order_history'):
+    for table in ('booking_orders', 'booking_order_history'):
         exists = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
             (table,),

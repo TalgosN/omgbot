@@ -13,26 +13,26 @@ class RepairSqliteIntegrityTest(unittest.TestCase):
         self.db_path = Path(self.temp_dir.name) / 'omgbot.sql'
         connection = sqlite3.connect(self.db_path)
         connection.execute(
-            'CREATE TABLE bukza_orders ('
+            'CREATE TABLE booking_orders ('
             'id INTEGER PRIMARY KEY, reservation_at TEXT)'
         )
         connection.execute(
-            'CREATE INDEX idx_bukza_orders_reservation_at '
-            'ON bukza_orders(reservation_at)'
+            'CREATE INDEX idx_booking_orders_reservation_at '
+            'ON booking_orders(reservation_at)'
         )
         connection.execute(
-            'CREATE TABLE bukza_order_history ('
+            'CREATE TABLE booking_order_history ('
             'id INTEGER PRIMARY KEY, order_id TEXT, changed_at TEXT)'
         )
         connection.execute(
-            'CREATE INDEX idx_bukza_order_history_order '
-            'ON bukza_order_history(order_id, changed_at)'
+            'CREATE INDEX idx_booking_order_history_booking '
+            'ON booking_order_history(order_id, changed_at)'
         )
         connection.execute(
-            "INSERT INTO bukza_orders VALUES (1, '2026-09-02')"
+            "INSERT INTO booking_orders VALUES (1, '2026-09-02')"
         )
         connection.execute(
-            "INSERT INTO bukza_order_history VALUES (1, 'order-1', '2026-09-02')"
+            "INSERT INTO booking_order_history VALUES (1, 'order-1', '2026-09-02')"
         )
         connection.commit()
         connection.close()
@@ -60,8 +60,8 @@ class RepairSqliteIntegrityTest(unittest.TestCase):
         known = [
             '*** in database main ***\n'
             'Freelist: size is 1 but should be 2\nPage 10: never used',
-            'wrong # of entries in index idx_bukza_order_history_order',
-            'wrong # of entries in index idx_bukza_orders_reservation_at',
+            'wrong # of entries in index idx_booking_order_history_booking',
+            'wrong # of entries in index idx_booking_orders_reservation_at',
         ]
         with patch.object(
             repair, 'integrity_issues', side_effect=[known, []],

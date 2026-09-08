@@ -28,12 +28,12 @@ from flask import (
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-from bukza import (
-    BUKZA_CLUB_CODES,
-    active_orders_for_day,
+from bronix import (
+    BOOKING_CLUBS,
+    active_bookings_for_day,
     booking_freshness,
-    initialize_bukza_schema,
-    upcoming_unpaid_orders,
+    initialize_booking_schema,
+    upcoming_unpaid_bookings,
 )
 from constants import CHATS, TELEGRAM_API_KEY, TEXTS, extra_tags, get_clubs, tags_main
 from consumables_catalog import (
@@ -175,7 +175,7 @@ SHIFT_SCHEDULE_CACHE_SECONDS = 30
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = 48 * 1024 * 1024
-initialize_bukza_schema(DB_PATH)
+initialize_booking_schema(DB_PATH)
 initialize_shift_time_schema(DB_PATH)
 initialize_consumables_schema(DB_PATH)
 
@@ -2086,7 +2086,7 @@ def _today_shift_contexts(login, now=None):
         return []
     clubs = list(dict.fromkeys(str(shift['club']) for shift in shifts))
     club_settings = get_clubs()
-    physical_clubs = set(BUKZA_CLUB_CODES.values())
+    physical_clubs = set(BOOKING_CLUBS)
     booking_groups = {}
     report_maps = {}
     people_by_date = {}
@@ -2154,7 +2154,7 @@ def _public_booking(order, include_order=False):
     result = {
         'start': order.get('reservation_at'),
         'end': order.get('reservation_end_at'),
-        'format': order.get('booking_format') or order.get('resource') or '',
+        'format': order.get('booking_format') or '',
         'participants': float(order.get('participants') or 0),
     }
     if include_order:
@@ -2178,7 +2178,7 @@ def _club_booking_groups(clubs, today):
         }
         for club in club_order
     }
-    for order in active_orders_for_day(today, club_order, DB_PATH):
+    for order in active_bookings_for_day(today, club_order, DB_PATH):
         club = order.get('club')
         if club not in grouped:
             continue
@@ -2321,7 +2321,7 @@ def _owner_shift_dashboard(user, task_dashboard=None):
     today = current.date().isoformat()
     configured_clubs = get_clubs()
     physical_clubs = list(dict.fromkeys(
-        club for club in BUKZA_CLUB_CODES.values()
+        club for club in BOOKING_CLUBS
         if club in configured_clubs
     ))
     _initialize_shift_report_schema(DB_PATH)
@@ -4043,7 +4043,7 @@ def api_today_bookings():
     if role >= ROLE_MANAGER:
         payload['mode'] = 'management'
         payload['groups'] = _club_booking_groups(
-            list(BUKZA_CLUB_CODES.values()),
+            list(BOOKING_CLUBS),
             today,
         )
         return jsonify(payload)
@@ -4053,11 +4053,11 @@ def api_today_bookings():
         payload['mode'] = 'callcenter'
         payload['bookings'] = [
             _public_booking(order, include_order=True)
-            for order in upcoming_unpaid_orders(db_path=DB_PATH)
+            for order in upcoming_unpaid_bookings(db_path=DB_PATH)
         ]
         return jsonify(payload)
 
-    physical_clubs = set(BUKZA_CLUB_CODES.values())
+    physical_clubs = set(BOOKING_CLUBS)
     payload['groups'] = _club_booking_groups(
         [club for club in shift_clubs if club in physical_clubs],
         today,

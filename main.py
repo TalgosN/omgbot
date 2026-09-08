@@ -202,20 +202,20 @@ def schedule_func(bot): # Не забудь передать bot!
         CHATS['me'],
     )
 
-    from bukza import (
+    from bronix import (
         send_daily_notification,
-        start_bukza_sync,
+        start_bronix_sync,
         start_live_sync_if_active,
     )
-    start_bukza_sync(bot, mode='live')
+    start_bronix_sync(bot, mode='live')
     schedule.every().day.at("08:00:00", 'Europe/Moscow').do(
-        start_bukza_sync,
+        start_bronix_sync,
         bot,
         'daily',
     )
     schedule.every(5).minutes.do(start_live_sync_if_active, bot)
     schedule.every().day.at("08:20:00", 'Europe/Moscow').do(
-        start_bukza_sync,
+        start_bronix_sync,
         bot,
         'live',
     )
@@ -614,10 +614,10 @@ def cmd_today_schedule(message):
         _restore_private_navigation(message)
 
 
-@bot.message_handler(commands=['bukza_test'])
-def command_bukza_test(message):
+@bot.message_handler(commands=['bronix_test'])
+def command_bronix_test(message):
     if require_role(message, bot, ROLE_MANAGER):
-        from bukza import send_test_notification
+        from bronix import send_test_notification
         send_test_notification(message, bot)
 
 @bot.message_handler(commands=['repair'])
