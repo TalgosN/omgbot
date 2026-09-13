@@ -217,7 +217,9 @@ function renderHistory(items) {
             <b class="history-state ${completed ? 'done' : 'progress'}">${completed ? '✓' : '…'}</b>
           </summary>
           <div class="history-details">
-            <p>${completed ? 'Отчёт завершён' : 'Отчёт ещё не завершён'}${item.finished_at ? ` · ${clock(item.finished_at)}` : ''}</p>
+            <p>${item.state === 'cancelled' ? 'Отчёт отменён' : completed ? 'Отчёт завершён' : 'Отчёт ещё не завершён'}${item.finished_at ? ` · ${clock(item.finished_at)}` : ''}</p>
+            ${item.action === 'open' && item.arrival_at ? `<p>Приход: ${clock(item.arrival_at)}</p>` : ''}
+            ${(item.task_reasons || []).map((task) => `<p><strong>${escapeHtml(task.title)}</strong>: ${escapeHtml(task.reason)}</p>`).join('')}
             ${historyMeta(item) ? `<p>${escapeHtml(historyMeta(item))}</p>` : ''}
             ${details}
           </div>

@@ -31,43 +31,15 @@ class OpenCloseFlowChoiceTest(unittest.TestCase):
             buttons[0].web_app.url,
             'https://bot.omg-vr.ru/shift-report?action=open',
         )
-        self.assertEqual(
-            buttons[1].callback_data,
-            'shift_flow:open:legacy',
-        )
-        self.assertEqual(buttons[2].callback_data, 'shift_flow:cancel')
+        self.assertEqual(buttons[1].callback_data, 'shift_flow:cancel')
+        self.assertEqual(len(buttons), 2)
 
-    def test_legacy_flow_warning_keeps_bot_and_app_choices(self):
+    def test_old_bot_steps_redirect_without_updating_records(self):
         bot = Mock()
-        message = types.SimpleNamespace(
-            chat=types.SimpleNamespace(id=123),
-            from_user=types.SimpleNamespace(id=123, username='tester'),
-        )
-
-        with patch('menu._webapp_url', return_value=(
-            'https://bot.omg-vr.ru/shift-report?action=close'
-        )):
-            openclose.warn_legacy_shift_flow(
-                message, '🚫 Закрыть смену', bot,
-            )
-
-        sent = bot.send_message.call_args
-        self.assertIn('С 1 сентября', sent.args[1])
-        self.assertIn('Попробуй сейчас', sent.args[1])
-        self.assertEqual(sent.kwargs['parse_mode'], 'HTML')
-        buttons = [
-            button
-            for row in sent.kwargs['reply_markup'].keyboard
-            for button in row
-        ]
-        self.assertEqual(
-            buttons[0].web_app.url,
-            'https://bot.omg-vr.ru/shift-report?action=close',
-        )
-        self.assertEqual(
-            buttons[1].callback_data,
-            'shift_flow:close:legacy_confirmed',
-        )
+        message = types.SimpleNamespace(chat=types.SimpleNamespace(id=123))
+        with patch.object(openclose, 'choose_shift_flow') as redirect:
+            openclose.confirm_enter(message, '✅ Открыть смену', 'Test', False, False, bot)
+            redirect.assert_called_once_with(message, '✅ Открыть смену', bot)
 
     def test_previous_shift_is_used_only_for_closing_before_six(self):
         bot = Mock()

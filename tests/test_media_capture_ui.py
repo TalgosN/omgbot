@@ -36,8 +36,8 @@ class MediaCaptureUiTests(unittest.TestCase):
         self.assertIn('id="batchReplaceInput"', html)
         self.assertIn('id="photoProcessing"', html)
         self.assertIn('id="cameraSavingText"', html)
-        self.assertIn('/static/shift_test.css?v=20260903-1', html)
-        self.assertIn('/static/shift_test.js?v=20260908-1', html)
+        self.assertIn('/static/shift_test.css?v=20260913-1', html)
+        self.assertIn('/static/shift_test.js?v=20260913-1', html)
         self.assertIn('id="batchPhotoInput" type="file" accept="image/*" multiple', html)
         self.assertNotIn('capture="environment"', html)
         self.assertIn("const remaining = questions.slice(runtime.draft.photo_index);", script)
@@ -83,7 +83,7 @@ class MediaCaptureUiTests(unittest.TestCase):
         html = (ROOT / 'kpi_static' / 'shift_test.html').read_text(encoding='utf-8')
         script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
 
-        self.assertIn('id="discardDraft" type="button">Сбросить черновик', html)
+        self.assertIn('id="discardDraft" type="button">Заполнить заново', html)
         reset_handler = script.split("$('#discardDraft').addEventListener", 1)[1]
         reset_handler = reset_handler.split("window.addEventListener('omg:navigation-back'", 1)[0]
         self.assertIn('if (runtime.draft.started_at)', reset_handler)
@@ -98,10 +98,9 @@ class MediaCaptureUiTests(unittest.TestCase):
         script = (ROOT / 'kpi_static' / 'shift_test.js').read_text(encoding='utf-8')
 
         initialization = script.split('async function initialize()', 1)[1]
-        self.assertIn("localDraft?.schema === DRAFT_SCHEMA", initialization)
-        self.assertIn("localDraft.action === runtime.action", initialization)
-        self.assertIn("? localDraft.id", initialization)
-        self.assertNotIn("localDraft?.started_at ? localDraft.id", initialization)
+        self.assertIn("runtime.scenario = await fetchScenario();", initialization)
+        self.assertIn("archive:", initialization)
+        self.assertNotIn("localDraft?.club", initialization)
         self.assertIn("runtime.scenario.started_at", initialization)
         self.assertIn("id: scenario.run_id ||", script)
         self.assertIn("started_at: scenario.started_at || null", script)

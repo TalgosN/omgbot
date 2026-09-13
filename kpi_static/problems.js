@@ -13,6 +13,7 @@ const state = {
   problemRecordingStartedAt: 0, problemPointerActive: false,
   problemHoldTriggered: false, problemDiscardRecording: false,
   problemCameraReturnToForm: false,
+  problemCameraRequest: 0,
   similarRepairTimer: null, similarRepairRequest: 0,
 };
 tg?.ready();
@@ -105,6 +106,7 @@ function setProblemMedia(blob, kind, filename) {
 }
 
 function stopProblemCameraStream() {
+  state.problemCameraRequest += 1;
   state.problemCameraStream?.getTracks().forEach((track) => track.stop());
   state.problemCameraStream = null;
   $('#problemCameraView').srcObject = null;
@@ -147,6 +149,8 @@ function problemRecorderMimeType() {
 }
 
 async function openProblemCamera() {
+  if ($('#openProblemCamera').disabled || state.problemCameraStream) return;
+  const cameraRequest = ++state.problemCameraRequest;
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     toast('Встроенная камера недоступна — прикрепите файл', true);
     $('#problemMediaFile').click();
@@ -161,19 +165,26 @@ async function openProblemCamera() {
         audio: true,
       });
     } catch (_microphoneError) {
+      if (cameraRequest !== state.problemCameraRequest || document.hidden) return;
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
     }
+    if (cameraRequest !== state.problemCameraRequest || document.hidden) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
     state.problemCameraStream = stream;
     const video = $('#problemCameraView');
     video.srcObject = stream;
     await video.play();
+    if (cameraRequest !== state.problemCameraRequest || document.hidden) return;
     state.problemCameraReturnToForm = $('#createDialog').open;
     if (state.problemCameraReturnToForm) $('#createDialog').close();
     $('#problemCameraStage').hidden = false;
   } catch (error) {
+    if (cameraRequest !== state.problemCameraRequest) return;
     stopProblemCameraStream();
     toast(error.message || 'Камера недоступна — прикрепите файл', true);
   } finally {
@@ -941,6 +952,7 @@ $('#createForm').addEventListener('submit', async (event) => {
 });
 window.addEventListener('pagehide', () => closeProblemCamera(false));
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !state.problemCameraStream) state.problemCameraRequest += 1;
   if (document.hidden && state.problemCameraStream && state.problemRecorder?.state !== 'recording') {
     closeProblemCamera();
   }

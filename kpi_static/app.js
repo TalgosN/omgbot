@@ -25,6 +25,7 @@ function storedKpiExplanationOpen() {
 
 const state = {
   me: null,
+  dataRequest: 0,
   day: localIsoDate(),
   month: localIsoDate().slice(0, 7),
   employees: [],
@@ -744,10 +745,12 @@ async function showMetricEntries(metricKey) {
 }
 
 async function loadData() {
+  const requestId = ++state.dataRequest;
   employeeList.innerHTML = '<div class="loading-card"></div><div class="loading-card"></div>';
   try {
     const params = new URLSearchParams({ month: state.month, date: state.day });
     const payload = await api(`/api/kpi?${params}`);
+    if (requestId !== state.dataRequest) return;
     state.day = payload.date;
     state.month = payload.month;
     state.employees = payload.employees;
@@ -764,6 +767,7 @@ async function loadData() {
     renderManagerFilters();
     renderEmployees();
   } catch (error) {
+    if (requestId !== state.dataRequest) return;
     employeeList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     $('#myKpi').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     showToast(error.message, true);

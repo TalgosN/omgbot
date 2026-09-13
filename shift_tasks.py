@@ -1312,8 +1312,6 @@ def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
     actor = _app_actor(user)
     if actor['role'] >= ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
-    if not bot or not CHATS.get('reports'):
-        raise RuntimeError('Чат отчётов временно недоступен')
     with _task_app_completion_lock:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -1324,8 +1322,15 @@ def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
             ).fetchone()
             if not _task_accessible_to_actor(conn, instance, actor):
                 raise ValueError('Эта задача вам недоступна')
+            if (
+                instance['status'] == 'completed'
+                and str(instance['completed_by_chatid']) == str(actor['chatid'])
+            ):
+                return {'id': instance_id, 'status': 'completed', 'already_completed': True}
             if instance['status'] not in ('pending', 'in_progress'):
                 raise ValueError('Задачу уже закрыл коллега')
+            if not bot or not CHATS.get('reports'):
+                raise RuntimeError('Чат отчётов временно недоступен')
             required = max(1, len(_instance_requirements(instance)))
             if not required <= len(uploads) <= MAX_ATTACHMENTS:
                 raise ValueError(

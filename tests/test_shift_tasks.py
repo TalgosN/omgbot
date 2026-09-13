@@ -464,6 +464,12 @@ class ShiftTasksTest(unittest.TestCase):
             )
 
         self.assertEqual(result['status'], 'completed')
+        with patch.object(shift_tasks, '_send_app_task_report') as resend:
+            retry = shift_tasks.complete_app_task(
+                actor, task['id'], [], None, db_path=self.db_path,
+            )
+            self.assertTrue(retry['already_completed'])
+            resend.assert_not_called()
         conn = sqlite3.connect(self.db_path)
         stored = conn.execute(
             '''SELECT status, completed_by_login, report_chatid

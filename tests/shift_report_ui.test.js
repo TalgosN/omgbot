@@ -62,17 +62,44 @@ async function testShiftReportUi(source) {
     runtime: { draft: { id: 'sent' } },
     deleteDraft: async () => { throw new Error('Storage unavailable'); },
     console: { warn() {} }, releaseReviewUrls() {},
+    $: () => ({}),
     setStage(value) { stage = value; },
     tg: { HapticFeedback: { notificationOccurred() { throw new Error('Unsupported'); } } },
   });
   await success();
   assert(stage === 'successStage', 'Cleanup and haptic errors must not undo confirmed delivery');
-  return '7 UI recovery scenarios passed';
+  const scenario = { run_id: 'same-shift', action: 'open', user_login: 'employee',
+    club: 'Current', shift: { date: '2026-09-13' }, version: 'v1', variant_index: 0, draft_ttl_hours: 18 };
+  const draft = { schema: 3, id: 'same-shift', action: 'open', user_login: 'employee',
+    club: 'Current', date: '2026-09-13', version: 'v1', variant_index: 0,
+    updated_at: '2020-01-01', answers: {}, photo_ids: [], cleanliness_photo_ids: [], photo_phase: 'shift' };
+  const compatible = compile('compatibleDraft', { runtime: { scenario }, DRAFT_SCHEMA: 3 });
+  assert(compatible(draft), 'Current server shift must survive local TTL expiry');
+  assert(!compatible({ ...draft, club: 'Old club' }), 'Other club must not be resumed');
+  assert(!compatible({ ...draft, date: '2026-09-12' }), 'Other shift date must not be resumed');
+  scenario.cancelled = true;
+  assert(!compatible(draft), 'Cancelled report must not be resumed');
+
+  const nodes = {};
+  let dialogOpened = false;
+  const submission = { draft: { id: 'close-run', task_reasons: {} }, scenario: { action: 'close' }, submitting: false };
+  const submit = compile('submitReport', {
+    runtime: submission,
+    $: (key) => nodes[key] || (nodes[key] = { showModal() { dialogOpened = true; } }),
+    fetchScenario: async () => ({ submission_started: false }),
+    api: async () => ({ tasks: [{ id: 1, title: 'Task' }] }),
+    escapeHtml: (value) => value,
+    toast(message) { throw new Error(message); },
+  });
+  await submit();
+  assert(dialogOpened && !submission.submitting && !nodes['#sendReport'].disabled,
+    'Missing reasons must open the form and release submission controls');
+  return '12 UI recovery scenarios passed';
 }
 
 if (typeof require !== 'undefined') {
   const fs = require('node:fs');
   const path = require('node:path');
-  testShiftReportUi(fs.readFileSync(path.join(__dirname, '../kpi_static/shift_test.js'), 'utf8'))
+  testShiftReportUi(fs.readFileSync(path.join(__dirname, '../kpi_static/shift_test.js'), 'utf8').replace(/\r\n/g, '\n'))
     .then(console.log).catch((error) => { console.error(error); process.exitCode = 1; });
 }

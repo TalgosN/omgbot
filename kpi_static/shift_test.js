@@ -15,6 +15,7 @@ const runtime = {
   stream: null,
   capturing: false,
   submitting: false,
+  starting: false,
   cameraRequest: 0,
   retakeQuestionId: null,
   editingAnswerQuestionId: null,
@@ -185,6 +186,9 @@ function loadLocalDraft() {
 function saveDraft() {
   runtime.draft.updated_at = new Date().toISOString();
   localStorage.setItem(draftStorageKey(), JSON.stringify(runtime.draft));
+  const arrival = runtime.draft.arrival_at || runtime.scenario?.arrival_at || runtime.draft.started_at;
+  $('#arrivalStatus').hidden = runtime.draft.action !== 'open' || !arrival;
+  $('#arrivalStatus').textContent = arrival ? `Приход зафиксирован: ${arrival.slice(11, 16)}` : '';
 }
 
 function openPhotoDatabase() {
@@ -835,6 +839,10 @@ async function renderReview() {
     );
   }
   await renderPhotoReview(shiftPhotoQuestions(), '#photoReview', 'shift');
+  if (runtime.scenario.submission_started) {
+    $('#editAnswers').hidden = true;
+    document.querySelectorAll('[data-edit-answer], [data-retake]').forEach((button) => { button.hidden = true; });
+  }
   setStage('reviewStage');
 }
 
@@ -917,22 +925,28 @@ function createDraft() {
     text_index: 0,
     photo_index: 0,
     answers: {},
+    task_reasons: {},
     photo_ids: [],
     cleanliness_photo_ids: [],
     started_at: scenario.started_at || null,
+    arrival_at: scenario.arrival_at || scenario.started_at || null,
     created_at: createdAt,
     updated_at: createdAt,
   };
   saveDraft();
+  $('#cancelReport').hidden = false;
 }
 
 function compatibleDraft(draft) {
   if (!draft || draft.schema !== DRAFT_SCHEMA) return false;
   const scenario = runtime.scenario;
+  if (!scenario?.shift) return false;
   const age = Date.now() - Date.parse(draft.updated_at || draft.created_at || 0);
-  return age >= 0
-    && age <= scenario.draft_ttl_hours * 60 * 60 * 1000
+  return (scenario.run_id === draft.id || (age >= 0
+    && age <= scenario.draft_ttl_hours * 60 * 60 * 1000))
     && draft.action === scenario.action
+    && !scenario.cancelled
+    && (!scenario.run_id || scenario.run_id === draft.id)
     && draft.user_login === scenario.user_login
     && draft.date === scenario.shift.date
     && draft.club === scenario.club
@@ -1004,6 +1018,7 @@ async function beginShift(earlyConfirmed = false) {
       : 'Всё понятно — начать';
   button.disabled = true;
   button.textContent = 'Начинаем…';
+  runtime.starting = true;
   try {
     const result = await api('/api/shift-test/start', {
       method: 'POST',
@@ -1018,6 +1033,7 @@ async function beginShift(earlyConfirmed = false) {
       }),
     });
     runtime.draft.started_at = result.started_at;
+    runtime.draft.arrival_at = result.arrival_at || result.started_at;
     runtime.draft.early_close = Boolean(result.early_close);
     saveDraft();
     $('#earlyCloseDialog').close();
@@ -1039,6 +1055,7 @@ async function beginShift(earlyConfirmed = false) {
       toast(error.message, true);
     }
   } finally {
+    runtime.starting = false;
     button.disabled = false;
     button.textContent = idleLabel;
   }
@@ -1051,6 +1068,24 @@ async function submitReport() {
   button.disabled = true;
   button.textContent = 'Отправляем…';
   try {
+    if (!runtime.scenario.preview_mode) {
+      const status = await fetchScenario(null, '', runtime.draft.id);
+      if (status.completed) { await showReportSuccess(); return; }
+      if (status.cancelled) throw new Error('Этот отчёт отменён. Начните новый.');
+      runtime.scenario.submission_started = status.submission_started;
+      if (status.submission_started && status.submitted_answers) {
+        runtime.draft.answers = status.submitted_answers;
+        saveDraft();
+      }
+      if (runtime.scenario.action === 'close' && !status.submission_started) {
+        const { tasks } = await api(`/api/shift-test/tasks?run_id=${encodeURIComponent(runtime.draft.id)}`);
+        if (tasks.some((task) => !runtime.draft.task_reasons?.[task.id]?.trim())) {
+          $('#taskReasonsFields').innerHTML = tasks.map((task) => `<label>${escapeHtml(task.title)}<textarea name="${task.id}" required maxlength="1000">${escapeHtml(runtime.draft.task_reasons?.[task.id] || '')}</textarea></label>`).join('');
+          $('#taskReasonsDialog').showModal();
+          return;
+        }
+      }
+    }
     const form = new FormData();
     form.set('report', JSON.stringify({
       action: runtime.scenario.action,
@@ -1059,6 +1094,7 @@ async function submitReport() {
       version: runtime.scenario.version,
       run_id: runtime.draft.id,
       answers: runtime.draft.answers,
+      task_reasons: runtime.draft.task_reasons || {},
       photo_ids: runtime.draft.photo_ids,
       cleanliness_photo_ids: runtime.draft.cleanliness_photo_ids,
     }));
@@ -1091,6 +1127,10 @@ async function submitReport() {
     button.textContent = 'Завершить отчёт';
   } finally {
     runtime.submitting = false;
+    if (runtime.draft) {
+      button.disabled = false;
+      button.textContent = 'Завершить отчёт';
+    }
   }
 }
 
@@ -1098,6 +1138,7 @@ async function showReportSuccess() {
   try { await deleteDraft(); }
   catch (error) { console.warn('Не удалось очистить отправленный черновик', error); }
   runtime.draft = null;
+  $('#cancelReport').hidden = true;
   releaseReviewUrls();
   setStage('successStage');
   try { tg?.HapticFeedback?.notificationOccurred('success'); }
@@ -1342,6 +1383,11 @@ $('#discardDraft').addEventListener('click', async () => {
   const button = $('#discardDraft');
   button.disabled = true;
   try {
+    if (runtime.draft.started_at && !runtime.scenario.preview_mode) {
+      const status = await fetchScenario(null, '', runtime.draft.id);
+      if (status.completed) { await showReportSuccess(); $('#resumeDialog').close(); return; }
+      if (status.submission_started) throw new Error('Отправка уже началась. Продолжите отправку, чтобы не потерять отчёт.');
+    }
     $('#resumeDialog').close();
     if (runtime.draft.started_at) {
       await clearDraftPhotos(runtime.draft);
@@ -1352,6 +1398,7 @@ $('#discardDraft').addEventListener('click', async () => {
       runtime.draft.text_index = 0;
       runtime.draft.photo_index = 0;
       runtime.draft.answers = {};
+      runtime.draft.task_reasons = {};
       runtime.draft.photo_ids = [];
       runtime.draft.cleanliness_photo_ids = [];
       runtime.draft.photo_phase = runtime.scenario.action === 'close'
@@ -1402,31 +1449,117 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+$('#taskReasonsForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  runtime.draft.task_reasons = Object.fromEntries(new FormData(event.target));
+  saveDraft();
+  $('#taskReasonsDialog').close();
+  submitReport();
+});
+$('#cancelTaskReasons').addEventListener('click', () => $('#taskReasonsDialog').close());
+
+async function cancelSavedReport(runId) {
+  return api('/api/shift-test/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_id: runId }),
+  });
+}
+
+$('#cancelReport').addEventListener('click', async () => {
+  if (runtime.submitting || runtime.starting || runtime.capturing || !runtime.draft) return;
+  if (!$('#photoProcessing').hidden) {
+    toast('Дождитесь обработки фотографии');
+    return;
+  }
+  if (!window.confirm('Отменить этот отчёт и начать новый? Ответы и фото будут удалены. Время прихода на эту смену сохранится.')) return;
+  const button = $('#cancelReport');
+  button.disabled = true;
+  try {
+    stopCamera();
+    if (!runtime.scenario.preview_mode) await cancelSavedReport(runtime.draft.id);
+    await deleteDraft();
+    runtime.draft = null;
+    clearBatchSelection();
+    releaseReviewUrls();
+    runtime.retakeQuestionId = null;
+    runtime.editingAnswerQuestionId = null;
+    $('#resumeDialog').close();
+    await startFreshScenario();
+    await renderOldReports();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
+
+async function renderOldReports() {
+  if (runtime.scenario?.preview_mode) return;
+  const panel = $('#oldReports');
+  try {
+    const { reports } = await api('/api/shift-test/pending');
+    const old = reports.filter((report) => report.id !== runtime.scenario?.run_id && report.id !== runtime.draft?.id);
+    panel.hidden = !old.length;
+    panel.innerHTML = old.map((report) => `<details><summary>${escapeHtml(report.club)} · ${escapeHtml(report.shift_date)} · ${report.action === 'open' ? 'Открытие' : 'Закрытие'}</summary><p>Начат: ${escapeHtml(report.started_at)}. ${report.finished_at ? 'Отправка не завершена.' : 'Старый незавершённый отчёт.'}</p><button type="button" data-old-report="${escapeHtml(report.id)}" data-resend="${Boolean(report.finished_at)}">${report.finished_at ? 'Продолжить отправку' : 'Отменить старый отчёт'}</button></details>`).join('');
+  } catch (error) { toast(`Не удалось проверить старые отчёты: ${error.message}`, true); }
+}
+
+$('#oldReports').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-old-report]');
+  if (!button || runtime.submitting) return;
+  button.disabled = true;
+  try {
+    const id = button.dataset.oldReport;
+    const key = `${DRAFT_PREFIX}archive:${id}`;
+    if (button.dataset.resend === 'true') {
+      const draft = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!draft) throw new Error('Фотографии старого отчёта остались на устройстве, где он был начат. Откройте приложение на нём.');
+      if (runtime.draft) localStorage.setItem(`${DRAFT_PREFIX}archive:${runtime.draft.id}`, JSON.stringify(runtime.draft));
+      stopCamera();
+      clearBatchSelection();
+      releaseReviewUrls();
+      runtime.scenario = await api(`/api/shift-test/scenario?run_id=${encodeURIComponent(id)}`);
+      runtime.draft = draft;
+      runtime.action = draft.action;
+      saveDraft();
+      setPageCopy();
+      await renderReview();
+    } else {
+      if (!window.confirm('Отменить старый отчёт? История начала и отмены сохранится.')) return;
+      await cancelSavedReport(id);
+      const draft = JSON.parse(localStorage.getItem(key) || 'null');
+      if (draft) await clearDraftPhotos(draft);
+      localStorage.removeItem(key);
+      await renderOldReports();
+    }
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
+
 async function initialize() {
   if (!['open', 'close'].includes(runtime.action)) {
     throw new Error('Не выбрано открытие или закрытие');
   }
   runtime.photoDatabase = await openPhotoDatabase();
-  const localDraft = loadLocalDraft();
-  const requestedVariant = localDraft?.schema === DRAFT_SCHEMA
-    && localDraft.action === runtime.action
-    ? localDraft.variant_index
-    : null;
-  try {
-    runtime.scenario = await fetchScenario(
-      requestedVariant,
-      localDraft?.club || '',
-      localDraft?.schema === DRAFT_SCHEMA
-        && localDraft.action === runtime.action
-        ? localDraft.id
-        : '',
-    );
-  } catch (error) {
-    if (!localDraft) throw error;
-    if (localDraft.started_at) throw error;
-    await deleteDraft(localDraft);
-    runtime.scenario = await fetchScenario();
+  let localDraft = loadLocalDraft();
+  await renderOldReports();
+  runtime.scenario = await fetchScenario();
+  if (localDraft && !runtime.scenario.run_id && runtime.scenario.shift
+      && localDraft.user_login === runtime.scenario.user_login
+      && localDraft.club === runtime.scenario.club
+      && localDraft.date === runtime.scenario.shift.date
+      && localDraft.action === runtime.scenario.action && localDraft.started_at) {
+    const saved = await fetchScenario(null, '', localDraft.id);
+    if (saved.run_id === localDraft.id && !saved.cancelled
+        && ['date', 'start', 'end'].every((key) => saved.shift?.[key] === runtime.scenario.shift[key])) {
+      runtime.scenario = saved;
+    }
   }
+  if (localDraft && !compatibleDraft(localDraft)) {
+    localStorage.setItem(`${DRAFT_PREFIX}archive:${localDraft.id}`, JSON.stringify(localDraft));
+    localStorage.removeItem(draftStorageKey());
+  }
+  if (runtime.scenario.run_id && !compatibleDraft(localDraft)) {
+    localDraft = JSON.parse(localStorage.getItem(`${DRAFT_PREFIX}archive:${runtime.scenario.run_id}`) || 'null');
+  }
+  await renderOldReports();
   if (runtime.scenario.requires_club_selection) {
     const selection = runtime.scenario;
     runtime.scenario = null;
@@ -1443,17 +1576,17 @@ async function initialize() {
   }
 
   if (!compatibleDraft(localDraft)) {
-    if (localDraft) await deleteDraft(localDraft);
     createDraft();
     renderInitialStage();
     return;
   }
 
   runtime.draft = localDraft;
+  $('#cancelReport').hidden = false;
   if (!runtime.draft.started_at && runtime.scenario.started_at) {
     runtime.draft.started_at = runtime.scenario.started_at;
-    saveDraft();
   }
+  saveDraft();
   await repairDraftPhotos();
   const answered = Object.keys(runtime.draft.answers).length;
   const photos = runtime.draft.photo_ids.length

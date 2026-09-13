@@ -133,59 +133,6 @@ class BronixTest(unittest.TestCase):
                     date(2026, 9, 1),
                 )
 
-    def test_legacy_tables_are_migrated_and_removed_without_data_loss(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = str(Path(temp_dir) / 'bookings.sqlite')
-            conn = sqlite3.connect(db_path)
-            conn.executescript(
-                '''CREATE TABLE bukza_orders (
-                       order_id TEXT PRIMARY KEY, order_number TEXT,
-                       reservation_at TEXT, reservation_end_at TEXT,
-                       status TEXT, resource TEXT, club_code TEXT, club TEXT,
-                       booking_format TEXT, participants REAL, paid REAL,
-                       source_present INTEGER, first_seen_at TEXT,
-                       last_seen_at TEXT, last_changed_at TEXT
-                   );
-                   CREATE TABLE bukza_order_history (
-                       id INTEGER PRIMARY KEY, order_id TEXT, changed_at TEXT,
-                       field TEXT, old_value TEXT, new_value TEXT
-                   );
-                   CREATE TABLE bukza_sync_state (
-                       key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
-                   );'''
-            )
-            conn.execute(
-                '''INSERT INTO bukza_orders VALUES (
-                       '42', 'A-42', '2026-09-12T12:00:00',
-                       '2026-09-12T13:00:00', 'Ожидается',
-                       'МАР > Классический VR', 'МАР', 'Марьино',
-                       'Классический VR', 5, 0, 1,
-                       '2026-09-01', '2026-09-01', '2026-09-01')'''
-            )
-            conn.execute(
-                "INSERT INTO bukza_order_history VALUES (1, '42', '2026-09-01', 'created', NULL, 'A-42')"
-            )
-            conn.commit()
-            conn.close()
-
-            bronix.initialize_booking_schema(db_path)
-            conn = sqlite3.connect(db_path)
-            migrated = conn.execute(
-                '''SELECT booking_id, source, source_present
-                   FROM booking_orders'''
-            ).fetchone()
-            history = conn.execute(
-                'SELECT booking_id FROM booking_order_history'
-            ).fetchone()
-            old_tables = conn.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'bukza_%'"
-            ).fetchone()[0]
-            conn.close()
-
-        self.assertEqual(migrated, ('legacy:42', 'legacy', 1))
-        self.assertEqual(history, ('legacy:42',))
-        self.assertEqual(old_tables, 0)
-
     def test_store_updates_booking_and_records_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'bookings.sqlite')

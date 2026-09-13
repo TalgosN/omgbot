@@ -24,6 +24,7 @@ def initialize_club_status_dashboard_schema(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         with conn:
+            conn.execute('BEGIN IMMEDIATE')
             conn.execute(
                 '''CREATE TABLE IF NOT EXISTS club_status_dashboard (
                        id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -36,6 +37,9 @@ def initialize_club_status_dashboard_schema(db_path=DB_PATH):
                        changed_at TEXT NOT NULL
                    )'''
             )
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(club_status_updates)')}
+            if 'active_run_id' not in columns:
+                conn.execute('ALTER TABLE club_status_updates ADD COLUMN active_run_id TEXT')
     finally:
         conn.close()
 
@@ -52,6 +56,10 @@ def _club_status_dashboard_text(conn):
     for club, status, changed_at in rows:
         if status == 'Открыт':
             icon, label = '🟢', 'открыт'
+        elif status == 'Подготовка к открытию':
+            icon, label = '🟡', 'подготовка к открытию'
+        elif status == 'Закрывается':
+            icon, label = '🟠', 'закрывается'
         elif status == 'Закрыт':
             icon, label = '🔴', 'закрыт'
         else:
@@ -130,7 +138,7 @@ def _record_club_status_change(cur, club, changed_at):
     cur.execute(
         '''INSERT INTO club_status_updates (club, changed_at)
            VALUES (?, ?)
-           ON CONFLICT(club) DO UPDATE SET changed_at=excluded.changed_at''',
+           ON CONFLICT(club) DO UPDATE SET changed_at=excluded.changed_at, active_run_id=NULL''',
         (club, changed_at),
     )
 
@@ -173,58 +181,34 @@ def choose_shift_flow(message, action, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
     from menu import _webapp_url
-
     action_code = 'open' if action == '✅ Открыть смену' else 'close'
-    webapp_url = _webapp_url(f'shift-report?action={action_code}')
+    url = _webapp_url(f'shift-report?action={action_code}')
     markup = types.InlineKeyboardMarkup(row_width=1)
-    if webapp_url:
+    if url:
         markup.add(types.InlineKeyboardButton(
-            '📱 По-новому — в приложении',
-            web_app=types.WebAppInfo(webapp_url),
+            '📱 Открыть в приложении', web_app=types.WebAppInfo(url),
         ))
-    markup.add(types.InlineKeyboardButton(
-        '⌨️ По-старинке — в боте',
-        callback_data=f'shift_flow:{action_code}:legacy',
-    ))
-    markup.add(types.InlineKeyboardButton(
-        '⬅️ Отмена',
-        callback_data='shift_flow:cancel',
-    ))
-    text = (
-        'Как хотите выполнить открытие смены?'
-        if action_code == 'open'
-        else 'Как хотите выполнить закрытие смены?'
-    )
-    if not webapp_url:
-        text += '\n\nMini App пока не подключён к HTTPS-адресу.'
-    bot.send_message(message.chat.id, text, reply_markup=markup)
+    markup.add(types.InlineKeyboardButton('⬅️ Отмена', callback_data='shift_flow:cancel'))
+    bot.send_message(message.chat.id,
+                     'Открытие и закрытие смены доступны только в приложении.'
+                     if url else 'Приложение временно не настроено. Обратитесь к руководителю.',
+                     reply_markup=markup)
 
 
 def warn_legacy_shift_flow(message, action, bot):
-    action_code = 'open' if action == '✅ Открыть смену' else 'close'
-    from menu import _webapp_url
+    choose_shift_flow(message, action, bot)
 
-    webapp_url = _webapp_url(f'shift-report?action={action_code}')
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    if webapp_url:
-        markup.add(types.InlineKeyboardButton(
-            '📱 Открыть в приложении',
-            web_app=types.WebAppInfo(webapp_url),
-        ))
-    markup.add(types.InlineKeyboardButton(
-        '⌨️ Всё равно через бота',
-        callback_data=f'shift_flow:{action_code}:legacy_confirmed',
-    ))
-    bot.send_message(
-        message.chat.id,
-        '⚠️ <b>Переход на новый формат</b>\n\n'
-        'С 1 сентября будет перевод на открытие и закрытие '
-        'смен только через приложение.\n\n'
-        'Попробуй сейчас и напиши свои замечания.',
-        parse_mode='HTML',
-        reply_markup=markup,
-    )
-        
+
+def _application_only(handler):
+    from functools import wraps
+    from inspect import signature
+    @wraps(handler)
+    def redirect(*args, **kwargs):
+        arguments = signature(handler).bind(*args, **kwargs).arguments
+        return choose_shift_flow(arguments['message'], arguments['a'], arguments['bot'])
+    return redirect
+
+
 def do_report(message,bot):
     user = require_role(message, bot, ROLE_EMPLOYEE)
     if not user:
@@ -253,6 +237,7 @@ def do_report(message,bot):
         func_today(message,bot)
     
     
+@_application_only
 def check_club(message, a, bot):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
@@ -276,6 +261,7 @@ def check_club(message, a, bot):
     bot.register_next_step_handler(message, geo_router, a, False, bot)
 
 # --- 2. РОУТЕР (Распределяет на Гео или Ручной ввод) ---
+@_application_only
 def geo_router(message, a, tooearly, bot):
     # Если прислали Гео (Контент location)
     if message.content_type == 'location':
@@ -302,6 +288,7 @@ def geo_router(message, a, tooearly, bot):
     bot.register_next_step_handler(message, geo_router, a, tooearly, bot)
 
 # --- 3. АВТО-ПОИСК (Твой старый код, чуть доработанный) ---
+@_application_only
 def find_club_by_geo(message, a, tooearly, bot):
     if message.forward_date is not None:
         bot.send_message(message.chat.id, "❌ Пересланные сообщения не принимаются!")
@@ -335,12 +322,14 @@ def find_club_by_geo(message, a, tooearly, bot):
         manual_club_selection(message, a, tooearly, bot)
 
 # --- 4. РУЧНОЙ ВЫБОР (ТОТ САМЫЙ СКИП) ---
+@_application_only
 def manual_club_selection(message, a, tooearly, bot):
     markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     markup.add(*get_clublist(), "Вернуться")
     bot.send_message(message.chat.id, 'Выбери клуб из списка:', reply_markup=markup)
     bot.register_next_step_handler(message, manual_selection_handler, a, tooearly, bot)
 
+@_application_only
 def manual_selection_handler(message, a, tooearly, bot):
     club = message.text
     if club in ["Вернуться", "⬅️ Вернуться"]:
@@ -355,6 +344,7 @@ def manual_selection_handler(message, a, tooearly, bot):
     check_club_status_logic(message, a, club, tooearly, False, bot)
 
 # --- 5. ФИНАЛЬНАЯ ЛОГИКА (С ПРОВЕРКОЙ ФЛАГА) ---
+@_application_only
 def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
     if not _can_manage_club(message, club, bot, action=a):
         func_today(message, bot)
@@ -392,6 +382,7 @@ def check_club_status_logic(message, a, club, tooearly, is_geo_verified, bot):
     else:
         is_early(message, a, club, is_geo_verified, bot)
 
+@_application_only
 def is_early(message, a, club, is_geo_verified, bot):
     club_config = get_clubs().get(club)
     if not club_config or 'schedule' not in club_config:
@@ -418,12 +409,14 @@ def is_early(message, a, club, is_geo_verified, bot):
     else:
         enter_club(message, a, club, False, is_geo_verified, bot)
 
+@_application_only
 def closeconfirm(message, a, club, is_geo_verified, bot):
     if message.text == TEXTS['ui']['answer_options'][0]:
         enter_club(message, a, club, True, is_geo_verified, bot)
     else:
         func_today(message, bot)
 
+@_application_only
 def enter_club(message, a, club, tooearly, is_geo_verified, bot):
     # 1. Обработка кнопки возврата
     if club == "⬅️ Вернуться" or club == "Вернуться":
@@ -440,6 +433,7 @@ def enter_club(message, a, club, tooearly, is_geo_verified, bot):
     confirm_enter(message, a, club, tooearly, is_geo_verified, bot)
 
 
+@_application_only
 def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     if not _can_manage_club(message, club, bot, action=a):
         return
@@ -507,6 +501,7 @@ def confirm_enter(message, a, club, tooearly, is_geo_verified, bot):
     # 5. ЗАПУСК ОПРОСА
     run_step(message, bot, a, club, questions, [], [], current_datetime, tooearly, expected_type=None, current_q_text=None)
 
+@_application_only
 def run_step(message, bot, a, club, remaining_questions, answers, photos, start_time, tooearly, expected_type=None, current_q_text=None):
     if not require_role(message, bot, ROLE_EMPLOYEE):
         return
@@ -564,6 +559,7 @@ def run_step(message, bot, a, club, remaining_questions, answers, photos, start_
                                    remaining_questions[1:], answers, photos, start_time, tooearly, 
                                    next_expected_type, next_q_text)
 
+@_application_only
 def finish_report(message, bot, a, club, answers, photos, start_time, tooearly):
     if not _can_manage_club(message, club, bot, action=a):
         return
@@ -756,7 +752,7 @@ def _can_manage_club(message, club, bot, action=None):
 def send_status_close(club,bot):
    conn=sqlite3.connect('db/omgbot.sql')
    cur = conn.cursor()
-   cur.execute("SELECT * FROM clubs WHERE status='Открыт' and club=?", (club,))
+   cur.execute("SELECT * FROM clubs WHERE status IN ('Открыт', 'Подготовка к открытию', 'Закрывается') and club=?", (club,))
    clubs = cur.fetchall()
    cur.close()
    conn.close()
@@ -764,20 +760,31 @@ def send_status_close(club,bot):
     	bot.send_message(CHATS['reports'], f'Не прислан отчет о закрытии: {club}') #CHATS['reports']
         
 
-def send_status_open(club,bot):
-        conn=sqlite3.connect('db/omgbot.sql')
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM clubs WHERE status='Закрыт' and club=?", (club,))
-        clubs = cur.fetchall()
-        cur.close()
+def send_status_open(club, bot):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        has_reports = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shift_webapp_runs'"
+        ).fetchone()
+        if has_reports:
+            today = datetime.now(pytz.timezone('Europe/Moscow')).date().isoformat()
+            arrived = conn.execute(
+                "SELECT 1 FROM shift_webapp_runs WHERE club=? AND shift_date=? AND action='open' LIMIT 1",
+                (club, today),
+            ).fetchone()
+            missing = not arrived
+        else:
+            missing = conn.execute("SELECT 1 FROM clubs WHERE status='Закрыт' AND club=?", (club,)).fetchone()
+    finally:
         conn.close()
-        if len(clubs)!=0:
-            bot.send_message(CHATS['main_group'], f'{tags_main}\n{club} еще не открыт! Кажется кто-то огребет 😉') #CHATS['main_group']
+    if missing:
+        bot.send_message(CHATS['main_group'], f'{tags_main}\n{club}: приход сотрудника ещё не зафиксирован.')
+
 
 def close_club (club,bot):
    conn=sqlite3.connect('db/omgbot.sql')
    cur = conn.cursor()
-   cur.execute("UPDATE clubs SET status='Закрыт' WHERE status='Открыт' and club=?", (club,))
+   cur.execute("UPDATE clubs SET status='Закрыт' WHERE status IN ('Открыт', 'Подготовка к открытию', 'Закрывается') and club=?", (club,))
    rows_affected = cur.rowcount  # Количество измененных строк
    if rows_affected > 0:
        _record_club_status_change(

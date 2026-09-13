@@ -1,6 +1,6 @@
 const tg = window.Telegram?.WebApp;
 const dialog = document.querySelector('#taskDialog');
-const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null };
+const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null, submitting: false };
 
 tg?.ready();
 tg?.expand();
@@ -221,6 +221,7 @@ function renderAttachments() {
 }
 
 function addFiles(files) {
+  if (state.submitting) return;
   const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime', 'video/webm']);
   const errorBox = document.querySelector('#dialogError');
   errorBox.hidden = true;
@@ -238,6 +239,7 @@ function addFiles(files) {
 }
 
 function openTask(task) {
+  if (state.submitting) return;
   if (state.current?.id !== task.id) clearAttachments();
   clearReportMedia();
   state.current = task;
@@ -302,9 +304,11 @@ async function startCurrentTask() {
 }
 
 function uploadTask(form, button) {
+  const taskId = state.current.id;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/shift/tasks/${state.current.id}/complete`);
+    xhr.open('POST', `/api/shift/tasks/${taskId}/complete`);
+    xhr.timeout = 180000;
     xhr.setRequestHeader('X-Telegram-Init-Data', tg?.initData || '');
     xhr.upload.addEventListener('progress', (event) => {
       if (event.lengthComputable) button.textContent = `Отправляем · ${Math.round(event.loaded / event.total * 100)}%`;
@@ -312,15 +316,19 @@ function uploadTask(form, button) {
     xhr.addEventListener('load', () => {
       let payload = {};
       try { payload = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* noop */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(payload);
+      if (xhr.status >= 200 && xhr.status < 300 && payload.status === 'completed' && payload.id === taskId) resolve(payload);
       else reject(new Error(payload.error || 'Не удалось отправить отчёт'));
     });
     xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время отправки')));
+    xhr.addEventListener('timeout', () => reject(new Error('Сервер не подтвердил завершение. Вложения сохранены в форме — повторите отправку.')));
+    xhr.addEventListener('abort', () => reject(new Error('Отправка прервана. Повторите попытку.')));
     xhr.send(form);
   });
 }
 
 async function completeCurrentTask() {
+  if (state.submitting) return;
+  state.submitting = true;
   const button = document.querySelector('#completeTask');
   const form = new FormData();
   state.attachments.forEach((item) => form.append('media', item.file, item.file.name));
@@ -331,17 +339,20 @@ async function completeCurrentTask() {
     clearAttachments();
     dialog.close();
     await loadTasks(state.scope);
-    tg?.HapticFeedback?.notificationOccurred('success');
+    try { tg?.HapticFeedback?.notificationOccurred('success'); }
+    catch (_error) { /* Delivery does not depend on haptic feedback. */ }
   } catch (error) {
     document.querySelector('#dialogError').textContent = error.message;
     document.querySelector('#dialogError').hidden = false;
   } finally {
+    state.submitting = false;
     button.textContent = original;
     button.disabled = false;
   }
 }
 
 async function skipCurrentTask() {
+  if (state.submitting) return;
   const reason = document.querySelector('#skipReason').value.trim();
   const button = document.querySelector('#skipTask');
   button.disabled = true;
@@ -404,6 +415,7 @@ document.querySelector('#pickTaskFiles').addEventListener('click', () => documen
 document.querySelector('#taskCameraInput').addEventListener('change', (event) => { addFiles(event.target.files); event.target.value = ''; });
 document.querySelector('#taskFileInput').addEventListener('change', (event) => { addFiles(event.target.files); event.target.value = ''; });
 document.querySelector('#attachmentList').addEventListener('click', (event) => {
+  if (state.submitting) return;
   const button = event.target.closest('[data-remove]');
   if (!button) return;
   const [removed] = state.attachments.splice(Number(button.dataset.remove), 1);

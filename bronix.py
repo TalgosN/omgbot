@@ -208,13 +208,6 @@ def fetch_bookings_range(day_from, day_to):
     return list(rows_by_id.values())
 
 
-def _table_exists(conn, table):
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (table,),
-    ).fetchone() is not None
-
-
 def _create_booking_schema(conn):
     conn.execute(
         '''CREATE TABLE IF NOT EXISTS booking_orders (
@@ -273,77 +266,11 @@ def _create_booking_schema(conn):
     )
 
 
-def _migrate_legacy_tables(conn):
-    if not _table_exists(conn, 'bukza_orders'):
-        return
-    if _sync_state(conn, 'legacy_booking_tables_migrated') == '1':
-        return
-
-    conn.execute(
-        '''INSERT OR IGNORE INTO booking_orders (
-               booking_id, booking_number, reservation_at,
-               reservation_end_at, status, active, club, booking_format,
-               is_event, participants, paid, admin_url, source,
-               source_present, first_seen_at, last_seen_at, last_changed_at
-           )
-           SELECT 'legacy:' || order_id, order_number, reservation_at,
-                  COALESCE(reservation_end_at, reservation_at), status,
-                  CASE
-                      WHEN source_present=0
-                        OR status IN ('Техничка', 'Не пришел', 'Отменено')
-                      THEN 0 ELSE 1
-                  END,
-                  COALESCE(club, ''), COALESCE(booking_format, resource, ''),
-                  CASE
-                      WHEN COALESCE(booking_format, resource, '') LIKE '%Мероприят%'
-                      THEN 1 ELSE 0
-                  END,
-                  participants, paid,
-                  'https://my.bukza.com/#/tables/order/' || order_id,
-                  'legacy', source_present,
-                  first_seen_at, last_seen_at, last_changed_at
-           FROM bukza_orders
-           WHERE reservation_at IS NOT NULL'''
-    )
-    if _table_exists(conn, 'bukza_order_history'):
-        conn.execute(
-            '''INSERT INTO booking_order_history (
-                   booking_id, changed_at, field, old_value, new_value
-               )
-               SELECT 'legacy:' || order_id, changed_at, field,
-                      old_value, new_value
-               FROM bukza_order_history
-               WHERE EXISTS (
-                   SELECT 1 FROM booking_orders orders
-                   WHERE orders.booking_id='legacy:' || bukza_order_history.order_id
-               )'''
-        )
-    if _table_exists(conn, 'bukza_sync_state'):
-        conn.execute(
-            '''INSERT OR IGNORE INTO booking_sync_state (key, value, updated_at)
-               SELECT key, value, updated_at
-               FROM bukza_sync_state
-               WHERE key IN (
-                   'last_success_at', 'last_live_success_at',
-                   'last_daily_success_at', 'last_full_success_at',
-                   'last_range_from', 'last_range_to'
-               )'''
-        )
-    _set_sync_state(conn, 'legacy_booking_tables_migrated', '1')
-    if _table_exists(conn, 'bukza_order_history'):
-        conn.execute('DROP TABLE bukza_order_history')
-    if _table_exists(conn, 'bukza_orders'):
-        conn.execute('DROP TABLE bukza_orders')
-    if _table_exists(conn, 'bukza_sync_state'):
-        conn.execute('DROP TABLE bukza_sync_state')
-
-
 def initialize_booking_schema(db_path=BOOKING_DB_PATH):
     conn = sqlite3.connect(db_path, timeout=30)
     try:
         conn.execute('BEGIN IMMEDIATE')
         _create_booking_schema(conn)
-        _migrate_legacy_tables(conn)
         conn.commit()
     except Exception:
         conn.rollback()

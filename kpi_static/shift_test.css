@@ -209,6 +209,10 @@ body[data-workflow-step="closing"] .progress-track i { background:linear-gradien
 .cleanliness-review .report-review-heading span { color:#c7a9ff; }
 .photo-processing { background:rgba(13,9,19,.94); }
 .resume-dialog { border-color:var(--line-strong); background:#17111f; }
+#taskReasonsFields label { display:block; margin:16px 0; }
+#taskReasonsFields textarea { display:block; width:100%; min-height:88px; margin-top:8px; padding:12px; color:var(--ink); background:var(--card-3); border:1px solid var(--line-strong); border-radius:12px; font:inherit; box-sizing:border-box; }
+#oldReports details { width:100%; margin:8px 0; }
+#cancelReport { margin:0 0 16px; }
 .camera-stage:not(.cleanliness-camera) .camera-instruction span { color:#d8c5ff; }
 @media(max-width:390px) {
   .photo-review { grid-template-columns:1fr; }

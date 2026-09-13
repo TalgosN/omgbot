@@ -1265,8 +1265,22 @@ def _select_shift_report_test_shift(
     previous = (current.date() - timedelta(days=1)).isoformat()
     previous_close_available = action == 'close' and current.hour < 6
     shifts = _shift_report_candidate_shifts(
-        login, current, include_previous=previous_close_available,
+        login, current, include_previous=True,
     )
+    def still_active(shift):
+        if shift.get('date') == today or previous_close_available:
+            return True
+        start = _shift_clock_minutes(shift.get('start'))
+        end = _shift_clock_minutes(shift.get('end'))
+        if start is None:
+            return False
+        if end is None:
+            end = start + max(0, int(round(float(shift.get('duration') or 0) * 60)))
+        elif end <= start:
+            end += 24 * 60
+        minutes = 24 * 60 + current.hour * 60 + current.minute
+        return end >= minutes
+    shifts = [shift for shift in shifts if still_active(shift)]
     if requested_club:
         normalized_request = str(requested_club).strip().casefold()
         shifts = [
@@ -1338,6 +1352,7 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
         with conn:
+            conn.execute('BEGIN IMMEDIATE')
             conn.execute(
                 '''CREATE TABLE IF NOT EXISTS shift_webapp_runs (
                        id TEXT PRIMARY KEY,
@@ -1384,6 +1399,9 @@ def _initialize_shift_report_schema(db_path=DB_PATH):
                 conn.execute(
                     'ALTER TABLE shift_webapp_runs ADD COLUMN scenario_json TEXT'
                 )
+            for column in ('cancelled_at', 'arrival_at', 'previous_status', 'task_reasons_json'):
+                if column not in columns:
+                    conn.execute(f'ALTER TABLE shift_webapp_runs ADD COLUMN {column} TEXT')
     finally:
         conn.close()
 
@@ -1437,6 +1455,10 @@ def _shift_report_run_scenario(run_id):
         'run_id': run['id'],
         'started_at': run['started_at'],
         'completed': bool(run['completed_at']),
+        'cancelled': bool(run['cancelled_at']),
+        'submission_started': bool(run['finished_at']),
+        'submitted_answers': json.loads(run['answers_json'] or '{}') if run['finished_at'] else None,
+        'arrival_at': run['arrival_at'] or run['started_at'],
         'action': run['action'],
         'action_label': 'Открытие' if run['action'] == 'open' else 'Закрытие',
         'club': run['club'],
@@ -1458,29 +1480,60 @@ def _shift_report_run_scenario(run_id):
     }
 
 
-def _latest_shift_report_run_scenario(action, requested_club=None, now=None):
+def _latest_shift_report_run_scenario(action, requested_club=None, now=None, shift=None):
     if action not in SHIFT_ACTIONS:
         return None
     current = now or datetime.now(ZoneInfo('Europe/Moscow'))
-    cutoff = (current - timedelta(hours=18)).strftime('%Y-%m-%d %H:%M:%S')
+    if shift is None:
+        shift = _select_shift_report_test_shift(_actor_login(), action=action, now=current,
+                                                requested_club=requested_club)
+        if not shift:
+            if requested_club and int(g.kpi_user['status']) == ROLE_OWNER:
+                shift = _shift_report_test_scenario(action, now=current, requested_club=requested_club)['shift']
+            else:
+                return None
+        requested_club = _shift_report_test_club(shift['club'])[0]
     _initialize_shift_report_schema(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     try:
         query = '''
             SELECT id FROM shift_webapp_runs
             WHERE lower(login)=lower(?) AND action=?
-              AND completed_at IS NULL
-              AND datetime(started_at) >= datetime(?)
+              AND completed_at IS NULL AND cancelled_at IS NULL
         '''
-        values = [_actor_login(), action, cutoff]
+        values = [_actor_login(), action]
         if requested_club:
             query += ' AND lower(club)=lower(?)'
             values.append(str(requested_club).strip())
+        if shift:
+            query += " AND shift_date=? AND COALESCE(json_extract(scenario_json, '$.shift.start'), '')=? AND COALESCE(json_extract(scenario_json, '$.shift.end'), '')=?"
+            values.extend((shift['date'], shift.get('start') or '', shift.get('end') or ''))
         query += ' ORDER BY datetime(started_at) DESC LIMIT 1'
         row = conn.execute(query, values).fetchone()
     finally:
         conn.close()
     return _shift_report_run_scenario(row[0]) if row else None
+
+
+def _shift_close_tasks(scenario):
+    if scenario['action'] != 'close':
+        return []
+    from shift_tasks import pending_tasks_for_close
+    return pending_tasks_for_close(scenario['club'], scenario['shift']['date'], db_path=DB_PATH)
+
+
+def _require_current_shift_report(scenario):
+    if scenario.get('cancelled'):
+        raise ValueError('Отчёт отменён. Начните новый отчёт')
+    current = _shift_report_test_scenario(
+        scenario['action'],
+        requested_club=scenario['club'] if scenario['shift'].get('manual') else None,
+    )
+    if (
+        current['club'] != scenario['club']
+        or any(current['shift'].get(key) != scenario['shift'].get(key) for key in ('date', 'start', 'end'))
+    ):
+        raise ValueError('Этот отчёт относится к другой смене. Начните отчёт текущей смены')
 
 
 def _shift_report_is_early_close(action, club, now=None):
@@ -1723,6 +1776,8 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
             (run_id,),
         ).fetchone()
         if existing:
+            if existing['cancelled_at']:
+                raise ValueError('Отчёт отменён. Начните новый отчёт')
             if (
                 existing['login'] != actor_login
                 or existing['club'] != club_name
@@ -1739,18 +1794,20 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
             ).fetchone()
             if not status_row:
                 raise ValueError('Клуб не найден в рабочей базе')
-            new_status = 'Открыт' if scenario['action'] == 'open' else 'Закрыт'
-            if status_row['status'] == new_status:
-                raise ValueError(f'Клуб «{club_name}» уже {new_status.lower()}')
+            final_status = 'Открыт' if scenario['action'] == 'open' else 'Закрыт'
+            new_status = 'Подготовка к открытию' if scenario['action'] == 'open' else 'Закрывается'
+            if status_row['status'] == final_status:
+                raise ValueError(f'Клуб «{club_name}» уже {final_status.lower()}')
             conn.execute(
                 'UPDATE clubs SET status=? WHERE club=?',
                 (new_status, club_name),
             )
             conn.execute(
-                '''INSERT INTO club_status_updates (club, changed_at)
-                   VALUES (?, ?)
-                   ON CONFLICT(club) DO UPDATE SET changed_at=excluded.changed_at''',
-                (club_name, started_at),
+                '''INSERT INTO club_status_updates (club, changed_at, active_run_id)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(club) DO UPDATE SET changed_at=excluded.changed_at,
+                                                  active_run_id=excluded.active_run_id''',
+                (club_name, started_at, run_id),
             )
             conn.execute(
                 '''INSERT INTO shift_webapp_runs (
@@ -1772,6 +1829,18 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
                     json.dumps(scenario, ensure_ascii=False),
                 ),
             )
+            arrival = conn.execute(
+                """SELECT MIN(COALESCE(arrival_at, started_at)) FROM shift_webapp_runs
+                   WHERE login=? AND club=? AND action=? AND shift_date=?
+                     AND COALESCE(json_extract(scenario_json, '$.shift.start'), '')=?
+                     AND COALESCE(json_extract(scenario_json, '$.shift.end'), '')=?""",
+                (actor_login, club_name, scenario['action'], scenario['shift']['date'],
+                 scenario['shift'].get('start') or '', scenario['shift'].get('end') or ''),
+            ).fetchone()[0]
+            conn.execute(
+                'UPDATE shift_webapp_runs SET arrival_at=?, previous_status=? WHERE id=?',
+                (arrival or started_at, status_row['status'], run_id),
+            )
             conn.commit()
             run = dict(conn.execute(
                 'SELECT * FROM shift_webapp_runs WHERE id=?',
@@ -1790,15 +1859,9 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
     task_warning = None
     if scenario['action'] == 'close':
         try:
-            from shift_tasks import record_close_task_warning
-            task_warning = record_close_task_warning(
-                bot,
-                run_id,
-                club_name,
-                scenario['shift']['date'],
-                dict(g.kpi_user),
-                db_path=DB_PATH,
-            )
+            tasks = _shift_close_tasks(scenario)
+            task_warning = {'count': len(tasks), 'titles': [task['title'] for task in tasks],
+                            'message': 'Для каждой невыполненной задачи потребуется причина.'}
         except Exception as error:
             print(f'Не удалось проверить задачи перед закрытием: {error}')
 
@@ -1811,7 +1874,7 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
         action_text = 'зашёл в' if scenario['action'] == 'open' else 'начинает закрывать'
         bot.send_message(
             CHATS['reports'],
-            f'⚠️ {name} {action_text} {club_name} в {run["started_at"][11:16]}',
+            f'⚠️ {name} {action_text} {club_name} в {(run["arrival_at"] or run["started_at"])[11:16]}',
         )
         notified_at = datetime.now(ZoneInfo('Europe/Moscow')).strftime(
             '%Y-%m-%d %H:%M:%S'
@@ -1829,6 +1892,7 @@ def _start_shift_report_run(scenario, run_id, early_confirmed=False):
     return {
         'started': True,
         'started_at': run['started_at'],
+        'arrival_at': run['arrival_at'] or run['started_at'],
         'early_close': bool(run['early_close']),
         'task_warning': task_warning,
     }
@@ -1897,6 +1961,8 @@ def _today_shift_clubs(login):
 
 
 def _shift_run_state(run):
+    if run.get('cancelled_at'):
+        return 'cancelled'
     if run.get('completed_at'):
         return 'completed'
     if run.get('finished_at'):
@@ -1949,6 +2015,9 @@ def _shift_run_payload(run, source='app'):
         ),
         'state': 'completed' if source == 'bot' else _shift_run_state(run),
         'started_at': started_at,
+        'arrival_at': run.get('arrival_at') or started_at,
+        'cancelled_at': run.get('cancelled_at'),
+        'task_reasons': json.loads(run.get('task_reasons_json') or '[]'),
         'finished_at': run.get('finished_at'),
         'completed_at': run.get('completed_at') or (
             started_at if source == 'bot' else None
@@ -1965,7 +2034,7 @@ def _shift_run_payload(run, source='app'):
     if action == 'open' and started_at:
         try:
             started = datetime.strptime(
-                str(started_at), '%Y-%m-%d %H:%M:%S',
+                str(run.get('arrival_at') or started_at), '%Y-%m-%d %H:%M:%S',
             ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
             club = get_clubs().get(str(run.get('club') or ''))
             result['late_minutes'] = (
@@ -2351,7 +2420,7 @@ def _owner_shift_dashboard(user, task_dashboard=None):
         web_runs = [
             dict(row) for row in conn.execute(
                 '''SELECT * FROM shift_webapp_runs
-                   WHERE shift_date=? AND action='open'
+                   WHERE shift_date=? AND action='open' AND cancelled_at IS NULL
                    ORDER BY datetime(started_at), id''',
                 (today,),
             ).fetchall()
@@ -2376,12 +2445,12 @@ def _owner_shift_dashboard(user, task_dashboard=None):
         club, club_info = _shift_report_test_club(run.get('club'))
         if club not in physical_clubs:
             continue
-        started_at = _local_datetime(run.get('started_at'))
+        started_at = _local_datetime(run.get('arrival_at') or run.get('started_at'))
         state = _shift_run_state(run)
         item = {
             'club': club,
             'state': state,
-            'opened_at': run.get('started_at'),
+            'opened_at': run.get('arrival_at') or run.get('started_at'),
             'opened_by': users.get(str(run.get('login') or '').casefold())
                          or run.get('login'),
             'late_minutes': (
@@ -2909,6 +2978,12 @@ def _shift_report_test_messages(scenario, answers):
             for index, part in enumerate(answer_parts)
         )
 
+    for task in scenario.get('task_reasons', []):
+        blocks.append(f'⚠️ <b>Не выполнено: {html.escape(task["title"])}</b>')
+        reason = task['reason']
+        blocks.extend(html.escape(reason[index:index + 500]) for index in range(0, len(reason), 500))
+    if scenario.get('arrival_at') and scenario['action'] == 'open':
+        blocks.append(f'Приход зафиксирован: {html.escape(scenario["arrival_at"])}')
     messages = []
     current = ''
     for block in blocks:
@@ -3067,6 +3142,22 @@ def _complete_shift_report_run(
         raise ValueError('Отчёт не соответствует начатой смене')
     if run.get('completed_at'):
         return {'completed': True, 'already_completed': True}
+    if run.get('cancelled_at'):
+        raise ValueError('Отчёт отменён')
+    if run.get('finished_at'):
+        answers = json.loads(run['answers_json'] or '{}')
+
+    task_reasons = json.loads(run.get('task_reasons_json') or '[]')
+    if not run.get('finished_at'):
+        supplied = payload.get('task_reasons') or {}
+        if not isinstance(supplied, dict):
+            raise ValueError('Причины невыполнения задач переданы неверно')
+        task_reasons = []
+        for task in _shift_close_tasks(scenario):
+            reason = str(supplied.get(str(task['id'])) or '').strip()
+            if not reason or len(reason) > 1000:
+                raise ValueError(f'Укажите причину невыполнения задачи «{task["title"]}» (до 1000 символов)')
+            task_reasons.append({'id': task['id'], 'title': task['title'], 'reason': reason})
 
     def mark(**values):
         if not values:
@@ -3091,10 +3182,11 @@ def _complete_shift_report_run(
             answers_json=json.dumps(answers, ensure_ascii=False),
             photo_count=len(photos),
             cleanliness_photo_count=len(cleanliness_photos),
+            task_reasons_json=json.dumps(task_reasons, ensure_ascii=False),
         )
 
     started_at = datetime.strptime(
-        run['started_at'], '%Y-%m-%d %H:%M:%S'
+        run.get('arrival_at') or run['started_at'], '%Y-%m-%d %H:%M:%S'
     ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
     club_name, club = _shift_report_test_club(run['club'])
     if not club:
@@ -3107,6 +3199,8 @@ def _complete_shift_report_run(
     report_scenario = dict(scenario)
     report_scenario['started_at'] = run['started_at']
     report_scenario['finished_at'] = run['finished_at']
+    report_scenario['task_reasons'] = task_reasons
+    report_scenario['arrival_at'] = run.get('arrival_at') or run['started_at']
 
     if cleanliness_photos and not run.get('cleanliness_sent_at'):
         step_started = time.monotonic()
@@ -3234,7 +3328,27 @@ def _complete_shift_report_run(
     completed_at = datetime.now(ZoneInfo('Europe/Moscow')).strftime(
         '%Y-%m-%d %H:%M:%S'
     )
-    mark(completed_at=completed_at)
+    status_conn = sqlite3.connect(DB_PATH)
+    try:
+        with status_conn:
+            status_conn.execute('BEGIN IMMEDIATE')
+            latest = status_conn.execute(
+                'SELECT active_run_id FROM club_status_updates WHERE club=?',
+                (run['club'],),
+            ).fetchone()
+            if latest and latest[0] == run_id:
+                status_conn.execute('UPDATE clubs SET status=? WHERE club=?',
+                                    ('Открыт' if run['action'] == 'open' else 'Закрыт', run['club']))
+                status_conn.execute('UPDATE club_status_updates SET changed_at=? WHERE club=?',
+                                    (completed_at, run['club']))
+            status_conn.execute('UPDATE shift_webapp_runs SET completed_at=? WHERE id=?',
+                                (completed_at, run_id))
+    finally:
+        status_conn.close()
+    try:
+        refresh_club_status_dashboard(bot, DB_PATH)
+    except Exception as error:
+        print(f'Не удалось обновить карточку статусов: {error}')
     print(
         f'Отчёт смены {run_id}: серверное завершение всего '
         f'{time.monotonic() - completion_started:.2f} с'
@@ -4446,6 +4560,88 @@ def api_shift_test_scenario():
     return jsonify(scenario)
 
 
+@app.get('/api/shift-test/pending')
+@require_user
+def api_shift_pending():
+    _initialize_shift_report_schema(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            '''SELECT id, club, action, shift_date, started_at, finished_at
+               FROM shift_webapp_runs WHERE login=? AND cancelled_at IS NULL
+                 AND completed_at IS NULL ORDER BY rowid DESC''', (_actor_login(),),
+        ).fetchall()
+        return jsonify({'reports': [dict(row) for row in rows]})
+    finally:
+        conn.close()
+
+
+@app.get('/api/shift-test/tasks')
+@require_user
+def api_shift_close_tasks():
+    scenario = _shift_report_run_scenario(request.args.get('run_id'))
+    if not scenario:
+        raise ValueError('Отчёт не найден')
+    _require_current_shift_report(scenario)
+    return jsonify({'tasks': [{'id': task['id'], 'title': task['title']}
+                              for task in _shift_close_tasks(scenario)]})
+
+
+@app.post('/api/shift-test/cancel')
+@require_user
+def api_shift_cancel():
+    run_id = str((request.get_json(silent=True) or {}).get('run_id') or '')
+    scenario = _shift_report_run_scenario(run_id)
+    if not scenario:
+        return jsonify({'cancelled': True})
+    actor = f'{_actor_login()}:{run_id}'
+    with _shift_report_test_lock:
+        if actor in _shift_report_submitting:
+            return jsonify({'error': 'Отчёт отправляется. Дождитесь результата.'}), 409
+        _shift_report_submitting.add(actor)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            run = conn.execute('SELECT * FROM shift_webapp_runs WHERE id=?', (run_id,)).fetchone()
+            if run['completed_at'] or run['finished_at']:
+                return jsonify({'error': 'Отправка уже началась. Продолжите отправку этого отчёта.',
+                                'completed': bool(run['completed_at'])}), 409
+            if not run['cancelled_at']:
+                latest = conn.execute(
+                    'SELECT active_run_id AS id, changed_at FROM club_status_updates WHERE club=?',
+                    (run['club'],),
+                ).fetchone()
+                legacy_owner = False
+                if latest and latest['id'] is None and latest['changed_at'] == run['started_at']:
+                    last_run = conn.execute('SELECT id FROM shift_webapp_runs WHERE club=? ORDER BY rowid DESC LIMIT 1',
+                                            (run['club'],)).fetchone()
+                    legacy_owner = bool(last_run and last_run['id'] == run_id)
+                owns_status = latest and (latest['id'] == run_id or legacy_owner)
+                if owns_status and run['action'] == 'close':
+                    conn.execute('UPDATE clubs SET status=? WHERE club=? AND status=?',
+                                 (run['previous_status'] or 'Открыт', run['club'],
+                                  'Закрыт' if legacy_owner else 'Закрывается'))
+                    conn.execute('UPDATE club_status_updates SET active_run_id=NULL, changed_at=? WHERE club=?',
+                                 (_effective_now().strftime('%Y-%m-%d %H:%M:%S'), run['club']))
+                elif legacy_owner and run['action'] == 'open':
+                    conn.execute("UPDATE clubs SET status='Подготовка к открытию' WHERE club=? AND status='Открыт'",
+                                 (run['club'],))
+                conn.execute('UPDATE shift_webapp_runs SET cancelled_at=? WHERE id=?',
+                             (_effective_now().strftime('%Y-%m-%d %H:%M:%S'), run_id))
+        try:
+            refresh_club_status_dashboard(_notification_bot(), DB_PATH)
+        except Exception as error:
+            print(f'Не удалось обновить карточку статусов после отмены: {error}')
+        return jsonify({'cancelled': True})
+    finally:
+        conn.close()
+        with _shift_report_test_lock:
+            _shift_report_submitting.discard(actor)
+
+
 @app.post('/api/shift-test/start')
 @require_user
 def api_shift_test_start():
@@ -4486,6 +4682,7 @@ def api_shift_test_start():
     if str(payload.get('version') or '') != scenario['version']:
         raise ValueError('Сценарий смены изменился. Начните заново')
     try:
+        _require_current_shift_report(scenario)
         result = _start_shift_report_run(
             scenario,
             run_id,
@@ -4557,6 +4754,10 @@ def api_shift_test_submit():
         raise ValueError('Отчёт относится к другому действию')
     if scenario.get('completed'):
         return jsonify({'sent': True, 'completed': True, 'already_completed': True})
+    if not scenario.get('submission_started'):
+        _require_current_shift_report(scenario)
+    if scenario.get('cancelled'):
+        raise ValueError('Отчёт отменён')
     answers, photos, cleanliness_photos = _shift_report_test_data(
         scenario, payload,
     )
@@ -4578,6 +4779,8 @@ def api_shift_test_submit():
         result = _complete_shift_report_run(
             scenario, payload, answers, photos, cleanliness_photos,
         )
+    except ValueError:
+        raise
     except Exception as error:
         print(f'Ошибка завершения отчёта смены: {error}')
         return jsonify({

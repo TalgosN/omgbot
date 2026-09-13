@@ -842,6 +842,7 @@ class KpiWebTest(unittest.TestCase):
                     }
                     resumed = kpi_web._latest_shift_report_run_scenario(
                         'close',
+                        shift=scenario['shift'],
                         now=datetime(
                             2026, 8, 11, 0, 1,
                             tzinfo=ZoneInfo('Europe/Moscow'),
@@ -1097,7 +1098,7 @@ class KpiWebTest(unittest.TestCase):
         )
         self.assertEqual(status_before, 'Открыт')
         self.assertEqual(confirmed.status_code, 200)
-        self.assertEqual(status_after, 'Закрыт')
+        self.assertEqual(status_after, 'Закрывается')
 
     def test_shift_report_updates_working_records_and_sends_album(self):
         today = kpi_web._moscow_today().isoformat()
@@ -1322,6 +1323,7 @@ class KpiWebTest(unittest.TestCase):
                 patch.object(kpi_web, '_notification_bot', return_value=bot),
                 patch.object(kpi_web, 'refresh_club_status_dashboard', return_value=True),
                 patch.object(kpi_web, 'update_table_open'),
+                patch.object(kpi_web, '_shift_close_tasks', return_value=[]),
                 patch.object(kpi_web, '_shift_report_test_sent_at', {}),
                 patch.dict(kpi_web.CHATS, {
                     'reports': '-100-reports',
