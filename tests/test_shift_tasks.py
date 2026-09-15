@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -485,7 +486,7 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(stored, ('completed', '@employee', '-1001'))
         self.assertEqual(media_count, task['required_attachments'])
 
-    def test_management_can_review_tasks_but_cannot_execute_them(self):
+    def test_manager_can_complete_task_without_personal_shift(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
         self._add_shift()
         now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
@@ -502,11 +503,75 @@ class ShiftTasksTest(unittest.TestCase):
         )
 
         self.assertTrue(tasks)
-        self.assertFalse(tasks[0]['can_execute'])
-        with self.assertRaisesRegex(ValueError, 'только для просмотра'):
-            shift_tasks.start_app_task(
-                manager, tasks[0]['id'], db_path=self.db_path,
+        self.assertTrue(tasks[0]['can_execute'])
+        task = shift_tasks.start_app_task(
+            manager, tasks[0]['id'], db_path=self.db_path,
+        )
+        self.assertEqual(task['status'], 'in_progress')
+        self.assertTrue(shift_tasks.app_task_report(
+            manager, task['id'], db_path=self.db_path, now=now,
+        )['can_execute'])
+        bot = FakeBot()
+        uploads = [{
+            'content': b'photo', 'filename': 'report.jpg',
+            'media_type': 'photo', 'file_size': 5,
+        }] * task['required_attachments']
+        with patch.object(shift_tasks, 'CHATS', {'reports': '-1001'}):
+            with self.assertRaisesRegex(ValueError, 'Нужно добавить вложений'):
+                shift_tasks.complete_app_task(
+                    manager, task['id'], [], bot, db_path=self.db_path,
+                )
+            result = shift_tasks.complete_app_task(
+                manager, task['id'], uploads, bot, db_path=self.db_path,
             )
+        self.assertEqual(result['status'], 'completed')
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            stored = conn.execute(
+                '''SELECT completed_by_login, completed_by_chatid, report_chatid
+                   FROM shift_task_instances WHERE id=?''', (task['id'],),
+            ).fetchone()
+        self.assertEqual(stored, ('@manager', '202', '-1001'))
+        self.assertTrue(bot.messages)
+
+    def test_owner_tasks_remain_read_only(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        owner = {'chatid': '303', 'login': '@owner', 'status': 3}
+        tasks = shift_tasks.app_task_list(owner, db_path=self.db_path, now=now)
+        self.assertTrue(tasks)
+        self.assertFalse(tasks[0]['can_execute'])
+        self.assertFalse(shift_tasks.app_task_report(
+            owner, tasks[0]['id'], db_path=self.db_path, now=now,
+        )['can_execute'])
+        for action, args in (
+            (shift_tasks.start_app_task, ()),
+            (shift_tasks.complete_app_task, ([], None)),
+            (shift_tasks.skip_app_task, ('Причина пропуска', None)),
+        ):
+            with self.subTest(action=action.__name__):
+                with self.assertRaisesRegex(ValueError, 'только для просмотра'):
+                    action(owner, tasks[0]['id'], *args, db_path=self.db_path)
+
+    def test_manager_can_skip_task_with_reason(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        manager = {'chatid': '202', 'login': '@manager', 'status': 2}
+        task = shift_tasks.app_task_list(
+            manager, db_path=self.db_path, now=now,
+        )[0]
+        with patch.object(shift_tasks, 'CHATS', {'reports': '-1001'}):
+            shift_tasks.skip_app_task(
+                manager, task['id'], 'Клуб недоступен', FakeBot(),
+                db_path=self.db_path,
+            )
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            stored = conn.execute(
+                '''SELECT status, skipped_by_login, skip_reason
+                   FROM shift_task_instances WHERE id=?''', (task['id'],),
+            ).fetchone()
+        self.assertEqual(stored, ('skipped', '@manager', 'Клуб недоступен'))
 
     def test_management_can_open_submitted_task_media(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)

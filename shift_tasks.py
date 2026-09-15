@@ -1127,7 +1127,7 @@ def app_task_list(
             ).fetchall()
         return [
             _app_task_payload(
-                row, current, can_execute=actor['role'] < ROLE_MANAGER,
+                row, current, can_execute=actor['role'] <= ROLE_MANAGER,
             )
             for row in rows
             if (
@@ -1166,7 +1166,7 @@ def app_task_report(user, instance_id, db_path=DB_PATH, now=None):
             (instance_id,),
         ).fetchall()
         payload = _app_task_payload(
-            instance, current, can_execute=actor['role'] < ROLE_MANAGER,
+            instance, current, can_execute=actor['role'] <= ROLE_MANAGER,
         )
         payload['media'] = [dict(row) for row in media]
         payload['report_chatid'] = instance['report_chatid']
@@ -1211,7 +1211,7 @@ def app_task_media_file(user, instance_id, media_id, db_path=DB_PATH):
 
 def start_app_task(user, instance_id, db_path=DB_PATH):
     actor = _app_actor(user)
-    if actor['role'] >= ROLE_MANAGER:
+    if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     initialize_shift_tasks_schema(db_path)
     conn = sqlite3.connect(db_path)
@@ -1310,7 +1310,7 @@ def _send_app_task_report(bot, instance, actor, uploads):
 
 def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
     actor = _app_actor(user)
-    if actor['role'] >= ROLE_MANAGER:
+    if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     with _task_app_completion_lock:
         conn = sqlite3.connect(db_path)
@@ -1390,7 +1390,7 @@ def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
 
 def skip_app_task(user, instance_id, reason, bot, db_path=DB_PATH):
     actor = _app_actor(user)
-    if actor['role'] >= ROLE_MANAGER:
+    if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     reason = str(reason or '').strip()
     if not 3 <= len(reason) <= 500:
