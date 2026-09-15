@@ -185,7 +185,14 @@ function loadLocalDraft() {
 
 function saveDraft() {
   runtime.draft.updated_at = new Date().toISOString();
-  localStorage.setItem(draftStorageKey(), JSON.stringify(runtime.draft));
+  try {
+    localStorage.setItem(draftStorageKey(), JSON.stringify(runtime.draft));
+    $('#shiftDraftStatus').textContent = 'Черновик сохранён на этом устройстве';
+    $('#shiftDraftStatus').classList.remove('error');
+  } catch (_) {
+    $('#shiftDraftStatus').textContent = 'Не удалось сохранить черновик. Не закрывайте приложение до отправки.';
+    $('#shiftDraftStatus').classList.add('error');
+  }
   const arrival = runtime.draft.arrival_at || runtime.scenario?.arrival_at || runtime.draft.started_at;
   $('#arrivalStatus').hidden = runtime.draft.action !== 'open' || !arrival;
   $('#arrivalStatus').textContent = arrival ? `Приход зафиксирован: ${arrival.slice(11, 16)}` : '';
@@ -1064,6 +1071,7 @@ async function beginShift(earlyConfirmed = false) {
 async function submitReport() {
   if (runtime.submitting || !runtime.draft) return;
   runtime.submitting = true;
+  OmgApp.busy(document.querySelector('main'), true);
   const button = $('#sendReport');
   button.disabled = true;
   button.textContent = 'Отправляем…';
@@ -1127,6 +1135,7 @@ async function submitReport() {
     button.textContent = 'Завершить отчёт';
   } finally {
     runtime.submitting = false;
+    OmgApp.busy(document.querySelector('main'), false);
     if (runtime.draft) {
       button.disabled = false;
       button.textContent = 'Завершить отчёт';
@@ -1138,6 +1147,7 @@ async function showReportSuccess() {
   try { await deleteDraft(); }
   catch (error) { console.warn('Не удалось очистить отправленный черновик', error); }
   runtime.draft = null;
+  $('#shiftDraftStatus').textContent = '';
   $('#cancelReport').hidden = true;
   releaseReviewUrls();
   setStage('successStage');

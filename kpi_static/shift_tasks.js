@@ -1,13 +1,50 @@
 const tg = window.Telegram?.WebApp;
 const dialog = document.querySelector('#taskDialog');
 const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null, submitting: false };
+let restoringTask = false;
+let draftSaveVersion = 0;
+let taskListReady = false;
+const expandedGroups = new Set();
+
+function saveTaskDraft() {
+  if (!state.current || restoringTask) return Promise.resolve();
+  const version = ++draftSaveVersion;
+  const label = document.querySelector('#taskDraftStatus');
+  label.textContent = 'Сохраняем черновик…';
+  label.classList.remove('error');
+  const value = {
+    files: state.attachments.map((item) => item.file),
+    reason: document.querySelector('#skipReason').value,
+    updatedAt: Date.now(),
+  };
+  return OmgApp.drafts.put(`task:${state.current.id}`, value).then(() => {
+    if (version === draftSaveVersion) label.textContent = 'Черновик сохранён на этом устройстве';
+  }).catch(() => {
+    if (version !== draftSaveVersion) return;
+    label.textContent = 'Не удалось сохранить на устройстве. Не закрывайте приложение до отправки.';
+    label.classList.add('error');
+  });
+}
+
+async function removeTaskDraft() {
+  await OmgApp.drafts.remove(`task:${state.current.id}`);
+  draftSaveVersion += 1;
+  document.querySelector('#skipReason').value = '';
+  document.querySelector('#taskDraftStatus').textContent = '';
+}
+
+function taskBack() {
+  if (state.submitting || restoringTask) return;
+  if (dialog.open) dialog.close();
+  else window.location.assign('/shift');
+}
 
 tg?.ready();
 tg?.expand();
 tg?.setHeaderColor('#0d0913');
 tg?.setBackgroundColor('#0d0913');
 tg?.BackButton?.show();
-tg?.BackButton?.onClick(() => window.location.assign('/shift'));
+tg?.BackButton?.onClick(taskBack);
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -111,8 +148,8 @@ function renderTasks() {
         </button>`;
       }).join('');
       const directTask = group.tasks.length === 1 ? group.tasks[0] : null;
-      return `<article class="task-group ${groupClass}">
-        <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" data-direct-task="${directTask?.id || ''}" aria-expanded="false">
+      return `<article class="task-group ${groupClass}${expandedGroups.has(group.key) ? ' expanded' : ''}">
+        <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" data-direct-task="${directTask?.id || ''}" aria-expanded="${expandedGroups.has(group.key)}">
           <span class="task-group-icon">${completed.length === group.tasks.length ? '✓' : completed.length}</span>
           <span class="task-group-copy">
             <small>${state.scope === 'history' ? shortDate(group.date) : `${group.tasks.length} клуб.`}</small>
@@ -121,7 +158,7 @@ function renderTasks() {
           </span>
           <span class="task-group-progress"><b>${directTask ? status(directTask).label : `${groupLabel} · открыть`}</b><i>${directTask ? '→' : '⌄'}</i></span>
         </button>
-        <div class="task-group-details" hidden>${rows}</div>
+        <div class="task-group-details" ${expandedGroups.has(group.key) ? '' : 'hidden'}>${rows}</div>
       </article>`;
     }).join('')
     : `<div class="task-empty">${state.scope === 'active' ? 'На сегодня активных задач нет. Всё готово ✓' : 'За последние 30 дней задач не найдено.'}</div>`;
@@ -221,7 +258,7 @@ function renderAttachments() {
 }
 
 function addFiles(files) {
-  if (state.submitting) return;
+  if (state.submitting || restoringTask) return;
   const allowed = new Set(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime', 'video/webm']);
   const errorBox = document.querySelector('#dialogError');
   errorBox.hidden = true;
@@ -236,11 +273,17 @@ function addFiles(files) {
     state.attachments.push({ file, url: URL.createObjectURL(file) });
   }
   renderAttachments();
+  saveTaskDraft();
 }
 
-function openTask(task) {
-  if (state.submitting) return;
-  if (state.current?.id !== task.id) clearAttachments();
+async function openTask(task) {
+  if (state.submitting || restoringTask) return;
+  const changed = state.current?.id !== task.id;
+  if (changed) {
+    clearAttachments();
+    document.querySelector('#skipReason').value = '';
+    document.querySelector('#taskDraftStatus').textContent = '';
+  }
   clearReportMedia();
   state.current = task;
   const itemStatus = status(task);
@@ -285,9 +328,30 @@ function openTask(task) {
     renderAttachments();
   }
   dialog.showModal();
+  if (changed && task.can_execute) {
+    restoringTask = true;
+    OmgApp.busy(dialog, true);
+    try {
+      const saved = await OmgApp.drafts.get(`task:${task.id}`);
+      if (saved) {
+        state.attachments = (saved.files || []).map((file) => ({ file, url: URL.createObjectURL(file) }));
+        document.querySelector('#skipReason').value = saved.reason || '';
+        document.querySelector('#taskDraftStatus').textContent = 'Черновик восстановлен · фото и причина сохранены';
+        renderAttachments();
+      }
+    } catch (_) {
+      document.querySelector('#taskDraftStatus').textContent = 'Хранилище недоступно. Не закрывайте приложение до отправки.';
+    } finally {
+      restoringTask = false;
+      OmgApp.busy(dialog, false);
+    }
+  }
 }
 
 async function startCurrentTask() {
+  if (state.submitting || restoringTask) return;
+  state.submitting = true;
+  OmgApp.busy(dialog, true);
   const button = document.querySelector('#startTask');
   button.disabled = true;
   try {
@@ -299,74 +363,97 @@ async function startCurrentTask() {
     document.querySelector('#dialogError').textContent = error.message;
     document.querySelector('#dialogError').hidden = false;
   } finally {
+    state.submitting = false;
+    OmgApp.busy(dialog, false);
     button.disabled = false;
   }
 }
 
 function uploadTask(form, button) {
   const taskId = state.current.id;
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/shift/tasks/${taskId}/complete`);
-    xhr.timeout = 180000;
-    xhr.setRequestHeader('X-Telegram-Init-Data', tg?.initData || '');
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) button.textContent = `Отправляем · ${Math.round(event.loaded / event.total * 100)}%`;
-    });
-    xhr.addEventListener('load', () => {
-      let payload = {};
-      try { payload = JSON.parse(xhr.responseText || '{}'); } catch (_) { /* noop */ }
-      if (xhr.status >= 200 && xhr.status < 300 && payload.status === 'completed' && payload.id === taskId) resolve(payload);
-      else reject(new Error(payload.error || 'Не удалось отправить отчёт'));
-    });
-    xhr.addEventListener('error', () => reject(new Error('Соединение прервалось во время отправки')));
-    xhr.addEventListener('timeout', () => reject(new Error('Сервер не подтвердил завершение. Вложения сохранены в форме — повторите отправку.')));
-    xhr.addEventListener('abort', () => reject(new Error('Отправка прервана. Повторите попытку.')));
-    xhr.send(form);
+  return OmgApp.upload(`/api/shift/tasks/${taskId}/complete`, form, (text) => {
+    button.textContent = text;
+  }).then((payload) => {
+    if (payload.status !== 'completed' || payload.id !== taskId) throw new Error('Сервер не подтвердил завершение задачи');
+    return payload;
   });
 }
 
 async function completeCurrentTask() {
-  if (state.submitting) return;
+  if (state.submitting || restoringTask) return;
   state.submitting = true;
+  OmgApp.busy(dialog, true);
   const button = document.querySelector('#completeTask');
   const form = new FormData();
   state.attachments.forEach((item) => form.append('media', item.file, item.file.name));
   button.disabled = true;
   const original = button.textContent;
   try {
+    await saveTaskDraft();
     await uploadTask(form, button);
+    await removeTaskDraft().catch(() => {});
     clearAttachments();
     dialog.close();
     await loadTasks(state.scope);
     try { tg?.HapticFeedback?.notificationOccurred('success'); }
     catch (_error) { /* Delivery does not depend on haptic feedback. */ }
   } catch (error) {
+    try {
+      const current = await api(`/api/shift/tasks/${state.current.id}/report`);
+      if (current.status === 'completed' || current.status === 'skipped') {
+        await removeTaskDraft().catch(() => {});
+        clearAttachments();
+        state.submitting = false;
+        OmgApp.busy(dialog, false);
+        await loadTasks();
+        await openTask(current);
+        return;
+      }
+    } catch (_) { /* Keep the draft until the server confirms the outcome. */ }
     document.querySelector('#dialogError').textContent = error.message;
     document.querySelector('#dialogError').hidden = false;
   } finally {
     state.submitting = false;
+    OmgApp.busy(dialog, false);
     button.textContent = original;
     button.disabled = false;
   }
 }
 
 async function skipCurrentTask() {
-  if (state.submitting) return;
+  if (state.submitting || restoringTask) return;
+  state.submitting = true;
+  OmgApp.busy(dialog, true);
   const reason = document.querySelector('#skipReason').value.trim();
   const button = document.querySelector('#skipTask');
   button.disabled = true;
   try {
+    await saveTaskDraft();
     await api(`/api/shift/tasks/${state.current.id}/skip`, {
       method: 'POST', body: JSON.stringify({ reason }),
     });
+    await removeTaskDraft().catch(() => {});
     clearAttachments();
     dialog.close();
     await loadTasks(state.scope);
   } catch (error) {
+    try {
+      const current = await api(`/api/shift/tasks/${state.current.id}/report`);
+      if (current.status === 'completed' || current.status === 'skipped') {
+        await removeTaskDraft().catch(() => {});
+        clearAttachments();
+        state.submitting = false;
+        OmgApp.busy(dialog, false);
+        await loadTasks();
+        await openTask(current);
+        return;
+      }
+    } catch (_) { /* Keep the draft until the server confirms the outcome. */ }
     document.querySelector('#dialogError').textContent = error.message;
     document.querySelector('#dialogError').hidden = false;
   } finally {
+    state.submitting = false;
+    OmgApp.busy(dialog, false);
     button.disabled = false;
   }
 }
@@ -400,6 +487,8 @@ document.querySelector('#taskList').addEventListener('click', (event) => {
     toggle.setAttribute('aria-expanded', String(!expanded));
     group.classList.toggle('expanded', !expanded);
     details.hidden = expanded;
+    if (expanded) expandedGroups.delete(toggle.dataset.group);
+    else expandedGroups.add(toggle.dataset.group);
     return;
   }
   const card = event.target.closest('[data-task]');
@@ -407,7 +496,7 @@ document.querySelector('#taskList').addEventListener('click', (event) => {
   const task = state.tasks.find((item) => item.id === Number(card.dataset.task));
   if (task) openTask(task);
 });
-document.querySelector('#closeTaskDialog').addEventListener('click', () => dialog.close());
+document.querySelector('#closeTaskDialog').addEventListener('click', taskBack);
 dialog.addEventListener('close', clearReportMedia);
 document.querySelector('#startTask').addEventListener('click', startCurrentTask);
 document.querySelector('#openTaskCamera').addEventListener('click', () => document.querySelector('#taskCameraInput').click());
@@ -421,6 +510,23 @@ document.querySelector('#attachmentList').addEventListener('click', (event) => {
   const [removed] = state.attachments.splice(Number(button.dataset.remove), 1);
   if (removed) URL.revokeObjectURL(removed.url);
   renderAttachments();
+  saveTaskDraft();
+});
+
+document.querySelector('#skipReason').addEventListener('input', saveTaskDraft);
+document.querySelector('#discardTaskDraft').addEventListener('click', async () => {
+  if (state.submitting || restoringTask || !window.confirm('Удалить фото и причину из черновика?')) return;
+  restoringTask = true;
+  OmgApp.busy(dialog, true);
+  try {
+    await removeTaskDraft();
+    clearAttachments();
+    document.querySelector('#taskDraftStatus').textContent = 'Черновик сброшен';
+  } catch (_) { document.querySelector('#taskDraftStatus').textContent = 'Не удалось сбросить черновик'; }
+  finally {
+    restoringTask = false;
+    OmgApp.busy(dialog, false);
+  }
 });
 document.querySelector('#completeTask').addEventListener('click', completeCurrentTask);
 document.querySelector('#showSkipForm').addEventListener('click', () => { document.querySelector('#skipForm').hidden = false; });
@@ -431,9 +537,28 @@ document.querySelector('#taskReportTelegram').addEventListener('click', (event) 
   tg.openTelegramLink(event.currentTarget.href);
 });
 
+function saveTaskView() {
+  if (taskListReady) OmgApp.saveView({ scope: state.scope, club: state.club, expanded: [...expandedGroups] });
+}
+window.addEventListener('pagehide', saveTaskView);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveTaskView(); });
+
 (async () => {
-  const payload = await loadTasks('active');
+  try { OmgApp.setIdentity(await api('/api/me')); }
+  catch (error) {
+    document.querySelector('#taskNotice').textContent = error.message;
+    document.querySelector('#taskNotice').hidden = false;
+    return;
+  }
   const requestedId = Number(new URLSearchParams(window.location.search).get('task'));
+  const saved = requestedId ? {} : OmgApp.viewState();
+  state.club = saved.club || '';
+  (saved.expanded || []).forEach((key) => expandedGroups.add(key));
+  const scope = saved.scope === 'history' ? 'history' : 'active';
+  document.querySelectorAll('.task-tabs button').forEach((item) => item.classList.toggle('active', item.dataset.scope === scope));
+  const payload = await loadTasks(scope);
+  taskListReady = Boolean(payload);
+  if (!requestedId) OmgApp.restoreScroll(saved);
   if (!payload || !requestedId) return;
   let task = state.tasks.find((item) => item.id === requestedId);
   if (!task) {

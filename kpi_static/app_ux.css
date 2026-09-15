@@ -1,0 +1,12 @@
+.omg-connection-status { position:sticky; top:0; z-index:10000; padding:10px 14px; color:#ffe4ad; background:#423019; font:600 12px/1.4 Montserrat,sans-serif; text-align:center; }
+.omg-connection-status[hidden] { display:none; }
+.omg-draft-status { margin:10px 0; color:var(--muted,#b8afc5); font-size:11px; line-height:1.5; }
+.omg-draft-status.error { color:#f487a4; }
+.omg-draft-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.omg-draft-actions button { flex:none; min-height:40px; padding:8px 10px; border:1px solid var(--line,rgba(174,151,255,.2)); border-radius:12px; color:inherit; background:transparent; font:600 11px Montserrat,sans-serif; cursor:pointer; }
+dialog,dialog[class] { max-width:calc(100vw - 24px); max-height:calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overscroll-behavior:contain; }
+button,a,input,select,textarea { -webkit-tap-highlight-color:transparent; }
+button:focus-visible,a:focus-visible,summary:focus-visible { outline:2px solid var(--accent,#b998ff); outline-offset:3px; }
+[data-busy="true"] { cursor:progress; }
+[data-busy="true"] input,[data-busy="true"] textarea,[data-busy="true"] select { pointer-events:none; }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto !important; animation-duration:.01ms !important; transition-duration:.01ms !important; } }

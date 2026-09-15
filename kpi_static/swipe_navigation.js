@@ -31,7 +31,7 @@
   function goBack() {
     const dialog = openedDialog();
     if (dialog) {
-      dialog.close();
+      if (dialog.dispatchEvent(new Event('cancel', { cancelable: true }))) dialog.close();
       return;
     }
     const event = new CustomEvent('omg:navigation-back', { cancelable: true });
@@ -40,7 +40,7 @@
   }
 
   function goToNextModule() {
-    if (openedDialog()) return;
+    if (openedDialog() || document.querySelector('[data-busy="true"]')) return;
     const index = modules.indexOf(currentPath());
     if (index < 0) return;
     navigate(modules[(index + 1) % modules.length]);

@@ -2,6 +2,56 @@ const tg = window.Telegram?.WebApp;
 const $ = (selector) => document.querySelector(selector);
 const PROBLEM_HOLD_DELAY_MS = 420;
 const PROBLEM_MAX_VIDEO_MS = 15000;
+let restoringProblem = false;
+let submittingProblem = false;
+let problemDraftVersion = 0;
+
+function saveProblemDraft() {
+  if (restoringProblem || !state.me || submittingProblem) return Promise.resolve();
+  const version = ++problemDraftVersion;
+  const label = $('#problemDraftStatus');
+  label.textContent = 'Сохраняем черновик…';
+  label.classList.remove('error');
+  const form = $('#createForm');
+  const fields = Object.fromEntries([...form.elements].filter((element) => element.name && element.type !== 'file').map((element) => [element.name, element.value]));
+  const value = { fields, locations: selectedRepairLocations().map((entry) => entry.id), media: state.problemMedia, updatedAt: Date.now() };
+  return OmgApp.drafts.put('problem', value).then(() => {
+    if (version === problemDraftVersion) label.textContent = 'Черновик сохранён на этом устройстве';
+  }).catch(() => {
+    if (version !== problemDraftVersion) return;
+    label.textContent = 'Не удалось сохранить на устройстве. Не закрывайте приложение до отправки.';
+    label.classList.add('error');
+  });
+}
+
+async function restoreProblemDraft() {
+  restoringProblem = true;
+  $('#newProblem').disabled = true;
+  try {
+    const saved = await OmgApp.drafts.get('problem');
+    if (!saved) return;
+    const fields = saved.fields || {};
+    $('#createType').value = fields.type || '';
+    $('#createClub').value = fields.club || '';
+    await updateCreateFields();
+    $('#repairItem').value = fields.repair_item_id || '';
+    updateRepairDetails();
+    $('#repairDetail').value = fields.repair_detail_id || '';
+    $('#createTitle').value = fields.title || '';
+    $('#createForm [name="description"]').value = fields.description || '';
+    $('#repairLocations').querySelectorAll('input').forEach((input) => {
+      input.checked = (saved.locations || []).map(Number).includes(Number(input.value));
+    });
+    updateRepairTitle();
+    state.problemMedia = saved.media || null;
+    renderProblemMedia();
+    $('#problemDraftStatus').textContent = 'Черновик восстановлен · проверьте поля перед отправкой';
+    $('#newProblem').textContent = 'Продолжить черновик';
+  } finally {
+    restoringProblem = false;
+    $('#newProblem').disabled = false;
+  }
+}
 const state = {
   me: null, meta: null, status: 'work', tasks: [], selected: null,
   action: null, repairCatalog: null, migration: null, mappingTask: null,
@@ -86,6 +136,7 @@ function clearProblemMedia() {
   state.problemMediaUrl = null;
   $('#problemMediaFile').value = '';
   renderProblemMedia();
+  saveProblemDraft();
 }
 
 function setProblemMedia(blob, kind, filename) {
@@ -100,6 +151,7 @@ function setProblemMedia(blob, kind, filename) {
   }
   state.problemMedia = { blob, kind, filename };
   renderProblemMedia();
+  saveProblemDraft();
   closeProblemCamera();
   tg?.HapticFeedback?.notificationOccurred('success');
   return true;
@@ -924,9 +976,15 @@ document.addEventListener('click', (event) => {
 });
 $('#createForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (submittingProblem || restoringProblem) return;
+  const saving = saveProblemDraft();
+  submittingProblem = true;
+  OmgApp.busy($('#createDialog'), true);
   const button = event.submitter || $('#createForm button[type="submit"]');
+  const original = button.textContent;
   button.disabled = true;
   try {
+    await saving;
     const data = new FormData(event.target);
     if (state.problemMedia?.kind === 'photo') {
       data.set('photo', state.problemMedia.blob, state.problemMedia.filename);
@@ -936,7 +994,12 @@ $('#createForm').addEventListener('submit', async (event) => {
     if (data.get('type') === 'Ремонт') {
       data.set('repair_location_ids', JSON.stringify(selectedRepairLocations().map((entry) => entry.id)));
     }
-    await api('/api/problems', { method: 'POST', body: data });
+    const result = await OmgApp.upload('/api/problems', data, (text) => { button.textContent = text; });
+    if (!result?.id) throw new Error('Создание не подтверждено. Проверьте список заявок перед повторной отправкой.');
+    await OmgApp.drafts.remove('problem').catch(() => {});
+    problemDraftVersion += 1;
+    $('#problemDraftStatus').textContent = '';
+    $('#newProblem').textContent = '+ Добавить';
     event.target.reset();
     clearProblemMedia();
     await updateCreateFields();
@@ -948,7 +1011,32 @@ $('#createForm').addEventListener('submit', async (event) => {
     else await loadTasks();
     toast('Проблема добавлена анонимно');
   } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; }
+  finally {
+    submittingProblem = false;
+    OmgApp.busy($('#createDialog'), false);
+    button.disabled = false;
+    button.textContent = original;
+  }
+});
+$('#createForm').addEventListener('input', () => saveProblemDraft());
+$('#createForm').addEventListener('change', () => saveProblemDraft());
+$('#discardProblemDraft').addEventListener('click', async () => {
+  if (submittingProblem || restoringProblem || !window.confirm('Удалить текст и вложение из черновика?')) return;
+  restoringProblem = true;
+  OmgApp.busy($('#createDialog'), true);
+  try {
+    await OmgApp.drafts.remove('problem');
+    problemDraftVersion += 1;
+    $('#createForm').reset();
+    clearProblemMedia();
+    await updateCreateFields();
+    $('#problemDraftStatus').textContent = 'Черновик сброшен';
+    $('#newProblem').textContent = '+ Добавить';
+  } catch (_) { toast('Не удалось сбросить черновик', true); }
+  finally {
+    restoringProblem = false;
+    OmgApp.busy($('#createDialog'), false);
+  }
 });
 window.addEventListener('pagehide', () => closeProblemCamera(false));
 document.addEventListener('visibilitychange', () => {
@@ -1120,12 +1208,20 @@ $('#messageForm').addEventListener('submit', async (event) => {
 });
 
 async function init() {
+  $('#newProblem').disabled = true;
   try {
     [state.me, state.meta] = await Promise.all([api('/api/me'), api('/api/problems-meta')]);
+    OmgApp.setIdentity(state.me);
     $('#problemUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#problemUserBadge').textContent = state.me.role_name;
     renderFilters();
+    const directLink = window.location.search !== '';
+    const saved = directLink ? {} : OmgApp.viewState();
+    if (['work', 'review', 'done'].includes(saved.status)) state.status = saved.status;
+    if (state.meta.clubs.includes(saved.club)) $('#clubFilter').value = saved.club;
+    if (state.meta.types.includes(saved.type)) $('#typeFilter').value = saved.type;
     applyUrlFilters();
+    document.querySelectorAll('#problemTabs button').forEach((button) => button.classList.toggle('active', button.dataset.status === state.status));
     $('#repairCatalog').classList.toggle('hidden', !state.meta.can_edit_repair_catalog);
     $('#equipmentMode').classList.toggle('hidden', !state.meta.can_view_equipment);
     $('#boardViewTabs').classList.toggle('hidden', !state.meta.can_view_analytics);
@@ -1145,6 +1241,12 @@ async function init() {
       { length: currentYear - 2023 }, (_, index) => currentYear - index,
     ).map((year) => `<option value="${year}">${year}</option>`).join('');
     await loadTasks();
+    await restoreProblemDraft().catch(() => {
+      $('#problemDraftStatus').textContent = 'Хранилище недоступно. Не закрывайте приложение до отправки.';
+    });
+    if (!directLink && saved.view === 'analytics' && state.meta.can_view_analytics) await setBoardView('analytics');
+    if (!directLink && saved.view === 'equipment' && state.meta.can_view_equipment) await setBoardView('equipment');
+    if (!directLink) OmgApp.restoreScroll(saved);
     if (new URLSearchParams(window.location.search).get('new') === '1') {
       $('#createDialog').showModal();
     }
@@ -1152,4 +1254,10 @@ async function init() {
     $('#problemList').innerHTML = `<div class="empty-card">${escapeHtml(error.message)}</div>`;
   }
 }
+function saveProblemView() {
+  if (!state.me) return;
+  OmgApp.saveView({ status: state.status, club: $('#clubFilter').value, type: $('#typeFilter').value, view: state.boardView });
+}
+window.addEventListener('pagehide', saveProblemView);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveProblemView(); });
 init();

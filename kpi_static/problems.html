@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/static/home.css">
   <link rel="stylesheet" href="/static/problems.css?v=20260904-2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/app_ux.css?v=20260915-1">
 </head>
 <body>
   <main class="problem-shell">
@@ -139,6 +140,7 @@
         <article id="problemMediaPreview" class="problem-media-preview hidden"></article>
       </section>
       <input id="problemMediaFile" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" hidden>
+      <div class="omg-draft-actions"><p id="problemDraftStatus" class="omg-draft-status" role="status"></p><button id="discardProblemDraft" type="button">Сбросить черновик</button></div>
       <button class="primary-button wide" type="submit">Добавить анонимно</button>
     </form>
   </dialog>
@@ -223,8 +225,9 @@
   </section>
 
   <div id="toast" class="problem-toast"></div>
-  <script src="/static/problems.js?v=20260908-1"></script>
-  <script src="/static/swipe_navigation.js"></script>
+  <script src="/static/app_ux.js?v=20260915-1"></script>
+  <script src="/static/problems.js?v=20260915-1"></script>
+  <script src="/static/swipe_navigation.js?v=20260915-1"></script>
   <script src="/static/employee_preview.js?v=20260903-1"></script>
 </body>
 </html>

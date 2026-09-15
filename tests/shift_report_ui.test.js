@@ -85,6 +85,7 @@ async function testShiftReportUi(source) {
   const submission = { draft: { id: 'close-run', task_reasons: {} }, scenario: { action: 'close' }, submitting: false };
   const submit = compile('submitReport', {
     runtime: submission,
+    OmgApp: { busy() {} }, document: { querySelector: () => ({}) },
     $: (key) => nodes[key] || (nodes[key] = { showModal() { dialogOpened = true; } }),
     fetchScenario: async () => ({ submission_started: false }),
     api: async () => ({ tasks: [{ id: 1, title: 'Task' }] }),

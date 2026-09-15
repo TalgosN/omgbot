@@ -1245,6 +1245,16 @@ async function initialize() {
   updateChartOptions();
   try {
     state.me = await api('/api/me');
+    OmgApp.setIdentity(state.me);
+    const saved = OmgApp.viewState();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(saved.day || '')) {
+      state.day = saved.day;
+      state.month = state.day.slice(0, 7);
+    }
+    if (['rating', 'shifts', 'name'].includes(saved.sort)) state.sort = saved.sort;
+    $('#sortSelect').value = state.sort;
+    $('#searchInput').value = saved.search || '';
+    if (state.me.can_manage && saved.filters) state.filters = { ...state.filters, ...saved.filters };
     if (state.me.preview?.date) {
       state.day = state.me.preview.date;
       state.month = state.day.slice(0, 7);
@@ -1253,6 +1263,8 @@ async function initialize() {
       $('#analyticsMonth').value = state.month;
       syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
     }
+    $('#analyticsMonth').value = state.month;
+    syncMonthDisplay('#analyticsMonth', '#analyticsMonthDisplay');
     $('#kpiUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#userBadge').textContent = state.me.role_name;
     $('#userBadge').classList.remove('skeleton');
@@ -1263,6 +1275,8 @@ async function initialize() {
       syncMonthDisplay('#settingsMonth', '#settingsMonthDisplay');
     }
     await loadData();
+    if (['my', 'rating', 'analytics'].includes(saved.view)) await setKpiView(saved.view);
+    OmgApp.restoreScroll(saved);
   } catch (error) {
     employeeList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     showToast(error.message, true);
@@ -1345,13 +1359,12 @@ $('#sortSelect').addEventListener('change', (event) => {
   renderEmployees();
 });
 
-document.querySelector('.view-tabs').addEventListener('click', async (event) => {
-  const tab = event.target.closest('[data-view]');
-  if (!tab) return;
+async function setKpiView(view) {
+  const tab = document.querySelector(`.view-tab[data-view="${view}"]`);
+  if (!tab || tab.hidden) return;
   document.querySelectorAll('.view-tab').forEach(
     (button) => button.classList.toggle('active', button === tab),
   );
-  const view = tab.dataset.view;
   const analytics = view === 'analytics';
   const settings = view === 'settings';
   $('#myView').hidden = view !== 'my';
@@ -1361,7 +1374,23 @@ document.querySelector('.view-tabs').addEventListener('click', async (event) => 
   document.querySelector('.period-panel').hidden = analytics || settings;
   if (analytics && !state.analytics) await loadAnalytics();
   if (settings && !state.settings) await loadSettings();
+}
+
+document.querySelector('.view-tabs').addEventListener('click', async (event) => {
+  const tab = event.target.closest('[data-view]');
+  if (tab) await setKpiView(tab.dataset.view);
 });
+
+function saveKpiView() {
+  if (!state.me) return;
+  OmgApp.saveView({
+    day: state.day, sort: state.sort, filters: state.filters,
+    search: $('#searchInput').value,
+    view: document.querySelector('.view-tab.active')?.dataset.view,
+  });
+}
+window.addEventListener('pagehide', saveKpiView);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveKpiView(); });
 
 $('#myKpi').addEventListener('click', async (event) => {
   if (event.target.closest('.open-owner-settings')) {

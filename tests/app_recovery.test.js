@@ -2,10 +2,11 @@ async function testAppRecovery(sources) {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const compile = (file, name, mocks) => {
     const source = sources[file];
-    const start = source.search(new RegExp(`(?:async )?function ${name}\\(`));
-    const end = source.indexOf('\n}\n', start);
+    const declaration = source.match(new RegExp(`^( *)(?:async )?function ${name}\\(`, 'm'));
+    const start = declaration?.index ?? -1;
+    const end = source.indexOf(`\n${declaration?.[1] || ''}}\n`, start);
     assert(start >= 0 && end > start, `Missing ${name}`);
-    return new Function(...Object.keys(mocks), `${source.slice(start, end + 2)}; return ${name};`)(...Object.values(mocks));
+    return new Function(...Object.keys(mocks), `${source.slice(start, end + (declaration?.[1].length || 0) + 2)}; return ${name};`)(...Object.values(mocks));
   };
   let xhr;
   class FakeXhr {
@@ -15,26 +16,27 @@ async function testAppRecovery(sources) {
     addEventListener(name, callback) { this.events[name] = callback; }
     send() {}
   }
+  const sharedUpload = compile('app_ux.js', 'upload', { XMLHttpRequest: FakeXhr, tg: null });
   const upload = compile('shift_tasks.js', 'uploadTask', {
-    XMLHttpRequest: FakeXhr, state: { current: { id: 7 } }, tg: null,
+    OmgApp: { upload: sharedUpload }, state: { current: { id: 7 } },
   });
   for (const body of ['<html>OK</html>', '{}', '{"id":7,"status":"pending"}', '{"id":8,"status":"completed"}']) {
     const result = upload({}, {}).then(() => false, () => true);
     xhr.status = 200;
     xhr.responseText = body;
-    xhr.events.load();
+    xhr.onload();
     assert(await result, 'Unconfirmed task response must fail');
   }
   for (const event of ['timeout', 'abort', 'error']) {
     const result = upload({}, {}).then(() => false, () => true);
     assert(xhr.timeout > 0, 'Upload timeout is required');
-    xhr.events[event]();
+    xhr[`on${event}`]();
     assert(await result, `${event} must preserve the form by rejecting`);
   }
   const success = upload({}, {});
   xhr.status = 200;
   xhr.responseText = '{"id":7,"status":"completed","already_completed":true}';
-  xhr.events.load();
+  xhr.onload();
   assert((await success).already_completed, 'Confirmed retry must succeed');
 
   for (const staleFailure of [false, true]) {
@@ -86,7 +88,7 @@ async function testAppRecovery(sources) {
 if (typeof require !== 'undefined') {
   const fs = require('node:fs');
   const path = require('node:path');
-  const sources = Object.fromEntries(['shift_tasks.js', 'problems.js', 'app.js'].map((file) => [
+  const sources = Object.fromEntries(['shift_tasks.js', 'problems.js', 'app.js', 'app_ux.js'].map((file) => [
     file, fs.readFileSync(path.join(__dirname, '../kpi_static', file), 'utf8').replace(/\r\n/g, '\n'),
   ]));
   testAppRecovery(sources).then(console.log).catch((error) => { console.error(error); process.exitCode = 1; });
