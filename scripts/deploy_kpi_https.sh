@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-webapp_url="${1:-https://bot.omg-vr.ru}"
+webapp_url="${1:-https://kpi.omg-vr.ru}"
 if [[ "$webapp_url" != https://* ]]; then
     echo "Web App URL must start with https://" >&2
     exit 1
