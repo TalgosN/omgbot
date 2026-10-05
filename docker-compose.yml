@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     extra_hosts:
-      - "api.aqsi.ru:host-gateway"
+      - "api.aqsi.ru:${AQSI_TUNNEL_HOST:-host-gateway}"
     volumes:
       - ./db:/app/db
       - ./data:/app/data
