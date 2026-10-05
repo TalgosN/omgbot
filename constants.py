@@ -11,6 +11,7 @@ TELEGRAM_API_KEY = os.getenv("TELEGRAM_API_KEY")
 KPI_WEBAPP_URL = os.getenv("KPI_WEBAPP_URL", "").strip()
 FT_API_KEY = os.getenv("FT_API_KEY")
 AQSI_API_KEY = os.getenv("AQSI_API_KEY")
+AQSI_API_URL = os.getenv("AQSI_API_URL", "https://api.aqsi.ru").rstrip("/")
 WEATHER_API_KEY = os.getenv("WEATHER_KEY")
 
 # --- НОВЫЕ НАСТРОЙКИ SHIFTON API ---

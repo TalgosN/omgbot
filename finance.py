@@ -79,11 +79,11 @@ def is_difference_one_day(date_str1, date_str2):
 bdays_rate =500  
 ################################
 def define_goods():
-    response_goods_groups = requests.request("GET", f'https://api.aqsi.ru/pub/v2/GoodsCategory/list', headers=headers, timeout=15)
+    response_goods_groups = requests.request("GET", f'{AQSI_API_URL}/pub/v2/GoodsCategory/list', headers=headers, timeout=15)
 
     response_dict_goods_groups = response_goods_groups.json()
 
-    response_goods = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Goods/list', headers=headers, timeout=15)
+    response_goods = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Goods/list', headers=headers, timeout=15)
 
     response_goods = response_goods.json()
     
@@ -331,13 +331,13 @@ def create_otchet (start_dt,end_dt,message,bot):
 
 def create_data (start_dt,end_dt,message,bot):
     # Кассы
-    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers)
+    response_dev = requests.request("GET", f'{AQSI_API_URL}/pub/v3/Devices', headers=headers)
 
     response_dict_dev = response_dev.json()
 
 
     # Магазины
-    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers)
+    response_shop = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shops/list', headers=headers)
 
     response_dict_shops = response_shop.json()
 
@@ -351,7 +351,7 @@ def create_data (start_dt,end_dt,message,bot):
               "filtered.endDate": end_dt}
 
 
-    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params = params)
+    response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Receipts', headers=headers, params = params)
 
     response_dict = response.json()
 
@@ -364,7 +364,7 @@ def create_data (start_dt,end_dt,message,bot):
                  "filtered.endDate": end_dt,
                  'page': j}
   
-        response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params = params)
+        response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Receipts', headers=headers, params = params)
         response_dict = response.json() 
 
         raw_data=f'{raw_data} {json.dumps(response_dict, indent=4, sort_keys=True, ensure_ascii=False)}\n'
@@ -472,18 +472,18 @@ def inkass (start_dt,end_dt,message,bot):
       "filtered.endDate": end_dt}
       
     # Кассы
-    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers)
+    response_dev = requests.request("GET", f'{AQSI_API_URL}/pub/v3/Devices', headers=headers)
 
     response_dict_dev = response_dev.json()
 
 
     # Магазины
-    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers)
+    response_shop = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shops/list', headers=headers)
 
     response_dict_shops = response_shop.json()
 
     # Определения числа страниц по всему запросу (Смены)
-    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shifts', headers=headers, params = params)
+    response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shifts', headers=headers, params = params)
 
     response_dict = response.json()
     pages = response_dict['pages']
@@ -504,7 +504,7 @@ def inkass (start_dt,end_dt,message,bot):
 
       'page': j}
       
-      response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shifts', headers=headers, params = params)
+      response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shifts', headers=headers, params = params)
       response_dict = response.json() 
 
       raw_data_cash=f'{raw_data_cash} {json.dumps(response_dict, indent=4, sort_keys=True, ensure_ascii=False)}\n'
@@ -687,13 +687,13 @@ def check_cash (date_check):
     
 
     # Кассы
-    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers)
+    response_dev = requests.request("GET", f'{AQSI_API_URL}/pub/v3/Devices', headers=headers)
 
     response_dict_dev = response_dev.json()
 
 
     # Магазины
-    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers)
+    response_shop = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shops/list', headers=headers)
 
     response_dict_shops = response_shop.json()
     
@@ -728,7 +728,7 @@ def check_cash (date_check):
       
       "filtered.endDate": end_dt}
       
-    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shifts', headers=headers, params = params)
+    response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shifts', headers=headers, params = params)
 
     response_dict = response.json()
     
@@ -1382,18 +1382,18 @@ def get_aqsi_data_silent(start_dt, end_dt):
     goods_to_group = {n['id']: n.get('group_id') for n in response_goods.get('rows', []) if 'id' in n}
     group_to_name = {b['id']: b['name'].strip() for b in response_dict_goods_groups if 'id' in b}
     
-    response_dev = requests.request("GET", f'https://api.aqsi.ru/pub/v3/Devices', headers=headers, timeout=15).json()
-    response_shop = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Shops/list', headers=headers, timeout=15).json()
+    response_dev = requests.request("GET", f'{AQSI_API_URL}/pub/v3/Devices', headers=headers, timeout=15).json()
+    response_shop = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Shops/list', headers=headers, timeout=15).json()
     
     params = {"filtered.beginDate": start_dt, "filtered.endDate": end_dt}
-    response = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
+    response = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
     
     if 'pages' not in response: return []
     
     data = []
     for j in range(response['pages']):
         params['page'] = j
-        page_resp = requests.request("GET", f'https://api.aqsi.ru/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
+        page_resp = requests.request("GET", f'{AQSI_API_URL}/pub/v2/Receipts', headers=headers, params=params, timeout=15).json()
         
         for i in page_resp.get('rows', []):
             try:
