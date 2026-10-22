@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import tempfile
+import types
 import unittest
 from contextlib import closing
 from datetime import datetime
@@ -312,6 +313,48 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(second, 0)
         self.assertEqual(instances, 1)
         self.assertEqual(notifications, 1)
+
+    def test_delivery_refreshes_replacement_once_and_does_not_poll_between_notifications(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        self._add_shift()
+        conn = sqlite3.connect(self.db_path)
+        with conn:
+            conn.executemany(
+                '''INSERT INTO users (ID, login, first_name, second_name,
+                       nick_name, status, chatid) VALUES (?, ?, 'Иван', 'Иванов', 'Иван', 0, ?)''',
+                [(1, '@employee', '101'), (2, '@replacement', '102')],
+            )
+        conn.close()
+
+        def replace(*_args, **_kwargs):
+            conn = sqlite3.connect(self.db_path)
+            with conn:
+                conn.execute("UPDATE shifts SET shift_login='@replacement'")
+            conn.close()
+
+        refresh = unittest.mock.Mock(side_effect=replace)
+        rasp = types.SimpleNamespace(refresh_shift_schedule=refresh)
+        bot = FakeBot()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        with patch.dict('sys.modules', {'rasp': rasp}):
+            shift_tasks.process_shift_tasks(bot, now=now, db_path=self.db_path, refresh_schedule=True)
+            shift_tasks.process_shift_tasks(
+                bot, now=now.replace(hour=13), db_path=self.db_path, refresh_schedule=True,
+            )
+        refresh.assert_called_once()
+        self.assertEqual([message[1] for message in bot.messages], ['102'])
+
+    def test_failed_schedule_refresh_defers_delivery(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        refresh = unittest.mock.Mock(side_effect=RuntimeError('Shift unavailable'))
+        bot = FakeBot()
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        with patch.dict('sys.modules', {'rasp': types.SimpleNamespace(refresh_shift_schedule=refresh)}):
+            self.assertEqual(shift_tasks.process_shift_tasks(
+                bot, now=now, db_path=self.db_path, refresh_schedule=True,
+            ), 0)
+        refresh.assert_called_once()
+        self.assertEqual(bot.messages, [])
 
     def test_main_group_announcement_combines_clubs_and_mentions(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)

@@ -21,6 +21,7 @@ def load_rasp_module():
     constants.__all__ = ["SHIFTON_API_URL", "SHIFTON_API_TOKEN"]
     constants.SHIFTON_API_URL = "http://shifton.test"
     constants.SHIFTON_API_TOKEN = "test-token"
+    constants.CHATS = {}
     weather = types.ModuleType("weather")
     weather.get_weather = lambda: ""
     pytz = types.ModuleType("pytz")

@@ -126,8 +126,8 @@ def check_dynamic_events(bot):
     # -----------------------
 
     try:
-        from shift_tasks import process_shift_tasks
-        process_shift_tasks(bot, now=now)
+        from shift_tasks import start_shift_tasks
+        start_shift_tasks(bot, now=now)
     except Exception as e:
         print(f"Ошибка обработки задач смены: {e}")
 
@@ -161,20 +161,20 @@ def schedule_func(bot): # Не забудь передать bot!
     # --- БАЗОВЫЕ ЗАДАЧИ (Статические) ---
     # Эти задачи не зависят от clubs.json, их можно оставить жесткими
     schedule.every().day.at("10:00:00", 'Europe/Moscow').do(init)
-    schedule.every().monday.at("09:05:00", 'Europe/Moscow').do(all_active_tasks_schedule)
-    schedule.every().day.at("09:00:00", 'Europe/Moscow').do(today_sched)
+    schedule.every().monday.at("08:50:00", 'Europe/Moscow').do(all_active_tasks_schedule)
+    schedule.every().day.at("08:45:00", 'Europe/Moscow').do(today_sched)
     
     from finance import auto_weekly_report
-    schedule.every().monday.at("09:00:00", 'Europe/Moscow').do(auto_weekly_report, bot)
+    schedule.every().monday.at("08:47:00", 'Europe/Moscow').do(auto_weekly_report, bot)
 
   
     from consumables import auto_consumables_report
-    schedule.every().monday.at("09:10:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
+    schedule.every().monday.at("08:55:00", 'Europe/Moscow').do(auto_consumables_report, bot, CHATS['reports'])
 
     from taskboard import auto_close_review_tasks, send_shift_review_reminders
     auto_close_review_tasks(bot=bot)
-    schedule.every().day.at("09:10:00", 'Europe/Moscow').do(auto_close_review_tasks, bot=bot)
-    schedule.every().day.at("09:20:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
+    schedule.every().day.at("08:57:00", 'Europe/Moscow').do(auto_close_review_tasks, bot=bot)
+    schedule.every().day.at("09:05:00", 'Europe/Moscow').do(send_shift_review_reminders, bot)
 
     from records import start_records_refresh
     schedule.every(5).minutes.do(
@@ -222,6 +222,14 @@ def schedule_func(bot): # Не забудь передать bot!
     schedule.every().day.at("08:30:00", 'Europe/Moscow').do(
         send_daily_notification,
         bot,
+    )
+
+    from bronix import start_main_booking_notifications
+    schedule.every().day.at("09:00:00", 'Europe/Moscow').do(
+        start_main_booking_notifications, bot, 'quests',
+    )
+    schedule.every().day.at("09:15:00", 'Europe/Moscow').do(
+        start_main_booking_notifications, bot, 'staffing',
     )
 
     from rasp import start_shifton_chat_sync, start_shifton_notifications_check
@@ -975,7 +983,7 @@ def open_kpi_app(message):
 
 
 def today_sched():
-    """Автоматическая рассылка расписания в 09:00"""
+    """Автоматическая рассылка расписания в 08:45."""
     today = datetime.now(pytz.timezone('Europe/Moscow')).date()
     today_date = today.strftime('%Y-%m-%d')
     from bot_tips import append_daily_bot_tip

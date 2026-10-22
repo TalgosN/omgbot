@@ -1062,9 +1062,32 @@ def _current_user_shifts(login, date_from, date_to, limit=50):
 
 
 def _shift_schedule_range(date_from, date_to):
-    from rasp import fetch_schedule_range_from_api
+    if has_request_context() and getattr(g, 'kpi_preview', None):
+        from rasp import fetch_schedule_range_from_api
+        return fetch_schedule_range_from_api(date_from, date_to)
+    from rasp import refresh_shift_schedule
 
-    return fetch_schedule_range_from_api(date_from, date_to)
+    try:
+        return refresh_shift_schedule(date_from, date_to, db_path=DB_PATH)
+    except Exception as error:
+        return {'ok': False, 'error': str(error)}
+
+
+def _refresh_app_schedule():
+    if app.config.get('TESTING') or getattr(g, 'kpi_preview', None):
+        return
+    today = _moscow_today()
+    try:
+        first_day = min(today - timedelta(days=1), today - timedelta(days=today.weekday()))
+        response = _shift_schedule_range(
+            first_day.isoformat(),
+            (today + timedelta(days=7)).isoformat(),
+        )
+        if not response.get('ok'):
+            raise RuntimeError(response.get('error', 'OMG Shift недоступен'))
+    except Exception as error:
+        # При недоступном Shift сохраняем последний успешный локальный снимок.
+        print(f'Не удалось обновить расписание при входе в приложение: {error}')
 
 
 def _shift_schedule_club_name(source_name):
@@ -4092,6 +4115,7 @@ def api_me():
 @app.get('/api/home')
 @require_user
 def api_home():
+    _refresh_app_schedule()
     today = _moscow_today()
     month = today.replace(day=1).isoformat()
     selected_day = today.isoformat()
@@ -4188,6 +4212,7 @@ def api_shift_config():
 @app.get('/api/shift')
 @require_user
 def api_shift():
+    _refresh_app_schedule()
     role = int(g.kpi_user['status'])
     today = _moscow_today()
     dashboard = None
@@ -4238,6 +4263,7 @@ def api_shift():
 @app.get('/api/shift/overview')
 @require_user
 def api_shift_overview():
+    _refresh_app_schedule()
     login = _actor_login()
     current = _effective_now()
     contexts = _today_shift_contexts(login, now=current)
@@ -4262,6 +4288,7 @@ def api_shift_schedule():
 @app.get('/api/shift/tasks')
 @require_user
 def api_shift_tasks():
+    _refresh_app_schedule()
     scope = str(request.args.get('scope') or 'active').strip().lower()
     if scope not in {'active', 'history'}:
         raise ValueError('Неизвестный раздел задач')

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import locale
 import sqlite3
 import threading
+import time
 import pytz
 from weather import get_weather
 from permissions import ROLE_EMPLOYEE, require_role
@@ -498,6 +499,146 @@ def fetch_schedule_range_from_api(date_from, date_to):
         "dateTo": end_date.isoformat(),
         "days": days,
     }
+
+
+def refresh_shift_schedule(date_from, date_to, db_path=SHIFTON_DB_PATH):
+    """Общий минутный снимок для бота и приложения; сеть вне транзакции БД."""
+    from kpi_calculator import initialize_shift_time_schema
+
+    start = datetime.strptime(str(date_from), '%Y-%m-%d').date()
+    end = datetime.strptime(str(date_to), '%Y-%m-%d').date()
+    if end < start or (end - start).days >= SHIFTON_SCHEDULE_MAX_DAYS:
+        raise ValueError('Некорректный диапазон обновления расписания')
+    dates = [(start + timedelta(days=offset)).isoformat()
+             for offset in range((end - start).days + 1)]
+    conn = sqlite3.connect(db_path, timeout=20)
+    lease = None
+    try:
+        with conn:
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS shift_schedule_cache (
+                       day TEXT PRIMARY KEY, payload TEXT,
+                       refreshed_at REAL NOT NULL DEFAULT 0,
+                       lease_until REAL NOT NULL DEFAULT 0
+                   )'''
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO shift_schedule_cache(day) VALUES ('lock')"
+            )
+        deadline = time.monotonic() + 20
+        while True:
+            conn.execute('BEGIN IMMEDIATE')
+            cached = {row[0]: row for row in conn.execute(
+                'SELECT day, payload, refreshed_at FROM shift_schedule_cache '
+                'WHERE day BETWEEN ? AND ?', (dates[0], dates[-1]),
+            )}
+            now = time.time()
+            if all(day in cached and cached[day][1]
+                   and 0 <= now - cached[day][2] < 60 for day in dates):
+                conn.commit()
+                return {'ok': True, 'days': [json.loads(cached[day][1]) for day in dates]}
+            busy_until, failed_at, failure = conn.execute(
+                "SELECT lease_until, refreshed_at, payload FROM shift_schedule_cache WHERE day='lock'"
+            ).fetchone()
+            if failure and 0 <= now - failed_at < 60:
+                conn.rollback()
+                raise RuntimeError(failure)
+            if busy_until <= now:
+                lease = now + 30
+                conn.execute(
+                    "UPDATE shift_schedule_cache SET lease_until=? WHERE day='lock'",
+                    (lease,),
+                )
+                conn.commit()
+                break
+            conn.rollback()
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Обновление расписания OMG Shift ещё выполняется')
+            time.sleep(0.1)
+
+        payload = fetch_schedule_range_from_api(dates[0], dates[-1])
+        if not isinstance(payload, dict) or not payload.get('ok'):
+            raise RuntimeError('OMG Shift не вернул актуальное расписание')
+        days = {str(day.get('date')): day for day in payload.get('days', [])}
+        if set(days) != set(dates):
+            raise RuntimeError('OMG Shift вернул неполный диапазон расписания')
+        rows = []
+        seen = set()
+        for day in dates:
+            for location in days[day]['locations']:
+                club = str(location['title']).strip()
+                for shift in location['shifts']:
+                    name = str(shift.get('employee') or '').split()
+                    login = str(shift.get('telegram') or '').strip()
+                    if login:
+                        login = '@' + login.lstrip('@')
+                    shift_start = datetime.strptime(shift['start'], '%H:%M')
+                    shift_end = datetime.strptime(shift['end'], '%H:%M')
+                    if shift_end < shift_start:
+                        shift_end += timedelta(days=1)
+                    row = (
+                        name[0] if name else '', name[1] if len(name) > 1 else '',
+                        day, club, round((shift_end - shift_start).total_seconds() / 3600, 1),
+                        login or None, shift['start'], shift['end'],
+                    )
+                    if row not in seen:
+                        seen.add(row)
+                        rows.append(row)
+        # Миграция схемы завершается до атомарной замены снимка.
+        with conn:
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS shifts (
+                       shift_second_name TEXT, shift_first_name TEXT,
+                       dt_shift DATE, club TEXT, dur REAL, source TEXT,
+                       shift_login TEXT, shift_start TEXT, shift_end TEXT
+                   )'''
+            )
+        initialize_shift_time_schema(connection=conn)
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute(
+            "SELECT lease_until FROM shift_schedule_cache WHERE day='lock'"
+        ).fetchone()[0] != lease:
+            raise RuntimeError('Истекло время обновления расписания OMG Shift')
+        conn.execute(
+            "DELETE FROM shifts WHERE source='omg_shift' "
+            'AND date(substr(dt_shift, 1, 10)) BETWEEN ? AND ?',
+            (dates[0], dates[-1]),
+        )
+        conn.executemany(
+            '''INSERT INTO shifts (shift_second_name, shift_first_name, dt_shift,
+                   club, dur, shift_login, shift_start, shift_end, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'omg_shift')''', rows,
+        )
+        refreshed_at = time.time()
+        conn.executemany(
+            '''INSERT INTO shift_schedule_cache(day, payload, refreshed_at)
+               VALUES (?, ?, ?) ON CONFLICT(day) DO UPDATE SET
+                   payload=excluded.payload, refreshed_at=excluded.refreshed_at''',
+            [(day, json.dumps(days[day], ensure_ascii=False), refreshed_at) for day in dates],
+        )
+        conn.execute(
+            "UPDATE shift_schedule_cache SET payload=NULL, refreshed_at=0 WHERE day='lock'"
+        )
+        conn.commit()
+        return payload
+    except Exception as error:
+        conn.rollback()
+        if lease is not None:
+            with conn:
+                conn.execute(
+                    "UPDATE shift_schedule_cache SET payload=?, refreshed_at=? "
+                    "WHERE day='lock' AND lease_until=?", (str(error), time.time(), lease),
+                )
+        raise
+    finally:
+        conn.rollback()
+        if lease is not None:
+            with conn:
+                conn.execute(
+                    "UPDATE shift_schedule_cache SET lease_until=0 "
+                    "WHERE day='lock' AND lease_until=?", (lease,),
+                )
+        conn.close()
 
 
 def format_shifton_notification(text):

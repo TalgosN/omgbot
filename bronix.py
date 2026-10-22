@@ -1,5 +1,6 @@
 import argparse
 import html
+import json
 import math
 import os
 import sqlite3
@@ -38,6 +39,7 @@ BOOKING_CLUBS = (
 MOSCOW = pytz.timezone('Europe/Moscow')
 _sync_lock = threading.Lock()
 _last_error_notification_at = 0.0
+_main_notifications_lock = threading.Lock()
 
 
 def notification_period(today):
@@ -868,6 +870,213 @@ def send_daily_notification(bot, today=None):
                 f'{notification_error}'
             )
         return None
+
+
+def _unique_active_bookings(bookings):
+    result = {}
+    for booking in bookings:
+        if _active_booking(booking) and booking['club'] in BOOKING_CLUBS:
+            key = (booking['number'], booking['club'],
+                   booking['reservation_at'], booking['reservation_end_at'])
+            result.setdefault(key, booking)
+    return list(result.values())
+
+
+def _staffing_alerts(bookings, schedule, now):
+    """Проверяет гостей и сотрудников на каждом пересечении интервалов."""
+    shifts_by_day = {}
+    for day in schedule['days']:
+        for location in day['locations']:
+            shifts = []
+            for shift in location['shifts']:
+                employee = str(shift.get('employee') or '').strip()
+                if not shift.get('telegram') and (
+                    not employee or 'свободн' in employee.casefold()
+                ):
+                    continue
+                start = _moscow_datetime(f'{day["date"]}T{shift["start"]}:00')
+                end = _moscow_datetime(f'{day["date"]}T{shift["end"]}:00')
+                if end <= start:
+                    end += timedelta(days=1)
+                identity = str(shift.get('telegram') or employee).strip().lstrip('@').casefold()
+                shifts.append((start, end, identity))
+            shifts_by_day[(day['date'], location['title'].strip())] = shifts
+    grouped = {}
+    for booking in bookings:
+        if _moscow_datetime(booking['reservation_end_at']) > now:
+            grouped.setdefault((booking['date'].isoformat(), booking['club']), []).append(booking)
+    alerts = []
+    for (day, club), club_bookings in sorted(grouped.items()):
+        # Отсутствие смен в этом клубе в этот день означает несоставленное расписание.
+        shifts = shifts_by_day.get((day, club), [])
+        if not shifts:
+            continue
+        previous = (datetime.fromisoformat(day).date() - timedelta(days=1)).isoformat()
+        shifts = shifts + shifts_by_day.get((previous, club), [])
+        intervals = [(_moscow_datetime(b['reservation_at']),
+                      _moscow_datetime(b['reservation_end_at']), b) for b in club_bookings]
+        boundaries = sorted({point for start, end, _ in intervals for point in (start, end)}
+                            | {point for start, end, _ in shifts for point in (start, end)})
+        previous_alert = None
+        for start, end in zip(boundaries, boundaries[1:]):
+            if end <= now:
+                continue
+            active = [b for begin, finish, b in intervals if begin < end and finish > start]
+            participants = sum(int(b['participants']) for b in active)
+            event = any(b['is_event'] for b in active)
+            employees = {identity for begin, finish, identity in shifts
+                         if begin < end and finish > start}
+            if not active or (participants < 5 and not event) or len(employees) >= 2:
+                previous_alert = None
+                continue
+            if (previous_alert and previous_alert['end'] == start
+                    and previous_alert['staff'] == len(employees)
+                    and previous_alert['event'] == event):
+                previous_alert['end'] = end
+                previous_alert['participants'] = max(previous_alert['participants'], participants)
+            else:
+                previous_alert = {'club': club, 'start': start, 'end': end,
+                                  'participants': participants, 'event': event,
+                                  'staff': len(employees)}
+                alerts.append(previous_alert)
+    return alerts
+
+
+def _send_main_booking_once(bot, kind, key, text, db_path):
+    from sender import safe_send
+
+    chat_id = CHATS['main_group']
+    conn = sqlite3.connect(db_path, timeout=20)
+    lease = time.time() + 120
+    try:
+        with conn:
+            conn.execute(
+                '''CREATE TABLE IF NOT EXISTS booking_main_notifications (
+                       kind TEXT NOT NULL, notification_key TEXT NOT NULL,
+                       chat_id TEXT NOT NULL, sent_at TEXT, lease_until REAL NOT NULL,
+                       PRIMARY KEY(kind, notification_key, chat_id)
+                   )'''
+            )
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute(
+            '''SELECT sent_at, lease_until FROM booking_main_notifications
+               WHERE kind=? AND notification_key=? AND chat_id=?''',
+            (kind, key, str(chat_id)),
+        ).fetchone()
+        if row and (row[0] or row[1] > time.time()):
+            conn.rollback()
+            return 0
+        conn.execute(
+            '''INSERT INTO booking_main_notifications
+                   (kind, notification_key, chat_id, lease_until) VALUES (?, ?, ?, ?)
+               ON CONFLICT(kind, notification_key, chat_id)
+               DO UPDATE SET lease_until=excluded.lease_until''',
+            (kind, key, str(chat_id), lease),
+        )
+        conn.commit()
+        try:
+            message = safe_send(
+                bot, chat_id, text, parse_mode='HTML', disable_web_page_preview=True,
+            )
+            if message is None:
+                raise RuntimeError('Telegram не подтвердил отправку уведомления о бронировании')
+        except Exception:
+            with conn:
+                conn.execute(
+                    '''UPDATE booking_main_notifications SET lease_until=0
+                       WHERE kind=? AND notification_key=? AND chat_id=? AND lease_until=?''',
+                    (kind, key, str(chat_id), lease),
+                )
+            raise
+        with conn:
+            conn.execute(
+                '''UPDATE booking_main_notifications SET sent_at=?, lease_until=0
+                   WHERE kind=? AND notification_key=? AND chat_id=? AND lease_until=?''',
+                (datetime.now(MOSCOW).isoformat(), kind, key, str(chat_id), lease),
+            )
+        return 1
+    finally:
+        conn.close()
+
+
+def send_main_booking_notifications(bot, kind, now=None, db_path=BOOKING_DB_PATH):
+    from shift_tasks import CLUB_MAIN_MENTIONS
+
+    if kind not in {'quests', 'staffing'}:
+        raise ValueError('Неизвестный тип уведомлений о бронированиях')
+    if not CHATS.get('main_group'):
+        return 0
+    now = now or datetime.now(MOSCOW)
+    now = _moscow_datetime(now)
+    if booking_freshness(now=now, db_path=db_path)['stale']:
+        raise RuntimeError('Уведомления MAIN GROUP отложены: брони устарели')
+    end = now.date() + timedelta(days=6 if kind == 'staffing' else 0)
+    bookings = _unique_active_bookings(load_bookings(now.date(), end, db_path))
+    sent = 0
+    if kind == 'quests':
+        for club in BOOKING_CLUBS:
+            quests = [b for b in bookings if b['club'] == club
+                      and b['booking_format'].strip().casefold() == 'vr-квест'
+                      and _moscow_datetime(b['reservation_end_at']) > now]
+            if not quests:
+                continue
+            lines = [CLUB_MAIN_MENTIONS[club], '', '🧩 <b>Сегодня забронирован VR-квест</b>'
+                     if len(quests) == 1 else '🧩 <b>Сегодня забронированы VR-квесты</b>', '']
+            lines.extend(
+                f'{_moscow_datetime(b["reservation_at"]):%H:%M}–'
+                f'{_moscow_datetime(b["reservation_end_at"]):%H:%M} · '
+                f'{int(b["participants"])} чел.' for b in quests
+            )
+            lines.extend(['', 'Проверьте работоспособность квеста и оборудования до начала брони.'])
+            sent += _send_main_booking_once(
+                bot, kind, f'{now.date()}:{club}', '\n'.join(lines), db_path,
+            )
+        return sent
+
+    if not bookings:
+        return 0
+    from rasp import refresh_shift_schedule
+    schedule = refresh_shift_schedule(
+        (now.date() - timedelta(days=1)).isoformat(), end.isoformat(), db_path=db_path,
+    )
+    weekdays = ('Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье')
+    for alert in _staffing_alerts(bookings, schedule, now):
+        club = alert['club']
+        start, finish = alert['start'], alert['end']
+        label = 'Мероприятие' if alert['event'] else 'Одновременные бронирования'
+        staff_text = ('работает 1 сотрудник' if alert['staff'] == 1 else 'нет сотрудников')
+        text = (
+            f'{CLUB_MAIN_MENTIONS[club]}\n\n👥 <b>Нужен второй сотрудник</b>\n\n'
+            f'{weekdays[start.weekday()]}, {start:%d.%m} · {start:%H:%M}–{finish:%H:%M}\n'
+            f'{label} на {alert["participants"]} гостей.\n'
+            f'По расписанию в это время {staff_text}.'
+        )
+        key = json.dumps([club, start.isoformat(), finish.isoformat(),
+                          alert['participants'], alert['staff'], alert['event']], ensure_ascii=False)
+        sent += _send_main_booking_once(bot, kind, key, text, db_path)
+    return sent
+
+
+def start_main_booking_notifications(bot, kind):
+    def worker():
+        with _main_notifications_lock:
+            try:
+                # Дожидаемся фоновой синхронизации, не блокируя планировщик.
+                if not _sync_lock.acquire(timeout=45):
+                    raise RuntimeError('Синхронизация Bronix ещё выполняется')
+                try:
+                    if booking_freshness()['stale']:
+                        sync_bronix_bookings(mode='live')
+                finally:
+                    _sync_lock.release()
+                send_main_booking_notifications(bot, kind)
+            except Exception as error:
+                print(f'Ошибка уведомлений MAIN GROUP ({kind}): {error}')
+                _notify_sync_error(bot, error)
+
+    thread = threading.Thread(target=worker, name=f'booking-{kind}-notifications', daemon=True)
+    thread.start()
+    return thread
 
 
 def send_test_notification(message, bot):

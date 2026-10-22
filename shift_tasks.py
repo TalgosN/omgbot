@@ -28,6 +28,7 @@ CATEGORY_GENERAL = 'general'
 
 _task_admin_drafts = {}
 _task_app_completion_lock = threading.Lock()
+_task_processing_lock = threading.Lock()
 
 DEFAULT_CLEANLINESS_POINTS = (
     'Лаунж — общий вид',
@@ -712,12 +713,90 @@ def _notify_report_overdue(bot, conn, instance):
     )
 
 
-def process_shift_tasks(bot, now=None, db_path=DB_PATH):
+def _task_schedule_refresh_needed(current, db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Даже если в старом расписании нет смен, перед новой выдачей проверяем Shift.
+        templates = conn.execute(
+            "SELECT * FROM broadcasts WHERE status=1 AND kind=? AND time=?",
+            (KIND_TASK, current.strftime('%H:%M')),
+        ).fetchall()
+        if any(_frequency_matches(template, current.date()) for template in templates):
+            return True
+        instances = conn.execute(
+            '''SELECT * FROM shift_task_instances WHERE occurrence_date=?
+               AND status IN ('pending', 'in_progress')''',
+            (current.date().isoformat(),),
+        ).fetchall()
+        for instance in instances:
+            available = datetime.fromisoformat(instance['available_at']).replace(tzinfo=MOSCOW)
+            due = datetime.fromisoformat(instance['due_at']).replace(tzinfo=MOSCOW)
+            recipients = _scheduled_recipients(conn, instance)
+            if current < available:
+                kinds = ['opening']
+                scheduled = {str(recipient[0]) for recipient in recipients}
+                recipients = [recipient for recipient in _opening_recipients(conn, instance)
+                              if str(recipient[0]) in scheduled]
+            else:
+                kinds = ['activation']
+                if instance['activated_at']:
+                    activated = datetime.fromisoformat(instance['activated_at']).replace(tzinfo=MOSCOW)
+                    if current >= activated + timedelta(hours=3):
+                        kinds.append('reminder_3h')
+                if due - timedelta(hours=1) <= current < due:
+                    kinds.append('due_1h')
+                if current >= due:
+                    kinds.append('overdue')
+            if any(not _notification_exists(conn, instance['id'], kind, recipient[0])
+                   for kind in kinds for recipient in recipients):
+                return True
+        return False
+    finally:
+        conn.close()
+
+
+def start_shift_tasks(bot, now=None):
+    if not _task_processing_lock.acquire(blocking=False):
+        return
+
+    def worker():
+        try:
+            process_shift_tasks(bot, now=now, refresh_schedule=True)
+        except Exception as error:
+            print(f'Ошибка обработки задач смены: {error}')
+        finally:
+            _task_processing_lock.release()
+
+    thread = threading.Thread(target=worker, name='shift-task-delivery', daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _task_processing_lock.release()
+        raise
+    return thread
+
+
+def process_shift_tasks(bot, now=None, db_path=DB_PATH, refresh_schedule=False):
     current = _now(now)
     initialize_shift_tasks_schema(db_path)
     ensure_task_instances(
         current.date(), db_path=db_path, now=current, skip_expired=True,
     )
+    if refresh_schedule and _task_schedule_refresh_needed(current, db_path):
+        from rasp import refresh_shift_schedule
+        try:
+            refresh_shift_schedule(
+                current.date().isoformat(), current.date().isoformat(), db_path=db_path,
+            )
+        except Exception as error:
+            print(f'Выдача задач отложена: расписание OMG Shift не обновлено: {error}')
+            _retry_task_reports(bot, db_path=db_path)
+            _retry_close_warning_notifications(bot, db_path=db_path)
+            return 0
+        ensure_task_instances(
+            current.date(), db_path=db_path, now=current, skip_expired=True,
+        )
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     sent = 0
