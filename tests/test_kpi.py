@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def load_kpi_module():
@@ -79,6 +79,51 @@ class KpiTest(unittest.TestCase):
 
         read_forms.assert_called_once_with()
         write_data.assert_not_called()
+
+    def test_form_import_accepts_mixed_russian_dates_without_swapping_day_and_month(self):
+        import pandas as pd
+
+        values = {
+            'B': [['ID']] + [[number] for number in range(1, 9)],
+            'C': [['Клуб']] + [['Мариэль']] * 8,
+            'K': [['Дата'], ['11.10.2026'], ['11/10/2026'], [' 11/10/2026 '],
+                  ['21/10/2026'], ['10/11/2026'], ['31/02/2026'], [''], ['01/01/2026']],
+        }
+        worksheet = Mock()
+        worksheet.get_values.side_effect = lambda start, **_kwargs: values[start]
+        client = Mock()
+        client.open.return_value.worksheet_by_title.return_value = worksheet
+        pandas_api = SimpleNamespace(
+            DataFrame=pd.DataFrame, concat=pd.concat, to_datetime=pd.to_datetime,
+            DateOffset=pd.DateOffset,
+            Timestamp=SimpleNamespace(now=lambda: pd.Timestamp('2026-10-24')),
+        )
+        real_connect = sqlite3.connect
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / 'forms.sqlite'
+            with patch.object(self.kpi, 'pd', pandas_api), \
+                    patch.object(self.kpi.pygsheets, 'authorize', return_value=client, create=True), \
+                    patch.object(self.kpi.sqlite3, 'connect', side_effect=lambda _path: real_connect(db_path)):
+                data = self.kpi.read_ank_table()
+            conn = real_connect(db_path)
+            try:
+                rows = conn.execute(
+                    'SELECT id_ank, date(dt_ank), club_ank FROM anketi ORDER BY id_ank'
+                ).fetchall()
+            finally:
+                conn.close()
+
+        self.assertEqual(rows, [
+            (1, '2026-10-11', 'Марьино'),
+            (2, '2026-10-11', 'Марьино'),
+            (3, '2026-10-11', 'Марьино'),
+            (4, '2026-10-21', 'Марьино'),
+            (5, '2026-11-10', 'Марьино'),
+        ])
+        self.assertTrue(pd.isna(data.loc[6, 'Date']))
+        self.assertTrue(pd.isna(data.loc[7, 'Date']))
+        client.open.assert_called_once_with('Клиенты, серты, абики, логины, игры, скидки')
+        client.open.return_value.worksheet_by_title.assert_called_once_with('База Клиентов')
 
     def test_custom_goal_is_saved_locally_and_forwarded_independently(self):
         goal = {

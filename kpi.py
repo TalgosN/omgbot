@@ -71,7 +71,8 @@ def read_ank_table():
     df_dt_ank = pd.DataFrame(dt_ank, columns=['Date'])
 
     df_combined = pd.concat([df_ids, df_club_ank, df_dt_ank], axis=1)
-    df_combined['Date'] = pd.to_datetime(df_combined['Date'], format='%d.%m.%Y', errors='coerce')
+    dates = df_combined['Date'].astype('string').str.strip().str.replace('/', '.', regex=False)
+    df_combined['Date'] = pd.to_datetime(dates, format='%d.%m.%Y', errors='coerce')
 
     three_months_ago = pd.Timestamp.now() - pd.DateOffset(months=3)
     df_filtered = df_combined[df_combined['Date'] >= three_months_ago]
