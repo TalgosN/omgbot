@@ -75,6 +75,59 @@ class BronixTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'дробное количество'):
             bronix._canonical_booking(booking_row(participants=1.5))
 
+    def test_midnight_end_keeps_booking_on_start_day_and_preserves_duration(self):
+        result = bronix._canonical_booking(booking_row(
+            'booking_33298', number='33298',
+            start='2026-11-01T23:00:00+03:00', end='2026-11-01T24:00:00+03:00',
+        ))
+        self.assertEqual(result['date'], date(2026, 11, 1))
+        self.assertEqual(result['reservation_end_at'], '2026-11-02T00:00:00+03:00')
+        self.assertEqual(
+            (datetime.fromisoformat(result['reservation_end_at'])
+             - datetime.fromisoformat(result['reservation_at'])).total_seconds(), 3600,
+        )
+
+    def test_midnight_normalization_handles_calendar_boundaries_and_timezones(self):
+        for raw, expected in (
+            ('2026-10-31T24:00:00+03:00', '2026-11-01T00:00:00+03:00'),
+            ('2026-12-31T24:00:00+03:00', '2027-01-01T00:00:00+03:00'),
+            ('2028-02-29T24:00:00+03:00', '2028-03-01T00:00:00+03:00'),
+            ('2026-11-01T24:00:00Z', '2026-11-02T03:00:00+03:00'),
+            ('2026-11-01T24:00:00+05:00', '2026-11-01T22:00:00+03:00'),
+            ('2026-11-01T24:00:00.000+03:00', '2026-11-02T00:00:00+03:00'),
+            ('2026-11-01T24:00+03:00', '2026-11-02T00:00:00+03:00'),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(bronix._parse_datetime(raw, 'endAt').isoformat(), expected)
+
+    def test_midnight_does_not_accept_invalid_time_date_or_missing_timezone(self):
+        for raw in (
+            '2026-11-01T24:30:00+03:00', '2026-11-01T24:00:01+03:00',
+            '2026-11-01T24:00:00.000001+03:00', '2026-11-01T25:00:00+03:00',
+            '2026-02-30T24:00:00+03:00', '9999-12-31T24:00:00+03:00',
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(RuntimeError, 'endAt'):
+                bronix._parse_datetime(raw, 'endAt')
+        with self.assertRaisesRegex(RuntimeError, 'часовой пояс'):
+            bronix._parse_datetime('2026-11-01T24:00:00', 'endAt')
+
+    def test_sync_persists_midnight_booking_without_changing_reservation_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = str(Path(directory) / 'bookings.sqlite')
+            row = booking_row(
+                'booking_33298', number='33298',
+                start='2026-11-01T23:00:00+03:00', end='2026-11-01T24:00:00+03:00',
+            )
+            with patch.object(bronix, 'fetch_bookings_range', return_value=[row]):
+                result = bronix.sync_bronix_bookings(
+                    today=date(2026, 10, 29), db_path=db_path, mode='live',
+                )
+            bookings = bronix.load_bookings(date(2026, 11, 1), date(2026, 11, 1), db_path)
+        self.assertEqual(result['inserted'], 1)
+        self.assertEqual(len(bookings), 1)
+        self.assertEqual(bookings[0]['number'], '33298')
+        self.assertEqual(bookings[0]['reservation_end_at'], '2026-11-02T00:00:00+03:00')
+
     def test_fetch_page_uses_bearer_token_and_cursor(self):
         response = Mock()
         response.status_code = 200

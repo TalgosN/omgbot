@@ -3,6 +3,7 @@ import html
 import json
 import math
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -69,8 +70,16 @@ def _parse_datetime(value, field):
     if not raw:
         raise RuntimeError(f'Bronix не передала {field}')
     try:
+        midnight = re.fullmatch(
+            r'(\d{4}-\d{2}-\d{2})T24:00(?::00(?:[.,]0+)?)?(Z|[+-]\d{2}:\d{2})?', raw,
+        )
+        if midnight:
+            # 24:00 обозначает полночь следующего дня в исходном часовом поясе.
+            raw = f'{midnight[1]}T00:00:00{midnight[2] or ""}'
         parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-    except ValueError as error:
+        if midnight:
+            parsed += timedelta(days=1)
+    except (ValueError, OverflowError) as error:
         raise RuntimeError(f'Bronix передала некорректное поле {field}') from error
     if parsed.tzinfo is None:
         raise RuntimeError(f'Поле Bronix {field} должно содержать часовой пояс')
