@@ -13,8 +13,10 @@
   <link rel="stylesheet" href="/static/problems.css?v=20260904-2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/app_ux.css?v=20260915-1">
+  <link rel="stylesheet" href="/static/desktop_shell.css?v=20261030-1">
+  <link rel="stylesheet" href="/static/problems_desktop.css?v=20261030-1">
 </head>
-<body>
+<body class="desktop-enabled taskboard-desktop">
   <main class="problem-shell">
     <header class="problem-header">
       <div class="problem-title"><p id="problemUserName" class="eyebrow">Команда OMG VR</p><h1>OMG TASKBOARD</h1></div>
@@ -43,7 +45,12 @@
         <select id="clubFilter"><option value="">Все клубы</option></select>
         <select id="typeFilter"><option value="">Все типы</option></select>
       </section>
-      <section id="problemList" class="problem-list"><div class="empty-card">Загрузка…</div></section>
+      <div class="task-workspace">
+        <section id="problemList" class="problem-list" aria-label="Список заявок"><div class="empty-card">Загрузка…</div></section>
+        <aside id="problemDetailPane" class="problem-detail-pane" aria-label="Подробности заявки">
+          <div id="problemDetailEmpty" class="problem-detail-empty"><i aria-hidden="true">?</i><h2>Выберите заявку</h2><p>Описание, вложения и история откроются здесь. Список останется рядом.</p></div>
+        </aside>
+      </div>
     </section>
 
     <section id="analyticsView" class="task-analytics hidden">
@@ -180,7 +187,7 @@
     </form>
   </dialog>
 
-  <dialog id="detailDialog" class="problem-dialog detail-dialog">
+  <dialog id="detailDialog" class="problem-dialog detail-dialog" aria-labelledby="detailTitle">
     <div class="dialog-head"><div><p id="detailMeta" class="eyebrow"></p><h2 id="detailTitle"></h2></div><button type="button" class="close-dialog">×</button></div>
     <div id="detailContent"></div>
   </dialog>
@@ -226,7 +233,8 @@
 
   <div id="toast" class="problem-toast"></div>
   <script src="/static/app_ux.js?v=20260915-1"></script>
-  <script src="/static/problems.js?v=20260915-1"></script>
+  <script src="/static/desktop_shell.js?v=20261030-1"></script>
+  <script src="/static/problems.js?v=20261030-1"></script>
   <script src="/static/swipe_navigation.js?v=20260915-1"></script>
   <script src="/static/employee_preview.js?v=20260903-1"></script>
 </body>

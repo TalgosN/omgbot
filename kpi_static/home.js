@@ -344,6 +344,8 @@ async function load() {
   try {
     const [me, data] = await Promise.all([api('/api/me'), api('/api/home')]);
     homeData = data;
+    window.OmgDesktop?.setUser(me);
+    document.querySelector('main').classList.toggle('home-management', Boolean(data.management));
     $('#userBadge').textContent = me.role_name;
     $('#welcomeTitle').textContent = `Привет, ${me.name}`;
     $('#welcomeDate').textContent = new Intl.DateTimeFormat('ru-RU', {

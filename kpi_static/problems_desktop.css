@@ -1,0 +1,117 @@
+.problem-detail-pane { display:none; }
+@media (min-width:768px) {
+  .problem-shell .header-actions { display:flex; flex-wrap:wrap; gap:10px; }
+  .problem-shell .header-actions button { width:auto; padding-inline:20px; }
+  .problem-shell .problem-card h3 { font-size:17px; }
+  .problem-shell .problem-card p { font-size:12px; }
+  .problem-shell .problem-tabs button { min-height:46px; gap:8px; font-size:13px; }
+  .problem-shell .problem-filters select { font-size:13px; }
+  #createDialog { width:min(760px,calc(100vw - 40px)); }
+  #createForm { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 18px; }
+  #createForm > :not(label) { grid-column:1/-1; }
+  #createForm > label:has(textarea),#createForm > label:has(#createTitle) { grid-column:1/-1; }
+  #createDialog label > span { font-size:11px; }
+  #createDialog input,#createDialog select,#createDialog textarea { font-size:13px; }
+  #createDialog .primary-button.wide { font-size:14px; }
+  #createDialog fieldset legend,#createDialog .repair-title-preview span { font-size:11px; }
+  #createDialog .location-option span,#createDialog .repair-title-preview strong { font-size:12px; }
+}
+@media (min-width:1024px) {
+  .taskboard-desktop { --desktop-nav-bg:#130a23; }
+  .taskboard-desktop .desktop-brand { color:#f9f7ff; }
+  .problem-shell { display:grid; grid-template-columns:minmax(0,1fr) auto; align-content:start; align-items:start; column-gap:20px; }
+  .problem-shell > * { min-width:0; }
+  .problem-header { grid-column:1; align-self:center; }
+  .problem-title h1 { font-size:clamp(25px,2.1vw,42px); margin-top:8px; }
+  .problem-title .eyebrow { font-size:11px; }
+  .problem-header .user-badge { display:none; }
+  .problem-shell .header-actions { grid-column:2; align-self:center; margin:0; flex-wrap:nowrap; }
+  .problem-shell .header-actions button { min-height:44px; padding-inline:16px; font-size:12px; white-space:nowrap; }
+  .problem-intro { grid-column:1/-1; margin:20px 0; padding:12px 14px; }
+  .problem-intro > p { max-width:none; font-size:12px; }
+  .board-view-tabs { grid-column:1/-1; width:360px; margin-bottom:20px; }
+  #tasksView,#analyticsView,#equipmentView { grid-column:1/-1; }
+  #tasksView { display:grid; grid-template-columns:minmax(360px,1fr) minmax(280px,.8fr); gap:18px; }
+  .problem-shell .problem-tabs { min-width:0; align-self:center; box-shadow:none; }
+  .problem-shell .problem-filters { margin:0; align-self:center; gap:12px; }
+  .problem-shell .problem-filters select { min-height:48px; font-size:13px; }
+  .task-workspace { grid-column:1/-1; display:grid; grid-template-columns:minmax(280px,.85fr) minmax(0,1.3fr); gap:20px; align-items:start; }
+  .problem-shell .problem-list { min-width:0; align-content:start; gap:10px; }
+  .problem-shell .problem-card { padding:18px; border-radius:17px; transition:border-color .15s,background .15s; }
+  .problem-shell .problem-card:hover { border-color:rgba(216,122,255,.6); background:#2b1247; }
+  .problem-shell .problem-card h3 { margin:12px 0 10px; font-size:17px; line-height:1.4; overflow-wrap:anywhere; }
+  .problem-shell .problem-card p { margin:0; font-size:12px; line-height:1.6; }
+  .problem-shell .problem-card .type-badge,.problem-shell .media-badge { font-size:10px; }
+  .problem-shell .problem-card.selected { border-color:#d29af8; background:linear-gradient(110deg,rgba(162,77,225,.25),rgba(31,12,59,.9)); box-shadow:inset 3px 0 #c682f2; }
+  .problem-detail-pane { display:block; position:sticky; top:20px; min-width:0; min-height:420px; border:1px solid var(--line); border-radius:22px; background:rgba(25,10,45,.9); box-shadow:var(--shadow); }
+  .problem-detail-empty { display:grid; min-height:420px; align-content:center; justify-items:center; padding:40px; text-align:center; }
+  .problem-detail-empty[hidden] { display:none; }
+  .problem-detail-empty > i { display:grid; width:60px; height:60px; place-items:center; border:1px solid var(--line); border-radius:20px; color:#c58aee; background:var(--lavender); font:30px Furore,"Russo One",sans-serif; }
+  .problem-detail-empty h2 { margin:24px 0 12px; font-size:22px; }
+  .problem-detail-empty p { max-width:340px; margin:0; color:var(--muted); font-size:13px; line-height:1.8; }
+  #problemDetailPane #detailDialog { position:relative; inset:auto; display:block; width:100%; max-width:100%; max-height:calc(100dvh - 40px); margin:0; padding:24px; overflow:auto; border:0; border-radius:22px; box-shadow:none; background:transparent; }
+  #problemDetailPane #detailDialog:not([open]) { display:none; }
+  #detailDialog .dialog-head { gap:16px; }
+  #detailDialog .dialog-head h2 { font-size:23px; line-height:1.35; overflow-wrap:anywhere; }
+  #detailDialog .dialog-head .eyebrow { font-size:10px; line-height:1.6; }
+  #detailDialog .close-dialog { flex:none; width:36px; height:36px; }
+  #detailContent .detail-description p,#detailContent .detail-feedback p { font-size:14px; line-height:1.8; overflow-wrap:anywhere; }
+  #detailContent .detail-description > span,#detailContent .detail-feedback > span { font-size:11px; }
+  #detailContent .history-head { margin-top:22px; font-size:13px; }
+  #detailContent .task-activity-row strong { font-size:12px; }
+  #detailContent .task-activity-row span,#detailContent .task-activity-row time { font-size:11px; }
+  #detailContent .task-comment p { font-size:13px; line-height:1.7; }
+  #detailContent .task-comment strong { font-size:12px; }
+  #detailContent .task-comment time { font-size:10px; }
+  #detailContent .task-comment-form label > span { font-size:11px; }
+  #detailContent .task-comment-form textarea { min-height:90px; font-size:13px; line-height:1.7; }
+  #detailContent .action-button { min-height:44px; padding:12px 16px; font-size:13px; }
+  #detailContent .detail-photo,#detailContent .detail-video { max-height:420px; object-fit:contain; }
+  #detailContent .repair-identity strong { font-size:16px; }
+  #detailContent .repair-identity small,#detailContent .history-entry p { font-size:12px; }
+  .taskboard-desktop .problem-dialog:not(#detailDialog) { padding:26px; }
+  .taskboard-desktop .problem-dialog .dialog-head h2 { font-size:24px; }
+  .taskboard-desktop .small-dialog { width:520px; }
+  .taskboard-desktop .problem-dialog label > span { font-size:12px; }
+  .taskboard-desktop .problem-dialog input,.taskboard-desktop .problem-dialog select,.taskboard-desktop .problem-dialog textarea { font-size:13px; }
+  .taskboard-desktop .problem-dialog .primary-button.wide { font-size:14px; }
+  .taskboard-desktop .catalog-entry { min-height:42px; font-size:13px; }
+  #catalogDialog { width:900px; display:none; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+  #catalogDialog[open] { display:grid; }
+  #catalogDialog > .dialog-head,#catalogDialog > label,.migration-section { grid-column:1/-1; }
+  #catalogDialog .catalog-section { min-width:0; margin:0; }
+  .task-analytics { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+  .task-analytics > .analytics-heading,.task-analytics > .analytics-period,.task-analytics > .analytics-exports,.task-analytics > .analytics-summary-grid,.task-analytics > .oldest-problem { grid-column:1/-1; }
+  .analytics-heading { text-align:left; }
+  .analytics-heading > strong { font-size:24px; }
+  .analytics-period { grid-template-columns:1fr minmax(230px,.5fr); gap:20px; padding:14px; }
+  .analytics-period-tabs button,.analytics-picker select { min-height:44px; font-size:13px; }
+  .analytics-summary-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+  .analytics-summary-grid article { min-height:112px; padding:20px; }
+  .analytics-summary-grid span { font-size:12px; }
+  .analytics-summary-grid strong { font-size:32px; }
+  .analytics-card { padding:22px; border-radius:20px; }
+  .analytics-card-head h3 { font-size:20px; }
+  .analytics-card-head small,.analytics-status-legend { font-size:11px; }
+  .analytics-exports strong { font-size:14px; }
+  .analytics-exports small { font-size:11px; }
+  .analytics-exports { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .equipment-list { grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+  .equipment-filters { grid-template-columns:1fr 1fr 1.5fr; }
+  .equipment-filters input,.equipment-filters select { font-size:13px; min-height:44px; }
+}
+@media (min-width:1280px) {
+  .task-analytics > .analytics-period { grid-column:1; grid-template-columns:minmax(0,1fr) 170px; gap:12px; margin:0; }
+  .task-analytics > .analytics-exports { grid-column:2; margin:0; align-self:stretch; }
+  .analytics-exports button { min-height:70px; padding:12px; }
+  .analytics-exports small { font-size:10px; white-space:normal; line-height:1.5; }
+}
+@media (min-width:1920px) {
+  .task-workspace { grid-template-columns:minmax(420px,.85fr) minmax(0,1.15fr); gap:28px; }
+  .problem-shell .problem-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .problem-shell .problem-card { min-height:148px; padding:22px; }
+  .problem-shell .problem-card h3 { font-size:19px; }
+  #problemDetailPane #detailDialog { padding:30px; }
+  #detailContent .detail-description p,#detailContent .detail-feedback p { font-size:16px; }
+  .equipment-list { grid-template-columns:repeat(4,minmax(0,1fr)); }
+}

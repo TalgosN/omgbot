@@ -5,6 +5,49 @@ const PROBLEM_MAX_VIDEO_MS = 15000;
 let restoringProblem = false;
 let submittingProblem = false;
 let problemDraftVersion = 0;
+const taskDesktopViewport = window.matchMedia('(min-width: 1024px)');
+let taskDetailRequest = 0;
+let taskListRequest = 0;
+let taskDetailMediaUrls = [];
+
+function markSelectedTask() {
+  document.querySelectorAll('#problemList [data-id]').forEach((card) => {
+    const selected = $('#detailDialog').open && Number(card.dataset.id) === state.selected?.id;
+    card.classList.toggle('selected', selected);
+    card.setAttribute('aria-pressed', String(selected));
+  });
+}
+
+function presentTaskDetail() {
+  const detail = $('#detailDialog');
+  const inline = taskDesktopViewport.matches && state.boardView === 'tasks';
+  const parent = inline ? $('#problemDetailPane') : document.body;
+  const wasOpen = detail.open;
+  if (detail.parentElement !== parent) {
+    if (wasOpen) detail.close();
+    parent.appendChild(detail);
+  }
+  if (!detail.open) {
+    if (inline) detail.show();
+    else detail.showModal();
+  }
+  $('#problemDetailEmpty').hidden = inline;
+  markSelectedTask();
+}
+
+function releaseTaskDetailMedia() {
+  taskDetailMediaUrls.forEach((url) => URL.revokeObjectURL(url));
+  taskDetailMediaUrls = [];
+}
+
+function closeTaskDetail() {
+  taskDetailRequest += 1;
+  $('#detailDialog').close();
+}
+
+taskDesktopViewport.addEventListener('change', () => {
+  if ($('#detailDialog').open) presentTaskDetail();
+});
 
 function saveProblemDraft() {
   if (restoringProblem || !state.me || submittingProblem) return Promise.resolve();
@@ -478,6 +521,7 @@ function renderList() {
   const club = $('#clubFilter').value;
   const type = $('#typeFilter').value;
   const tasks = state.tasks.filter((task) => (!club || task.club === club) && (!type || task.type === type));
+  if ($('#detailDialog').open && !tasks.some((task) => task.id === state.selected?.id)) closeTaskDetail();
   $('#problemList').innerHTML = tasks.length ? tasks.map((task) => `
     <button class="problem-card" type="button" data-id="${task.id}">
       <div class="problem-card-badges"><span class="type-badge ${taskTypeBadgeClass(task.type)}">${escapeHtml(task.type)}</span>${task.has_photo ? '<span class="media-badge photo">● Фото</span>' : ''}${task.has_video ? '<span class="media-badge video">● Видео</span>' : ''}</div>
@@ -485,6 +529,7 @@ function renderList() {
       <p>${escapeHtml(task.club)} · ${dateLabel(task.date)}</p>
     </button>
   `).join('') : '<div class="empty-card">В этом разделе задач нет</div>';
+  markSelectedTask();
 }
 
 function localMonth() {
@@ -733,6 +778,7 @@ function openEquipmentReplacement() {
 }
 
 async function setBoardView(view) {
+  if (view !== state.boardView && $('#detailDialog').open) closeTaskDetail();
   state.boardView = view;
   $('#tasksView').classList.toggle('hidden', view !== 'tasks');
   $('#analyticsView').classList.toggle('hidden', view !== 'analytics');
@@ -748,21 +794,29 @@ async function setBoardView(view) {
 }
 
 async function loadTasks() {
+  const requestId = ++taskListRequest;
+  taskDetailRequest += 1;
+  if ($('#detailDialog').open) closeTaskDetail();
   $('#problemList').innerHTML = '<div class="empty-card">Загрузка…</div>';
   try {
     const payload = await api(`/api/problems?status=${state.status}`);
+    if (requestId !== taskListRequest) return;
     state.tasks = payload.tasks;
     $('#workCount').textContent = payload.counts.work;
     $('#reviewCount').textContent = payload.counts.review;
     renderList();
   } catch (error) {
+    if (requestId !== taskListRequest) return;
     $('#problemList').innerHTML = `<div class="empty-card">${escapeHtml(error.message)}</div>`;
   }
 }
 
 async function openTask(taskId) {
+  const requestId = ++taskDetailRequest;
   try {
     const task = await api(`/api/problems/${taskId}`);
+    if (requestId !== taskDetailRequest) return;
+    releaseTaskDetailMedia();
     state.selected = task;
     $('#detailMeta').textContent = `${task.type} · ${task.club} · ${dateLabel(task.date)}`;
     $('#detailTitle').textContent = task.title;
@@ -834,37 +888,45 @@ async function openTask(taskId) {
       ${history}
       ${actions ? `<div class="detail-actions">${actions}</div>` : ''}
     `;
-    $('#detailDialog').showModal();
-    if (task.has_photo) loadProblemPhoto(task.id);
-    if (task.has_video) loadProblemVideo(task.id);
-  } catch (error) { toast(error.message, true); }
+    presentTaskDetail();
+    if (task.has_photo) loadProblemPhoto(task.id, requestId);
+    if (task.has_video) loadProblemVideo(task.id, requestId);
+  } catch (error) { if (requestId === taskDetailRequest) toast(error.message, true); }
 }
 
-async function loadProblemPhoto(taskId) {
+async function loadProblemPhoto(taskId, requestId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/photo`, {
       headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
     });
     if (!response.ok) throw new Error('Не удалось загрузить фото');
-    const url = URL.createObjectURL(await response.blob());
+    const blob = await response.blob();
+    if (requestId !== taskDetailRequest || state.selected?.id !== taskId || !$('#detailDialog').open) return;
+    const url = URL.createObjectURL(blob);
+    taskDetailMediaUrls.push(url);
     const container = $('#detailPhoto');
     if (container) container.outerHTML = `<img class="detail-photo" src="${url}" alt="Фото проблемы">`;
   } catch (error) {
+    if (requestId !== taskDetailRequest) return;
     const container = $('#detailPhoto');
     if (container) container.textContent = error.message;
   }
 }
 
-async function loadProblemVideo(taskId) {
+async function loadProblemVideo(taskId, requestId) {
   try {
     const response = await fetch(`/api/problems/${taskId}/video`, {
       headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
     });
     if (!response.ok) throw new Error('Не удалось загрузить видео');
-    const url = URL.createObjectURL(await response.blob());
+    const blob = await response.blob();
+    if (requestId !== taskDetailRequest || state.selected?.id !== taskId || !$('#detailDialog').open) return;
+    const url = URL.createObjectURL(blob);
+    taskDetailMediaUrls.push(url);
     const container = $('#detailVideo');
     if (container) container.outerHTML = `<video class="detail-video" src="${url}" controls playsinline preload="metadata"></video>`;
   } catch (error) {
+    if (requestId !== taskDetailRequest) return;
     const container = $('#detailVideo');
     if (container) container.textContent = error.message;
   }
@@ -914,6 +976,20 @@ $('#equipmentList').addEventListener('click', (event) => {
 $('#problemList').addEventListener('click', (event) => {
   const card = event.target.closest('[data-id]');
   if (card) openTask(Number(card.dataset.id));
+});
+$('#detailDialog').addEventListener('close', () => {
+  if ($('#detailDialog').open) return;
+  $('#problemDetailEmpty').hidden = false;
+  markSelectedTask();
+  releaseTaskDetailMedia();
+});
+$('#detailDialog').addEventListener('cancel', () => { taskDetailRequest += 1; });
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !taskDesktopViewport.matches || !$('#detailDialog').open) return;
+  if (document.querySelector('dialog:modal')) return;
+  event.preventDefault();
+  closeTaskDetail();
+  document.querySelector('#problemList .problem-card[aria-pressed="true"]')?.focus();
 });
 $('#newProblem').addEventListener('click', () => $('#createDialog').showModal());
 $('#attachProblemFile').addEventListener('click', () => {
@@ -972,7 +1048,11 @@ $('#similarRepairList').addEventListener('click', async (event) => {
   await openTask(Number(task.dataset.similarTask));
 });
 document.addEventListener('click', (event) => {
-  if (event.target.closest('.close-dialog')) event.target.closest('dialog')?.close();
+  if (event.target.closest('.close-dialog')) {
+    const dialog = event.target.closest('dialog');
+    if (dialog?.id === 'detailDialog') closeTaskDetail();
+    else dialog?.close();
+  }
 });
 $('#createForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1048,7 +1128,7 @@ document.addEventListener('visibilitychange', () => {
 $('#detailDialog').addEventListener('click', async (event) => {
   const historyTask = event.target.closest('[data-history-task]');
   if (historyTask) {
-    $('#detailDialog').close();
+    closeTaskDetail();
     await openTask(Number(historyTask.dataset.historyTask));
     return;
   }
@@ -1057,7 +1137,7 @@ $('#detailDialog').addEventListener('click', async (event) => {
   if (action === 'confirm') {
     try {
       await api(`/api/problems/${state.selected.id}/confirm`, { method: 'POST' });
-      $('#detailDialog').close();
+      closeTaskDetail();
       if (state.boardView === 'analytics') await loadProblemAnalytics();
       else if (state.boardView === 'equipment') await loadEquipment();
       else await loadTasks();
@@ -1084,7 +1164,7 @@ $('#detailDialog').addEventListener('submit', async (event) => {
       method: 'POST',
       body: JSON.stringify({ message: new FormData(event.target).get('message') }),
     });
-    $('#detailDialog').close();
+    closeTaskDetail();
     await openTask(taskId);
     toast('Комментарий добавлен');
   } catch (error) {
@@ -1199,7 +1279,7 @@ $('#messageForm').addEventListener('submit', async (event) => {
       method: 'POST', body: JSON.stringify({ message: $('#actionMessage').value }),
     });
     $('#messageDialog').close();
-    $('#detailDialog').close();
+    closeTaskDetail();
     if (state.boardView === 'analytics') await loadProblemAnalytics();
     else if (state.boardView === 'equipment') await loadEquipment();
     else await loadTasks();
@@ -1212,6 +1292,7 @@ async function init() {
   try {
     [state.me, state.meta] = await Promise.all([api('/api/me'), api('/api/problems-meta')]);
     OmgApp.setIdentity(state.me);
+    window.OmgDesktop?.setUser(state.me);
     $('#problemUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#problemUserBadge').textContent = state.me.role_name;
     renderFilters();

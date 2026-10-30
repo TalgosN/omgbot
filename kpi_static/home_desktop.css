@@ -1,0 +1,95 @@
+@media (min-width:768px) {
+  .home-shell .module-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  .home-shell .module-card { min-height:134px; grid-template-columns:1fr; align-content:space-between; gap:14px; padding:20px; }
+  .home-shell .module-open { font-size:11px; }
+  .home-shell .module-icon { top:18px; right:18px; }
+  .home-shell .module-card h2 { font-size:24px; }
+  .home-shell .module-card small { max-width:90%; font-size:11px; }
+}
+@media (min-width:1024px) {
+  .home-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:24px; }
+  .home-shell > * { min-width:0; grid-column:1/-1; }
+  .home-header { order:0; grid-column:span 4; }
+  .home-header .brand { font-size:32px; }
+  .home-header .brand-eyebrow { margin-bottom:5px; }
+  .welcome { order:1; grid-column:span 8; align-self:center; display:flex; align-items:baseline; justify-content:flex-end; flex-wrap:wrap; column-gap:20px; row-gap:6px; margin:0; }
+  .welcome > .eyebrow { display:none; }
+  .welcome h1 { margin:0; font-size:clamp(28px,2.4vw,40px); }
+  .welcome-date { font-size:12px; letter-spacing:.02em; text-transform:none; }
+  .home-shell .modules-section { order:2; margin:0; }
+  .home-shell .module-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; }
+  .home-shell .module-card { min-height:145px; padding:20px; border-radius:22px; }
+  .home-shell .module-card h2 { margin-top:9px; font-size:clamp(20px,1.5vw,30px); }
+  .home-shell .module-card .eyebrow { max-width:calc(100% - 26px); font-size:10px; line-height:1.5; }
+  .home-shell .module-copy { padding-top:12px; }
+  .home-shell .module-card small { max-width:100%; margin-top:10px; line-height:1.6; }
+  .home-shell .module-icon { width:30px; height:30px; font-size:16px; top:12px; right:12px; }
+  .home-shell .module-open { font-size:11px; }
+  .home-shell .section-heading { margin:0 0 16px; }
+  .home-shell .section-heading h2 { margin-top:5px; font-size:22px; }
+  #managementSection { order:3; }
+  .management-grid { grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; }
+  .home-shell .management-grid .summary-tile { min-height:92px; padding:15px; border-radius:16px; }
+  .home-shell .summary-tile span { font-size:12px; line-height:1.4; }
+  .home-shell .summary-tile small { font-size:11px; }
+  .home-shell .summary-tile strong,.home-shell .management-grid .summary-tile strong { margin-top:10px; font-size:30px; }
+  #clubsSection { order:4; grid-column:span 8; }
+  #homeTasksSection { order:5; grid-column:span 4; margin-bottom:0; }
+  #personalSection { order:4; grid-column:span 8; }
+  .home-management #personalSection { order:6; }
+  #bookingsSection { order:6; grid-column:span 8; }
+  .home-management #bookingsSection { grid-column:span 4; }
+  #homeError { order:9; }
+  .home-shell .club-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:start; }
+  .home-shell .club-card { border-radius:20px; box-shadow:0 4px 20px rgba(76,51,140,.05); }
+  .home-shell .club-card > summary { padding:18px; }
+  .home-shell .club-head { align-items:flex-start; flex-wrap:wrap; }
+  .home-shell .club-head h3 { font-size:24px; }
+  .home-shell .club-status,.home-shell .club-booking-status { font-size:11px; }
+  .home-shell .club-live-statuses { flex-wrap:wrap; }
+  .home-shell .club-overview { margin-top:16px; }
+  .home-shell .club-shift-summary > span { font-size:12px; }
+  .home-shell .club-shift-summary strong.shift-people-list { flex-wrap:wrap; white-space:normal; overflow:visible; }
+  .home-shell .shift-person { min-height:34px; font-size:12px; }
+  .home-shell .club-meta { margin-top:14px; gap:10px; }
+  .home-shell .club-meta > div,.home-shell .club-meta > a { padding:12px; }
+  .home-shell .club-meta span { font-size:11px; }
+  .home-shell .club-meta strong { margin-top:8px; font-size:16px; }
+  .home-shell .club-expand { margin-top:14px; font-size:11px; }
+  .home-shell .bookings-freshness { font-size:10px; }
+  .home-shell .home-task-overall { min-height:88px; padding:18px; }
+  .home-shell .home-task-overall span b { font-size:15px; }
+  .home-shell .home-task-overall span small { font-size:12px; }
+  .home-shell .home-task-overall > strong { font-size:24px; }
+  .home-shell .home-task-list { gap:12px; }
+  .home-shell .home-task-group > summary { min-height:70px; padding:16px; }
+  .home-shell .home-task-group > summary span strong { font-size:14px; line-height:1.5; }
+  .home-shell .home-task-group > summary > b,.home-shell .home-task-club span strong { font-size:12px; }
+  .home-shell .home-task-club span small,.home-shell .home-task-club > b { font-size:10px; }
+  .home-shell .home-task-card { min-height:90px; padding-left:18px; }
+  .home-shell .home-task-copy strong { font-size:15px; }
+  .home-shell .home-task-copy span,.home-shell .home-task-status { font-size:11px; }
+  .home-shell .home-task-copy strong,.home-shell .home-task-copy span { white-space:normal; line-height:1.5; }
+  .home-shell .home-task-more,.home-shell .home-task-empty { min-height:48px; font-size:12px; }
+  .home-shell .home-tasks-count { font-size:12px; }
+  .home-shell .personal-grid { gap:16px; margin-bottom:24px; }
+  .home-shell .shift-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .home-shell .shift-card { min-height:90px; padding:18px; }
+  .home-shell .shift-card strong { font-size:18px; }
+  .home-shell .shift-card span,.home-shell .shift-card small { font-size:13px; }
+  .home-shell .booking-row { grid-template-columns:110px minmax(0,1fr) auto; padding:15px 8px; }
+  .home-shell .booking-time,.home-shell .booking-info strong { font-size:14px; }
+  .home-shell .booking-info span,.home-shell .booking-guests { font-size:12px; }
+  .home-shell .booking-warning,.home-shell .empty-card { font-size:12px; }
+  .home-shell .employee-preview-entry { order:8; width:fit-content; margin:0; }
+  .home-shell .employee-preview-banner { grid-column:1/-1; }
+  .home-shell .clickable-card:hover { border-color:rgba(112,70,217,.4); background:#fff; }
+  .home-shell .module-card:hover { transform:translateY(-3px); box-shadow:0 18px 32px rgba(50,32,94,.23); }
+}
+@media (min-width:1920px) {
+  .home-shell .club-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .home-shell .module-card { min-height:155px; }
+  .home-shell .module-card small,.home-shell .module-open { font-size:13px; }
+  .home-shell .management-grid .summary-tile { min-height:102px; }
+  .home-shell .summary-tile strong,.home-shell .management-grid .summary-tile strong { font-size:36px; }
+}
