@@ -182,6 +182,9 @@ def main():
             page.wait_for_function('homeData && !bookingsLoading')
             assert page.locator('#homeError').is_hidden(), page.locator('#homeError').text_content()
             screenshot(f'home-owner-{width}')
+            if width >= 1024:
+                header_heights = page.locator('.club-head').evaluate_all('(nodes) => nodes.map(node => node.getBoundingClientRect().height)')
+                assert max(header_heights) - min(header_heights) < 2, 'Club headers must align regardless of name length'
             role[0] = 0
             actor.update(name='Миша', role_name='Сотрудник')
             page.reload()

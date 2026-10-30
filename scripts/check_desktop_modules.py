@@ -193,6 +193,25 @@ def main():
             page.locator('.employee-card').first.click()
             page.locator('#employeeDialog').wait_for(state='visible')
             assert page.locator('#employeeDialog').evaluate('(node) => node.matches(":modal")') == (width < 1024)
+            if width >= 1024:
+                page.evaluate('window.scrollTo(0, 0)')
+                tabs = page.locator('.view-tabs').bounding_box()
+                period = page.locator('.period-panel').bounding_box()
+                summary = page.locator('#summary').bounding_box()
+                pane = page.locator('#kpiEmployeePane').bounding_box()
+                controls = page.locator('.rating-controls').bounding_box()
+                listing = page.locator('#employeeList').bounding_box()
+                assert abs(tabs['y'] - period['y']) < 2
+                assert period['x'] + period['width'] < tabs['x']
+                assert abs(summary['x'] - period['x']) < 2
+                assert abs(summary['width'] - period['width']) < 2
+                assert abs(tabs['y'] + tabs['height'] - summary['y'] - summary['height']) < 2
+                assert abs(pane['y'] - controls['y']) < 2, (pane, controls)
+                assert controls['x'] + controls['width'] <= listing['x'] + listing['width'] + 2
+                buttons = page.locator('.view-tab:visible').evaluate_all('(nodes) => nodes.map(node => ({x:node.offsetLeft,y:node.offsetTop}))')
+                assert buttons[0]['y'] == buttons[1]['y'] and buttons[2]['y'] > buttons[0]['y']
+                search = page.locator('.rating-search').bounding_box()
+                assert listing['y'] - search['y'] - search['height'] <= 36, 'No empty filter row when collapsed'
             snapshot(f'kpi-rating-{width}')
             page.keyboard.press('Escape')
             page.locator('#employeeDialog').wait_for(state='hidden')
@@ -206,6 +225,16 @@ def main():
                 if name == 'shift':
                     page.wait_for_function('scheduleState.data !== null')
                     page.locator('#shiftSchedule').evaluate('(node) => { node.open = true; }')
+                    page.evaluate("""() => {
+                        const shift = {employee:'Тест', start:'10:00', end:'18:00', duration:8};
+                        const empty = {date:'2026-10-26', locations:[{club:'Другая Смена', shifts:[]}]};
+                        if (renderScheduleByClubs([empty]).includes('schedule-club')) throw new Error('Empty club rendered');
+                        const populated = {date:'2026-10-27', locations:[{club:'Другая Смена', shifts:[shift]}]};
+                        const html = renderScheduleByClubs([empty, populated]);
+                        if (!html.includes('Другая Смена') || (html.match(/class="schedule-location"/g) || []).length !== 1) {
+                            throw new Error('Actual shifts must remain, empty dates must not render');
+                        }
+                    }""")
                 snapshot(f'{name}-{width}')
 
         # Exercise desktop tabs and responsive employee details with pending input.
@@ -213,6 +242,12 @@ def main():
         page.goto('http://omg.test/kpi')
         page.wait_for_function('state.employees.length === 6')
         page.locator('[data-view="rating"]').click()
+        page.locator('#managerFiltersToggle').click()
+        filters = page.locator('#managerFilters').bounding_box()
+        listing = page.locator('#employeeList').bounding_box()
+        assert filters and filters['y'] + filters['height'] <= listing['y']
+        page.locator('#managerFiltersToggle').click()
+        assert page.locator('#managerFilters').is_hidden()
         page.locator('#searchInput').fill('Мося')
         assert page.locator('.employee-card').count() == 1
         page.locator('.employee-card').press('Enter')

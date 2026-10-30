@@ -321,6 +321,7 @@ function renderScheduleByDays(days, predicate) {
 function renderScheduleByClubs(days) {
   const clubs = new Map();
   days.forEach((day) => (day.locations || []).forEach((location) => {
+    if (!location.shifts?.length) return;
     if (!clubs.has(location.club)) clubs.set(location.club, []);
     clubs.get(location.club).push({ date: day.date, shifts: location.shifts || [] });
   }));

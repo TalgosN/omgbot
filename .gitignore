@@ -11,3 +11,5 @@ dump/*
 !dump/STEAM_TRACKER_ИНСТРУКЦИЯ_МЕНЕДЖЕРА.md
 !dump/STEAM_TRACKER_ИНСТРУКЦИЯ_ВЛАДЕЛЬЦА.md
 data/
+*.[mM][dD]
+!/README.md
