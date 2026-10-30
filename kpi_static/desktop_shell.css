@@ -1,6 +1,16 @@
 .desktop-sidebar { display:none; }
+.desktop-launchbar { display:none; }
+.desktop-enabled:has(.camera-stage:not([hidden])) .desktop-launchbar,.desktop-enabled:has(.problem-camera-stage:not([hidden])) .desktop-launchbar { visibility:hidden; }
+@media (max-width:1023px) {
+  .desktop-client .desktop-launchbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:max(12px,var(--desktop-safe-top,0px)) 16px 12px; border-bottom:1px solid var(--line); background:var(--desktop-nav-bg,var(--surface)); }
+  .desktop-launchbar a { color:var(--purple,var(--accent,#b998ff)); text-decoration:none; font:700 12px Montserrat,sans-serif; }
+  .desktop-launchbar button { min-height:40px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; color:var(--ink,var(--text,#f9f7ff)); background:var(--lavender,rgba(174,151,255,.14)); font:700 12px Montserrat,sans-serif; cursor:pointer; }
+  .desktop-launchbar button[hidden] { display:none; }
+}
 @media (min-width:1024px) {
   body.desktop-enabled { --desktop-sidebar:208px; --desktop-gap:clamp(20px,2vw,40px); }
+  body.desktop-dark { --desktop-nav-bg:#130d21; --ink:var(--text,#f9f7ff); --purple:var(--accent,#b998ff); --purple-dark:var(--accent-2,#8453cd); --lavender:rgba(174,151,255,.12); }
+  .desktop-enabled [hidden] { display:none !important; }
   .desktop-sidebar { position:fixed; z-index:20; inset:0 auto 0 0; display:flex; width:var(--desktop-sidebar); padding:32px 14px 20px; flex-direction:column; border-right:1px solid var(--line); color:var(--ink); background:var(--desktop-nav-bg,#f5f1fb); }
   .desktop-brand { display:flex; gap:7px; align-items:center; padding:0 14px; color:var(--purple-dark); font:27px Furore,"Russo One",sans-serif; text-decoration:none; }
   .desktop-brand b { color:var(--purple); font-weight:400; }
@@ -22,11 +32,12 @@
   .desktop-profile span { min-width:0; overflow-wrap:anywhere; }
   .desktop-profile strong { font-size:12px; }
   .desktop-profile small { margin-top:4px; color:var(--muted); font-size:10px; }
-  .desktop-enabled > main { width:calc(100% - var(--desktop-sidebar)); margin-left:var(--desktop-sidebar); padding:28px var(--desktop-gap) 40px; }
+  .desktop-enabled > main { width:calc(100% - var(--desktop-sidebar)); margin-left:var(--desktop-sidebar); padding:max(28px,var(--desktop-safe-top,0px)) var(--desktop-gap) 40px; }
   .desktop-enabled .user-badge { padding:10px 14px; font-size:12px; }
   .desktop-enabled .eyebrow { font-size:11px; }
   .desktop-enabled button:focus-visible,.desktop-enabled a:focus-visible,.desktop-enabled select:focus-visible,.desktop-enabled textarea:focus-visible,.desktop-enabled input:focus-visible { outline:2px solid var(--purple); outline-offset:3px; }
   .desktop-enabled > .omg-connection-status { margin-left:var(--desktop-sidebar); }
+  .desktop-enabled:has(.camera-stage:not([hidden])) .desktop-sidebar,.desktop-enabled:has(.problem-camera-stage:not([hidden])) .desktop-sidebar { visibility:hidden; }
 }
 @media (min-width:1024px) and (max-width:1279px) {
   body.desktop-enabled { --desktop-sidebar:78px; }

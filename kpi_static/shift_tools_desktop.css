@@ -1,0 +1,93 @@
+@media (min-width:768px) {
+  .consumables-desktop .consumables-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (min-width:1024px) {
+  .shift-tasks-desktop .task-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:22px; }
+  .shift-tasks-desktop .task-shell > * { grid-column:1/-1; min-width:0; margin:0; }
+  .shift-tasks-desktop .task-header { grid-column:span 7; }
+  .shift-tasks-desktop .task-summary { grid-column:span 5; align-self:center; }
+  .shift-tasks-desktop .task-summary strong { font-size:26px; }
+  .shift-tasks-desktop .task-summary span { font-size:12px; }
+  .shift-tasks-desktop .task-tabs { max-width:400px; }
+  .shift-tasks-desktop .task-tabs button { min-height:46px; font-size:14px; }
+  .shift-tasks-desktop .task-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; align-items:start; }
+  .shift-tasks-desktop .task-group-toggle { min-height:125px; padding:22px; }
+  .shift-tasks-desktop .task-group-copy strong { font-size:20px; line-height:1.4; }
+  .shift-tasks-desktop .task-group-copy small,.shift-tasks-desktop .task-group-copy em { font-size:12px; }
+  .shift-tasks-desktop .task-group-progress b { font-size:12px; }
+  .shift-tasks-desktop .task-club-row { min-height:64px; padding:16px; }
+  .shift-tasks-desktop .task-club-row strong { font-size:15px; }
+  .shift-tasks-desktop .task-club-row small { font-size:12px; }
+  .shift-tasks-desktop #taskDialog { width:min(1000px,calc(100vw - 60px)); padding:28px; }
+  .shift-tasks-desktop #dialogTitle { font-size:30px; }
+  .shift-tasks-desktop .dialog-instructions,.shift-tasks-desktop .requirement-list li { font-size:14px; line-height:1.8; }
+  .shift-tasks-desktop .task-report-media { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .shift-tasks-desktop .report-picker button,.shift-tasks-desktop .primary,.shift-tasks-desktop .danger { min-height:48px; font-size:14px; }
+  .shift-tasks-desktop .attachment-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .consumables-desktop .consumables-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:22px; align-items:start; }
+  .consumables-desktop .consumables-shell > * { grid-column:1/-1; min-width:0; margin:0; }
+  .consumables-desktop .consumables-back { font-size:12px; }
+  .consumables-desktop h1 { font-size:42px; }
+  .consumables-desktop .consumables-overview { grid-column:span 12; grid-template-columns:repeat(3,minmax(0,1fr)); max-width:900px; }
+  .consumables-desktop .consumables-overview article { min-height:92px; padding:20px; }
+  .consumables-desktop .consumables-overview small { font-size:12px; }
+  .consumables-desktop .consumables-overview strong { font-size:32px; }
+  .consumables-desktop .consumables-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); gap:20px; align-items:start; }
+  .consumables-desktop .consumables-controls { grid-column:1; grid-row:1/3; position:sticky; top:20px; padding:20px; }
+  .consumables-desktop .consumables-toolbar,.consumables-desktop .consumables-search-row { display:grid; grid-template-columns:1fr; gap:14px; }
+  .consumables-desktop .consumables-management { flex-wrap:wrap; }
+  .consumables-desktop .consumables-categories { display:grid; grid-template-columns:1fr; gap:8px; }
+  .consumables-desktop .consumables-categories button { text-align:left; min-height:42px; padding:12px; font-size:13px; white-space:normal; }
+  .consumables-desktop .consumables-toolbar select,.consumables-desktop #consumablesSearch { min-height:44px; font-size:13px; }
+  .consumables-desktop .archive-toggle { justify-content:flex-start; gap:10px; font-size:12px; }
+  .consumables-desktop .archive-toggle input { width:18px; height:18px; min-height:18px; padding:0; flex:none; accent-color:var(--accent); }
+  .consumables-desktop .consumables-status { grid-column:2; margin:0; }
+  .consumables-desktop .consumables-list { grid-column:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+  .consumables-desktop .consumable-card { padding:20px; grid-template-columns:64px minmax(0,1fr); }
+  .consumables-desktop .consumable-photo { width:64px; height:64px; }
+  .consumables-desktop .consumable-stock { flex-wrap:wrap; gap:8px; }
+  .consumables-desktop .consumable-info h3 { font-size:17px; line-height:1.4; }
+  .consumables-desktop .consumable-info small { font-size:11px; }
+  .consumables-desktop .consumable-stock > strong { font-size:30px; }
+  .consumables-desktop .consumable-stock > span,.consumables-desktop .stock-state { font-size:11px; }
+  .consumables-desktop .consumable-card-actions { flex-wrap:wrap; }
+  .consumables-desktop .consumable-card-actions button { font-size:12px; min-height:40px; }
+  .consumables-desktop .consumable-modal-card { width:min(740px,calc(100vw - 60px)); border-radius:24px; padding:28px; }
+  .consumables-desktop .consumable-modal-card input,.consumables-desktop .consumable-modal-card select { font-size:14px; min-height:46px; }
+  .config-desktop #editor { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:20px; align-items:start; }
+  .config-desktop #editor > .toolbar,.config-desktop .variant-bar,.config-desktop #editor > .panel,.config-desktop .bottom-actions { grid-column:1; margin:0; }
+  .config-desktop .history-panel { grid-column:2; grid-row:1/5; margin:0; position:sticky; top:20px; }
+  .config-desktop .toolbar { display:grid; grid-template-columns:minmax(0,1fr) auto; }
+  .config-desktop .toolbar label { min-width:0; }
+  .config-desktop .edit-row { padding:18px; }
+  .config-desktop .edit-row.question { grid-template-columns:30px minmax(0,1fr) 120px; align-items:start; }
+  .config-desktop .edit-row.question .row-actions { grid-column:2/4; justify-self:end; }
+  .config-desktop .question-fields { display:grid; grid-template-columns:1fr; gap:14px; }
+  .config-desktop .question-fields textarea { min-height:80px; font-size:13px; line-height:1.6; }
+  .config-desktop select,.config-desktop .soft,.config-desktop .primary { font-size:13px; min-height:44px; }
+  .config-desktop .history-row { padding:16px; }
+  .config-desktop #previewDialog { width:min(760px,calc(100vw - 60px)); padding:28px; }
+  .report-desktop .test-shell { display:grid; grid-template-columns:300px minmax(0,1fr); align-items:start; gap:20px 28px; }
+  .report-desktop .test-shell > * { min-width:0; margin:0; }
+  .report-desktop .test-header { grid-column:1/-1; }
+  .report-desktop .test-intro { grid-column:1; grid-row:2/7; position:sticky; top:20px; }
+  .report-desktop .test-intro h1 { font-size:32px; line-height:1.25; }
+  .report-desktop .test-intro p { font-size:13px; line-height:1.7; }
+  .report-desktop .test-shell > :not(.test-header):not(.test-intro) { grid-column:2; }
+  .report-desktop .stage-card { padding:28px; }
+  .report-desktop .stage-heading h2 { font-size:28px; }
+  .report-desktop .checklist-list li { font-size:14px; line-height:1.7; }
+  .report-desktop .primary-button,.report-desktop .secondary-button { min-height:50px; font-size:15px; }
+  .report-desktop .photo-review { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .report-desktop .resume-dialog { width:min(620px,calc(100vw - 60px)); padding:28px; }
+}
+@media (min-width:1440px) {
+  .config-desktop .question-fields { grid-template-columns:1fr 1fr; }
+  .consumables-desktop .consumables-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media (min-width:1920px) {
+  .shift-tasks-desktop .task-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .consumables-desktop .consumables-list { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .config-desktop #editor { grid-template-columns:minmax(0,1fr) 380px; }
+  .report-desktop .test-shell { grid-template-columns:360px minmax(0,1fr); }
+}

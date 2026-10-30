@@ -200,6 +200,14 @@ def main():
             if width >= 1024:
                 assert page.locator('#problemList').is_visible()
                 assert page.locator('#problemDetailPane #detailDialog').count() == 1
+                filters = page.locator('.problem-filters').bounding_box()
+                listing = page.locator('#problemList').bounding_box()
+                pane = page.locator('#problemDetailPane').bounding_box()
+                tabs = page.locator('#problemTabs').bounding_box()
+                assert abs(filters['x'] - listing['x']) < 2
+                assert filters['x'] + filters['width'] <= listing['x'] + listing['width'] + 2
+                assert pane['y'] < tabs['y'], 'Detail should start beside the top controls'
+                assert listing['y'] - (filters['y'] + filters['height']) <= 20, 'Filters must sit directly above the list'
                 page.locator('#problemList .problem-card').nth(1).click()
                 page.wait_for_function('state.selected?.id === 3')
                 assert page.locator('.problem-card.selected').get_attribute('data-id') == '3'
@@ -218,6 +226,14 @@ def main():
             check_width()
         page.locator('#taskCommentForm button').click()
         page.get_by_text('Комментарий перед изменением размера', exact=True).wait_for()
+        page.locator('[data-action="solution"]').click()
+        page.locator('#actionMessage').fill('Кабель заменён, устройство проверено.')
+        page.set_viewport_size({'width': 390, 'height': 844})
+        assert page.locator('#actionMessage').input_value() == 'Кабель заменён, устройство проверено.'
+        page.locator('#messageDialog .close-dialog').click()
+        page.wait_for_function('document.querySelector("#detailDialog").matches(":modal")')
+        page.set_viewport_size({'width': 1920, 'height': 1080})
+        page.wait_for_function('!document.querySelector("#detailDialog").matches(":modal")')
         page.locator('[data-action="solution"]').click()
         page.locator('#actionMessage').fill('Кабель заменён, устройство проверено.')
         page.locator('#messageSubmit').click()

@@ -91,6 +91,48 @@ const customGoalTypeHints = {
 const $ = (selector) => document.querySelector(selector);
 const employeeList = $('#employeeList');
 const employeeDialog = $('#employeeDialog');
+const employeeDesktopViewport = window.matchMedia('(min-width: 1024px)');
+
+function markEmployeeSelection() {
+  document.querySelectorAll('#employeeList [data-login]').forEach((card) => {
+    card.classList.toggle('selected', employeeDialog.open && card.dataset.login === state.selected?.login);
+  });
+}
+
+function presentEmployeeDialog() {
+  const inline = employeeDesktopViewport.matches && document.querySelector('.view-tab.active')?.dataset.view === 'rating';
+  const parent = inline ? $('#kpiEmployeePane') : document.body;
+  if (employeeDialog.parentElement !== parent) {
+    if (employeeDialog.open) employeeDialog.close();
+    parent.appendChild(employeeDialog);
+  }
+  if (!employeeDialog.open) {
+    if (inline) employeeDialog.show();
+    else employeeDialog.showModal();
+  }
+  $('#kpiEmployeeEmpty').hidden = inline;
+  markEmployeeSelection();
+}
+
+function syncEmployeePresentation() {
+  if (employeeDialog.open && !document.querySelector('dialog:modal:not(#employeeDialog)')) presentEmployeeDialog();
+}
+employeeDesktopViewport.addEventListener('change', syncEmployeePresentation);
+document.addEventListener('close', (event) => {
+  if (event.target !== employeeDialog) syncEmployeePresentation();
+}, true);
+employeeDialog.addEventListener('close', () => {
+  if (employeeDialog.open) return;
+  $('#kpiEmployeeEmpty').hidden = false;
+  markEmployeeSelection();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !employeeDialog.open || !employeeDesktopViewport.matches || document.querySelector('dialog:modal')) return;
+  event.preventDefault();
+  const card = [...document.querySelectorAll('#employeeList [data-login]')].find((item) => item.dataset.login === state.selected?.login);
+  employeeDialog.close();
+  card?.focus();
+});
 const penaltyDialog = $('#penaltyDialog');
 const entriesDialog = $('#entriesDialog');
 const monthCloseDialog = $('#monthCloseDialog');
@@ -553,7 +595,7 @@ function renderEmployees() {
       )).join('')
       : '';
     return `
-      <article class="employee-card" data-login="${escapeHtml(item.login)}">
+      <article class="employee-card" data-login="${escapeHtml(item.login)}" role="button" tabindex="0" aria-label="Карточка ${escapeHtml(item.nickname)}">
         <div class="employee-head">
           <div>
             <div class="employee-name">${escapeHtml(item.nickname)}</div>
@@ -583,6 +625,7 @@ function renderEmployees() {
       </article>
     `;
   }).join('');
+  markEmployeeSelection();
 }
 
 function hashtagValue(item) {
@@ -701,7 +744,7 @@ function renderDialog(employee) {
       </div>
     ` : ''}
   `;
-  employeeDialog.showModal();
+  presentEmployeeDialog();
 }
 
 async function showMetricEntries(metricKey) {
@@ -1362,6 +1405,7 @@ $('#sortSelect').addEventListener('change', (event) => {
 async function setKpiView(view) {
   const tab = document.querySelector(`.view-tab[data-view="${view}"]`);
   if (!tab || tab.hidden) return;
+  if (employeeDialog.open) employeeDialog.close();
   document.querySelectorAll('.view-tab').forEach(
     (button) => button.classList.toggle('active', button === tab),
   );
@@ -1379,6 +1423,13 @@ async function setKpiView(view) {
 document.querySelector('.view-tabs').addEventListener('click', async (event) => {
   const tab = event.target.closest('[data-view]');
   if (tab) await setKpiView(tab.dataset.view);
+});
+employeeList.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const card = event.target.closest('.employee-card');
+  if (!card) return;
+  event.preventDefault();
+  card.click();
 });
 
 function saveKpiView() {

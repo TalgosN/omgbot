@@ -163,6 +163,7 @@
     installStyles();
     try {
       const me = await api('/api/me');
+      window.OmgDesktop?.setUser(me);
       window.OmgEmployeePreview = me.preview || null;
       if (me.preview) renderBanner(me.preview);
       else if (me.can_preview_employee && (

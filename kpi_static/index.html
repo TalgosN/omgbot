@@ -12,8 +12,10 @@
   <link rel="stylesheet" href="/static/styles.css?v=20260904-3">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/app_ux.css?v=20260915-1">
+  <link rel="stylesheet" href="/static/desktop_shell.css?v=20261030-2">
+  <link rel="stylesheet" href="/static/kpi_desktop.css?v=20261030-2">
 </head>
-<body>
+<body class="desktop-enabled desktop-dark kpi-desktop">
   <main class="shell">
     <header class="topbar">
       <div>
@@ -117,11 +119,16 @@
         </div>
       </section>
 
+      <div class="kpi-rating-workspace">
       <section id="employeeList" class="employee-list" aria-live="polite">
         <div class="loading-card"></div>
         <div class="loading-card"></div>
         <div class="loading-card"></div>
       </section>
+      <aside id="kpiEmployeePane" class="kpi-employee-pane" aria-label="Карточка сотрудника">
+        <div id="kpiEmployeeEmpty" class="kpi-employee-empty"><i aria-hidden="true">↗</i><h2>Выберите сотрудника</h2><p>Показатели, исходные записи и управление KPI откроются здесь.</p></div>
+      </aside>
+      </div>
     </section>
 
     <section id="analyticsView" class="analytics-view" hidden>
@@ -265,7 +272,7 @@
     </section>
   </main>
 
-  <dialog id="employeeDialog" class="dialog">
+  <dialog id="employeeDialog" class="dialog" aria-labelledby="dialogName">
     <div class="dialog-header">
       <div>
         <p id="dialogLogin" class="eyebrow"></p>
@@ -421,8 +428,9 @@
 
   <div id="toast" class="toast" role="status"></div>
   <script src="/static/app_ux.js?v=20260915-1"></script>
-  <script src="/static/app.js?v=20260915-1"></script>
+  <script src="/static/desktop_shell.js?v=20261030-2"></script>
+  <script src="/static/app.js?v=20261030-2"></script>
   <script src="/static/swipe_navigation.js?v=20260915-1"></script>
-  <script src="/static/employee_preview.js?v=20260903-1"></script>
+  <script src="/static/employee_preview.js?v=20261030-2"></script>
 </body>
 </html>

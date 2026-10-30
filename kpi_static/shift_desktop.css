@@ -1,0 +1,81 @@
+@media (min-width:768px) {
+  .shift-desktop .shift-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .shift-desktop .schedule-content { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:12px; }
+}
+@media (min-width:1024px) {
+  .shift-desktop .shift-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:24px; }
+  .shift-desktop .shift-shell > * { min-width:0; grid-column:1/-1; margin:0; }
+  .shift-desktop .shift-header { margin-bottom:6px; }
+  .shift-desktop h1 { font-size:42px; }
+  .shift-desktop .shift-section-heading h2,.shift-desktop .shift-report-test h2 { font-size:24px; }
+  .shift-desktop .shift-section-heading { margin:0 0 18px; }
+  .shift-desktop .section-date { font-size:12px; }
+  .shift-desktop #shiftToday { grid-column:span 7; }
+  .shift-desktop #employeeShiftDashboard { grid-column:span 5; }
+  .shift-desktop .shift-today-list { gap:18px; }
+  .shift-desktop .today-shift-card { padding:24px; border-radius:22px; }
+  .shift-desktop .today-shift-head h3 { font-size:28px; }
+  .shift-desktop .today-shift-head p,.shift-desktop .today-colleagues small { font-size:12px; }
+  .shift-desktop .today-colleagues strong { font-size:15px; }
+  .shift-desktop .today-report-grid { gap:14px; margin-top:20px; }
+  .shift-desktop .today-report { min-height:100px; padding:20px; }
+  .shift-desktop .today-report strong { font-size:20px; }
+  .shift-desktop .today-report small,.shift-desktop .today-task strong { font-size:13px; }
+  .shift-desktop .today-task small,.shift-desktop .today-bookings-head { font-size:12px; }
+  .shift-desktop .today-booking strong { font-size:13px; }
+  .shift-desktop .shift-dashboard { padding:24px; }
+  .shift-desktop .shift-dashboard-grid { grid-template-columns:1fr; gap:20px; }
+  .shift-desktop .nearest-shift { padding:22px; }
+  .shift-desktop .nearest-shift h2 { font-size:26px; }
+  .shift-desktop .nearest-shift-meta strong,.shift-desktop .nearest-shift-meta span { font-size:13px; }
+  .shift-desktop .compact-heading { font-size:13px; }
+  .shift-desktop .upcoming-shift { padding:16px; }
+  .shift-desktop .upcoming-shift strong { font-size:15px; }
+  .shift-desktop .upcoming-shift span,.shift-desktop .upcoming-shift small { font-size:12px; }
+  .shift-desktop .owner-operation-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; }
+  .shift-desktop .owner-operation-tile { min-height:148px; padding:24px; }
+  .shift-desktop .owner-operation-tile small { font-size:14px; }
+  .shift-desktop .owner-operation-tile strong { font-size:38px; }
+  .shift-desktop .owner-operation-tile span { font-size:12px; }
+  .shift-desktop .owner-operation-detail { padding:24px; }
+  .shift-desktop .owner-club-row { min-height:60px; padding:16px; }
+  .shift-desktop .owner-club-row strong { font-size:16px; }
+  .shift-desktop .owner-club-row small,.shift-desktop .owner-club-row > b { font-size:12px; }
+  .shift-desktop #shiftSchedule { grid-column:span 8; }
+  .shift-desktop .shift-tools-workspace { grid-column:span 4; position:sticky; top:20px; }
+  .shift-desktop .shift-tools-heading { margin:0 0 16px; }
+  .shift-desktop .shift-actions { grid-template-columns:1fr; gap:14px; }
+  .shift-desktop .shift-action { min-height:112px; padding:22px; grid-template-columns:42px minmax(0,1fr); gap:14px; }
+  .shift-desktop .shift-action > b { grid-column:2; justify-self:start; margin:0; }
+  .shift-desktop .shift-action strong { font-size:18px; }
+  .shift-desktop .shift-action small,.shift-desktop .shift-action p,.shift-desktop .shift-action-status { font-size:12px; }
+  .shift-desktop .shift-action p { line-height:1.6; }
+  .shift-desktop .shift-schedule > summary { padding:22px; }
+  .shift-desktop .schedule-summary-title strong { font-size:23px; }
+  .shift-desktop .schedule-summary-title small,.shift-desktop .schedule-summary-title > b { font-size:12px; }
+  .shift-desktop .schedule-summary-side > b { font-size:14px; }
+  .shift-desktop .schedule-body { padding:0 22px 22px; }
+  .shift-desktop .schedule-tabs { margin:16px 0; }
+  .shift-desktop .schedule-tabs button { min-height:44px; font-size:13px; }
+  .shift-desktop .week-navigation button { min-height:44px; }
+  .shift-desktop .week-navigation span { font-size:13px; }
+  .shift-desktop .week-navigation small { font-size:10px; }
+  .shift-desktop .schedule-day { margin:0; padding:16px; }
+  .shift-desktop .schedule-day-head strong { font-size:15px; }
+  .shift-desktop .schedule-location h3 { font-size:12px; }
+  .shift-desktop .schedule-shift { align-items:start; gap:10px; padding:12px; }
+  .shift-desktop .schedule-shift strong { font-size:12px; }
+  .shift-desktop .schedule-shift b,.shift-desktop .schedule-shift small { font-size:11px; }
+  .shift-desktop #shiftHistory { grid-column:span 8; }
+  .shift-desktop .shift-history > summary { padding:22px; }
+  .shift-desktop .shift-history > summary strong { font-size:22px; }
+  .shift-desktop .shift-history > summary small { font-size:12px; }
+  .shift-desktop .shift-history-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  .shift-desktop .history-item { padding:18px; }
+  .shift-desktop .shift-alerts a { padding:18px; font-size:14px; }
+}
+@media (min-width:1920px) {
+  .shift-desktop .schedule-content { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .shift-desktop .owner-operation-tile { min-height:162px; }
+  .shift-desktop .shift-action { min-height:126px; }
+}

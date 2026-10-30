@@ -45,9 +45,13 @@ function closeTaskDetail() {
   $('#detailDialog').close();
 }
 
-taskDesktopViewport.addEventListener('change', () => {
-  if ($('#detailDialog').open) presentTaskDetail();
-});
+function syncTaskDetailPresentation() {
+  if ($('#detailDialog').open && !document.querySelector('dialog:modal:not(#detailDialog)')) presentTaskDetail();
+}
+taskDesktopViewport.addEventListener('change', syncTaskDetailPresentation);
+document.addEventListener('close', (event) => {
+  if (event.target !== $('#detailDialog')) syncTaskDetailPresentation();
+}, true);
 
 function saveProblemDraft() {
   if (restoringProblem || !state.me || submittingProblem) return Promise.resolve();

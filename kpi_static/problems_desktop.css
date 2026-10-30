@@ -19,31 +19,32 @@
 @media (min-width:1024px) {
   .taskboard-desktop { --desktop-nav-bg:#130a23; }
   .taskboard-desktop .desktop-brand { color:#f9f7ff; }
-  .problem-shell { display:grid; grid-template-columns:minmax(0,1fr) auto; align-content:start; align-items:start; column-gap:20px; }
+  .problem-shell { display:grid; grid-template-columns:minmax(280px,.85fr) minmax(0,1.3fr); grid-template-rows:auto auto 54px 58px 48px minmax(0,1fr); align-content:start; align-items:start; gap:14px 20px; }
+  .problem-shell:has(#boardViewTabs.hidden) { grid-template-rows:auto auto 0 58px 48px minmax(0,1fr); }
+  .problem-shell:has(#tasksView.hidden) { grid-template-rows:none; }
   .problem-shell > * { min-width:0; }
   .problem-header { grid-column:1; align-self:center; }
   .problem-title h1 { font-size:clamp(25px,2.1vw,42px); margin-top:8px; }
   .problem-title .eyebrow { font-size:11px; }
   .problem-header .user-badge { display:none; }
-  .problem-shell .header-actions { grid-column:2; align-self:center; margin:0; flex-wrap:nowrap; }
+  .problem-shell .header-actions { grid-column:2; justify-self:end; align-self:center; margin:0; flex-wrap:nowrap; }
   .problem-shell .header-actions button { min-height:44px; padding-inline:16px; font-size:12px; white-space:nowrap; }
-  .problem-intro { grid-column:1/-1; margin:20px 0; padding:12px 14px; }
+  .problem-intro { grid-column:1/-1; margin:6px 0; padding:12px 14px; }
   .problem-intro > p { max-width:none; font-size:12px; }
-  .board-view-tabs { grid-column:1/-1; width:360px; margin-bottom:20px; }
+  .board-view-tabs { grid-column:1; grid-row:3; width:100%; margin:0; }
   #tasksView,#analyticsView,#equipmentView { grid-column:1/-1; }
-  #tasksView { display:grid; grid-template-columns:minmax(360px,1fr) minmax(280px,.8fr); gap:18px; }
-  .problem-shell .problem-tabs { min-width:0; align-self:center; box-shadow:none; }
-  .problem-shell .problem-filters { margin:0; align-self:center; gap:12px; }
+  #tasksView,.task-workspace { display:contents; }
+  .problem-shell .problem-tabs { grid-column:1; grid-row:4; min-width:0; align-self:center; box-shadow:none; }
+  .problem-shell .problem-filters { grid-column:1; grid-row:5; margin:0; align-self:center; gap:12px; }
   .problem-shell .problem-filters select { min-height:48px; font-size:13px; }
-  .task-workspace { grid-column:1/-1; display:grid; grid-template-columns:minmax(280px,.85fr) minmax(0,1.3fr); gap:20px; align-items:start; }
-  .problem-shell .problem-list { min-width:0; align-content:start; gap:10px; }
+  .problem-shell .problem-list { grid-column:1; grid-row:6; min-width:0; align-content:start; gap:10px; }
   .problem-shell .problem-card { padding:18px; border-radius:17px; transition:border-color .15s,background .15s; }
   .problem-shell .problem-card:hover { border-color:rgba(216,122,255,.6); background:#2b1247; }
   .problem-shell .problem-card h3 { margin:12px 0 10px; font-size:17px; line-height:1.4; overflow-wrap:anywhere; }
   .problem-shell .problem-card p { margin:0; font-size:12px; line-height:1.6; }
   .problem-shell .problem-card .type-badge,.problem-shell .media-badge { font-size:10px; }
   .problem-shell .problem-card.selected { border-color:#d29af8; background:linear-gradient(110deg,rgba(162,77,225,.25),rgba(31,12,59,.9)); box-shadow:inset 3px 0 #c682f2; }
-  .problem-detail-pane { display:block; position:sticky; top:20px; min-width:0; min-height:420px; border:1px solid var(--line); border-radius:22px; background:rgba(25,10,45,.9); box-shadow:var(--shadow); }
+  .problem-detail-pane { grid-column:2; grid-row:3/7; align-self:start; display:block; position:sticky; top:20px; min-width:0; min-height:420px; border:1px solid var(--line); border-radius:22px; background:rgba(25,10,45,.9); box-shadow:var(--shadow); }
   .problem-detail-empty { display:grid; min-height:420px; align-content:center; justify-items:center; padding:40px; text-align:center; }
   .problem-detail-empty[hidden] { display:none; }
   .problem-detail-empty > i { display:grid; width:60px; height:60px; place-items:center; border:1px solid var(--line); border-radius:20px; color:#c58aee; background:var(--lavender); font:30px Furore,"Russo One",sans-serif; }
@@ -107,7 +108,7 @@
   .analytics-exports small { font-size:10px; white-space:normal; line-height:1.5; }
 }
 @media (min-width:1920px) {
-  .task-workspace { grid-template-columns:minmax(420px,.85fr) minmax(0,1.15fr); gap:28px; }
+  .problem-shell { grid-template-columns:minmax(420px,.85fr) minmax(0,1.15fr); column-gap:28px; }
   .problem-shell .problem-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .problem-shell .problem-card { min-height:148px; padding:22px; }
   .problem-shell .problem-card h3 { font-size:19px; }

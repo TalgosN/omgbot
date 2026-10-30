@@ -1,0 +1,112 @@
+.kpi-employee-pane { display:none; }
+@media (min-width:768px) {
+  .kpi-desktop .employee-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi-desktop .settings-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (min-width:1024px) {
+  .kpi-desktop .shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:22px; }
+  .kpi-desktop .shell > * { min-width:0; grid-column:1/-1; }
+  .kpi-desktop .topbar h1 { font-size:40px; }
+  .kpi-desktop .view-tabs { grid-column:span 6; margin:0; align-self:center; }
+  .kpi-desktop .view-tab { min-height:46px; font-size:13px; }
+  .kpi-desktop .period-panel { grid-column:span 6; display:grid; grid-template-columns:36px minmax(110px,1fr) 36px auto; align-items:center; margin:0; gap:6px; padding:10px; }
+  .kpi-desktop .date-label { grid-column:auto; }
+  .kpi-desktop .date-label > span { font-size:10px; }
+  .kpi-desktop .date-label > strong { font-size:17px; }
+  .kpi-desktop .status-button { grid-column:auto; width:auto; min-height:42px; padding:10px; font-size:11px; }
+  .kpi-desktop .my-view { padding-top:0; }
+  .kpi-desktop .freshness-card { margin-bottom:20px; font-size:12px; }
+  .kpi-desktop #myKpi { display:grid; grid-template-columns:minmax(300px,.8fr) minmax(0,1.2fr); gap:24px; align-items:start; }
+  .kpi-desktop .my-hero { margin:0; padding:26px; }
+  .kpi-desktop .my-hero h2 { font-size:30px; }
+  .kpi-desktop .my-score-grid strong { font-size:30px; }
+  .kpi-desktop .my-score-grid span,.kpi-desktop .pace-card small { font-size:12px; }
+  .kpi-desktop .pace-card span { font-size:12px; line-height:1.6; }
+  .kpi-desktop .explanation-card { margin:0; padding:24px; }
+  .kpi-desktop .explanation-heading h2 { font-size:24px; }
+  .kpi-desktop .formula-note { font-size:12px; line-height:1.7; }
+  .kpi-desktop .owner-dashboard { grid-column:1/-1; display:grid; grid-template-columns:1fr 1fr; gap:22px; padding:28px; }
+  .kpi-desktop .owner-dashboard-head,.kpi-desktop .owner-summary-grid { grid-column:1/-1; }
+  .kpi-desktop .owner-dashboard-head { display:flex; flex-direction:row; justify-content:space-between; align-items:center; }
+  .kpi-desktop .owner-dashboard-head h2 { font-size:27px; }
+  .kpi-desktop .owner-summary-grid { grid-template-columns:repeat(5,minmax(0,1fr)); gap:16px; margin:0; }
+  .kpi-desktop .owner-summary-grid > div { padding:22px; }
+  .kpi-desktop .owner-summary-grid span,.kpi-desktop .owner-movement span { font-size:12px; }
+  .kpi-desktop .owner-summary-grid strong { font-size:34px; margin-top:12px; }
+  .kpi-desktop .owner-movements { margin:0; }
+  .kpi-desktop .owner-movement { padding:18px; }
+  .kpi-desktop .owner-movement strong { font-size:22px; }
+  .kpi-desktop .owner-movement small { font-size:12px; }
+  .kpi-desktop .owner-settings-button { width:fit-content; min-width:230px; justify-self:end; align-self:end; font-size:13px; margin:0; }
+  .kpi-desktop #ratingView { display:grid; grid-template-columns:minmax(360px,1fr) minmax(330px,.85fr); grid-template-rows:95px 56px 52px max-content minmax(0,1fr); gap:16px 24px; align-items:start; }
+  .kpi-desktop #summary { grid-column:1; grid-row:1; margin:0; gap:12px; }
+  .kpi-desktop .summary-card { min-height:95px; padding:18px; }
+  .kpi-desktop .summary-card span { font-size:12px; }
+  .kpi-desktop .summary-card strong { font-size:28px; }
+  .kpi-desktop .rating-controls { grid-column:1; grid-row:2; margin:0; }
+  .kpi-desktop .rating-search { grid-column:1; grid-row:3; margin:0; }
+  .kpi-desktop .rating-search input,.kpi-desktop .rating-sort select { font-size:13px; }
+  .kpi-desktop #managerFilters { grid-column:1; grid-row:4; margin:0; padding:18px; }
+  .kpi-desktop .manager-filter-heading h2 { font-size:20px; }
+  .kpi-desktop .manager-export-button strong,.kpi-desktop .manager-filters-toggle span { font-size:13px; }
+  .kpi-desktop .manager-export-button small { font-size:11px; }
+  .kpi-rating-workspace { display:contents; }
+  .kpi-desktop #employeeList { grid-column:1; grid-row:5; margin:0; grid-template-columns:1fr; gap:12px; }
+  .kpi-desktop .employee-card { padding:20px; cursor:pointer; }
+  .kpi-desktop .employee-card:hover,.kpi-desktop .employee-card.selected { border-color:#ba98ff; background:#171154; }
+  .kpi-desktop .employee-card.selected { box-shadow:inset 3px 0 #ad83ff; }
+  .kpi-desktop .employee-name { font-size:19px; }
+  .kpi-desktop .employee-login { font-size:11px; }
+  .kpi-desktop .employee-stat > span { font-size:11px; }
+  .kpi-desktop .employee-stat strong { font-size:23px; }
+  .kpi-desktop .employee-stat strong em { font-size:12px; }
+  .kpi-desktop .kpi-employee-pane { display:block; grid-column:2; grid-row:1/6; position:sticky; top:20px; min-width:0; border:1px solid var(--line); border-radius:22px; background:var(--surface); }
+  .kpi-employee-empty { display:grid; min-height:430px; padding:36px; align-content:center; justify-items:center; text-align:center; }
+  .kpi-employee-empty i { color:#c0a3ff; font-size:42px; font-style:normal; }
+  .kpi-employee-empty h2 { margin:20px 0 12px; font-size:24px; }
+  .kpi-employee-empty p { max-width:320px; color:var(--muted); font-size:13px; line-height:1.8; }
+  #kpiEmployeePane #employeeDialog { position:relative; inset:auto; width:100%; max-width:100%; max-height:calc(100dvh - 40px); margin:0; padding:24px; border:0; background:transparent; }
+  .kpi-desktop .dialog { width:min(820px,calc(100vw - 48px)); padding:28px; }
+  .kpi-desktop .dialog-small { width:min(620px,calc(100vw - 48px)); }
+  .kpi-desktop .dialog-header h2 { font-size:26px; }
+  .kpi-desktop .metric-row { min-height:62px; padding:14px; }
+  .kpi-desktop .metric-row span { font-size:13px; }
+  .kpi-desktop .metric-row small { font-size:10px; }
+  .kpi-desktop .metric-row strong { font-size:14px; }
+  .kpi-desktop .section-title { font-size:18px; }
+  .kpi-desktop .detail-card > span { font-size:12px; }
+  .kpi-desktop #analyticsView { display:grid; grid-template-columns:300px minmax(0,1fr); gap:22px; align-items:start; }
+  .kpi-desktop .analytics-controls { grid-column:1; grid-row:1; align-content:start; grid-template-columns:1fr; padding:22px; }
+  .kpi-desktop .control-field > span,.kpi-desktop .toggle-field span { font-size:12px; }
+  .kpi-desktop .control-field select,.kpi-desktop .control-field input { min-height:46px; font-size:13px; }
+  .kpi-desktop .chart-card { grid-column:2; grid-row:1; padding:26px; }
+  .kpi-desktop .chart-area { height:clamp(320px,38vh,560px); }
+  .kpi-desktop .chart-area svg { width:100%; height:100%; }
+  .kpi-desktop .chart-heading h2 { font-size:28px; }
+  .kpi-desktop .analytics-summary { grid-column:2; grid-row:2; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; }
+  .kpi-desktop .analytics-summary span { font-size:12px; }
+  .kpi-desktop .analytics-summary strong { font-size:24px; }
+  .kpi-desktop #analyticsView:has(#employeePicker:not([hidden])) .analytics-summary { grid-row:3; }
+  .kpi-desktop .employee-picker { grid-column:2; grid-row:2; }
+  .kpi-desktop #settingsForm { display:grid; grid-template-columns:270px minmax(0,1fr); gap:22px; align-items:start; }
+  .kpi-desktop .settings-heading { grid-column:1; grid-row:1/5; position:sticky; top:20px; margin:0; }
+  .kpi-desktop .settings-card { grid-column:2; margin:0; padding:24px; }
+  .kpi-desktop #saveSettings { grid-column:2; width:fit-content; justify-self:end; min-width:240px; }
+  .kpi-desktop .settings-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi-desktop .club-settings { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi-desktop .settings-section-title h3 { font-size:20px; }
+  .kpi-desktop .settings-section-title small { font-size:11px; white-space:normal; }
+  .kpi-desktop .setting-field > span,.kpi-desktop .club-setting > strong { font-size:13px; }
+  .kpi-desktop .setting-field small,.kpi-desktop .club-setting label > span { font-size:11px; }
+  .kpi-desktop .setting-input input,.kpi-desktop .club-setting input { min-height:44px; font-size:16px; }
+}
+@media (min-width:1440px) {
+  .kpi-desktop #employeeList { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi-desktop .settings-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media (min-width:1920px) {
+  .kpi-desktop #ratingView { grid-template-columns:minmax(0,1.2fr) minmax(420px,.8fr); }
+  .kpi-desktop .employee-name { font-size:21px; }
+  .kpi-desktop .employee-stat strong { font-size:27px; }
+  .kpi-desktop .settings-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+}

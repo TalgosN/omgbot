@@ -1,0 +1,53 @@
+@media (min-width:768px) {
+  .records-desktop .record-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .records-desktop .achievement-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (min-width:1024px) {
+  .records-desktop .records-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:24px; }
+  .records-desktop .records-shell > * { grid-column:1/-1; min-width:0; margin:0; }
+  .records-desktop .records-title h1 { font-size:42px; }
+  .records-desktop .records-hero { grid-column:span 8; min-height:180px; padding:26px; }
+  .records-desktop .records-hero h2 { font-size:42px; }
+  .records-desktop .records-hero p { font-size:13px; }
+  .records-desktop .medal-summary { gap:12px; }
+  .records-desktop .medal-summary b { font-size:22px; }
+  .records-desktop .records-tabs { grid-column:span 4; display:grid; grid-template-columns:1fr 1fr; align-self:stretch; padding:8px; gap:8px; }
+  .records-desktop .records-tabs button { min-height:64px; font-size:14px; }
+  .records-desktop .records-section-head { margin:8px 0 20px; }
+  .records-desktop .records-section-head h2 { font-size:28px; }
+  .records-desktop .records-section-head > span { font-size:12px; }
+  .records-desktop .record-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+  .records-desktop .record-card { min-height:190px; padding:24px; }
+  .records-desktop .record-card > small { font-size:13px; }
+  .records-desktop .record-card > b { margin:20px 0; font-size:38px; }
+  .records-desktop .record-holder strong { font-size:16px; }
+  .records-desktop .record-holder span { font-size:11px; line-height:1.6; overflow-wrap:anywhere; }
+  .records-desktop .achievement-category { margin-bottom:26px; }
+  .records-desktop .achievement-category h3 { font-size:22px; }
+  .records-desktop .achievement-grid { gap:20px; }
+  .records-desktop .achievement-card { padding:24px; gap:18px; }
+  .records-desktop .achievement-head strong { font-size:18px; }
+  .records-desktop .achievement-head > span { font-size:11px; }
+  .records-desktop .achievement-main p { font-size:13px; line-height:1.7; }
+  .records-desktop .achievement-progress-head { margin-top:20px; font-size:12px; }
+  .records-desktop .achievement-thresholds span { font-size:11px; }
+  .records-desktop .team-controls { grid-template-columns:minmax(0,1fr) 280px; gap:18px; }
+  .records-desktop .team-controls input,.records-desktop .team-controls select { font-size:14px; min-height:48px; }
+  .records-desktop .team-controls label > span { font-size:12px; }
+  .records-desktop .team-summary { gap:16px; }
+  .records-desktop .team-summary > div { padding:22px; }
+  .records-desktop .team-summary span { font-size:12px; }
+  .records-desktop .team-summary b { font-size:32px; }
+  .records-desktop .team-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+  .records-desktop .team-member { padding:22px; }
+  .records-desktop .team-member-name strong { font-size:17px; }
+  .records-desktop .team-member-name > span,.records-desktop .team-medals span { font-size:12px; }
+  .records-desktop .archive-section { margin-top:24px; padding:20px; }
+  .records-desktop .archive-section summary { font-size:15px; }
+}
+@media (min-width:1920px) {
+  .records-desktop .record-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .records-desktop .achievement-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .records-desktop .team-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .records-desktop .record-card { min-height:215px; }
+}
