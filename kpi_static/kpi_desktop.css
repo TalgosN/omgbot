@@ -8,15 +8,22 @@
   .kpi-desktop .shell > * { min-width:0; grid-column:1/-1; }
   .kpi-desktop .topbar h1 { font-size:40px; }
   .kpi-desktop .view-tabs { grid-column:9/13; grid-row:2; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin:0; align-self:stretch; gap:8px; padding:8px; }
-  .kpi-desktop .view-tab { min-height:64px; font-size:13px; }
-  .kpi-desktop .period-panel { grid-column:1/9; grid-row:2; display:grid; grid-template-columns:42px minmax(0,1fr) 42px; align-items:center; align-self:stretch; min-height:160px; margin:0; gap:10px; padding:24px; }
-  .kpi-desktop .shell:has(.period-panel[hidden]) .view-tabs { grid-column:1/-1; grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .kpi-desktop .view-tab { min-height:54px; font-size:18px; }
+  .kpi-desktop .view-tabs:not(.owner-tabs) .view-tab[data-view="analytics"] { grid-column:1/-1; }
+  .kpi-desktop .period-panel { grid-column:1/9; grid-row:2; display:grid; grid-template-columns:42px minmax(150px,1fr) 42px minmax(270px,.85fr); align-items:center; align-self:stretch; min-height:124px; margin:0; gap:10px 14px; padding:16px; }
+  .kpi-desktop .period-panel.context-only { grid-template-columns:1fr; place-items:center; text-align:center; }
+  .kpi-desktop .period-panel.context-only .icon-button,.kpi-desktop .period-panel.context-only .status-button { display:none; }
+  .kpi-desktop .period-panel.context-only .date-label { grid-column:1; }
   .kpi-desktop .date-label { grid-column:auto; min-width:0; }
-  .kpi-desktop .date-label > span { font-size:10px; }
-  .kpi-desktop .date-label > strong { font-size:28px; }
-  .kpi-desktop .status-button { grid-column:1/-1; width:100%; min-height:36px; padding:10px; font-size:11px; }
+  .kpi-desktop .date-label > span { font-size:12px; }
+  .kpi-desktop .date-label > strong { font-size:22px; }
+  .kpi-desktop .status-button { grid-column:1/4; width:100%; min-height:36px; padding:10px; font-size:13px; }
   .kpi-desktop .my-view { padding-top:0; }
-  .kpi-desktop .freshness-card { margin-bottom:20px; font-size:12px; }
+  .kpi-desktop .freshness-card { width:fit-content; max-width:100%; margin-bottom:18px; padding:14px 16px; gap:24px; }
+  .kpi-desktop .period-panel > .freshness-card { grid-column:4; grid-row:1/3; width:100%; margin:0; border-color:rgba(110,242,178,.17); background:rgba(110,242,178,.045); box-shadow:none; }
+  .kpi-desktop .freshness-card strong { font-size:14px; }
+  .kpi-desktop .freshness-card small { font-size:12px; line-height:1.5; }
+  .kpi-desktop .freshness-card button { min-height:38px; padding:8px 12px; font-size:13px; }
   .kpi-desktop #myKpi { display:grid; grid-template-columns:minmax(300px,.8fr) minmax(0,1.2fr); gap:24px; align-items:start; }
   .kpi-desktop .my-hero { margin:0; padding:26px; }
   .kpi-desktop .my-hero h2 { font-size:30px; }
@@ -25,13 +32,17 @@
   .kpi-desktop .pace-card span { font-size:12px; line-height:1.6; }
   .kpi-desktop .explanation-card { margin:0; padding:24px; }
   .kpi-desktop .explanation-heading h2 { font-size:24px; }
-  .kpi-desktop .formula-note { font-size:12px; line-height:1.7; }
+  .kpi-desktop .formula-note { font-size:13px; line-height:1.7; }
+  .kpi-desktop .explanation-metric { padding:16px 4px; }
+  .kpi-desktop .explanation-metric span { font-size:14px; }
+  .kpi-desktop .explanation-metric small,.kpi-desktop .explanation-values em { font-size:11px; }
+  .kpi-desktop .explanation-values strong { font-size:15px; }
   .kpi-desktop .owner-dashboard { grid-column:1/-1; display:grid; grid-template-columns:1fr 1fr; gap:22px; padding:28px; }
   .kpi-desktop .owner-dashboard-head,.kpi-desktop .owner-summary-grid { grid-column:1/-1; }
-  .kpi-desktop .owner-dashboard-head { display:flex; flex-direction:row; justify-content:space-between; align-items:center; }
+  .kpi-desktop .owner-dashboard-head { display:flex; flex-direction:row; justify-content:space-between; align-items:flex-end; }
   .kpi-desktop .owner-dashboard-head h2 { font-size:27px; }
   .kpi-desktop .owner-summary-grid { grid-template-columns:repeat(5,minmax(0,1fr)); gap:16px; margin:0; }
-  .kpi-desktop .owner-summary-grid > div { padding:22px; }
+  .kpi-desktop .owner-summary-grid > div { min-height:112px; padding:22px; }
   .kpi-desktop .owner-summary-grid span,.kpi-desktop .owner-movement span { font-size:12px; }
   .kpi-desktop .owner-summary-grid strong { font-size:34px; margin-top:12px; }
   .kpi-desktop .owner-movements { margin:0; }
@@ -41,10 +52,10 @@
   .kpi-desktop .owner-settings-button { width:fit-content; min-width:230px; justify-self:end; align-self:end; font-size:13px; margin:0; }
   .kpi-desktop .shell:has(#ratingView:not([hidden])) { grid-template-rows:auto auto auto 56px 52px max-content minmax(0,1fr); }
   .kpi-desktop .shell:has(#ratingView:not([hidden])) .view-tabs { grid-row:2/4; }
-  .kpi-desktop .shell:has(#ratingView:not([hidden])) .period-panel { min-height:100px; border-bottom:0; border-radius:22px 22px 0 0; padding-bottom:12px; background:var(--surface); box-shadow:none; }
+  .kpi-desktop .shell:has(#ratingView:not([hidden])) .period-panel { min-height:96px; grid-template-columns:42px minmax(0,1fr) 42px; border-bottom:0; border-radius:22px 22px 0 0; padding-bottom:12px; background:var(--surface); box-shadow:none; }
   .kpi-desktop #ratingView { display:contents; }
   .kpi-desktop #summary { grid-column:1/9; grid-row:3; min-width:0; margin:-22px 0 0; padding:12px 24px 24px; gap:12px; border:1px solid var(--line); border-top:0; border-radius:0 0 22px 22px; background:var(--surface); }
-  .kpi-desktop .summary-card { min-height:95px; padding:18px; }
+  .kpi-desktop .summary-card { min-height:82px; padding:18px; }
   .kpi-desktop .summary-card span { font-size:12px; }
   .kpi-desktop .summary-card strong { font-size:28px; }
   .kpi-desktop .rating-controls { grid-column:1/8; grid-row:4; margin:0; }

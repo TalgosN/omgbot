@@ -17,9 +17,11 @@ function storedManagerFiltersCollapsed() {
 
 function storedKpiExplanationOpen() {
   try {
-    return localStorage.getItem('omg-kpi-explanation') === 'open';
+    const saved = localStorage.getItem('omg-kpi-explanation');
+    if (saved) return saved === 'open';
+    return window.matchMedia('(min-width: 1024px)').matches;
   } catch (_error) {
-    return false;
+    return window.matchMedia('(min-width: 1024px)').matches;
   }
 }
 
@@ -117,7 +119,43 @@ function presentEmployeeDialog() {
 function syncEmployeePresentation() {
   if (employeeDialog.open && !document.querySelector('dialog:modal:not(#employeeDialog)')) presentEmployeeDialog();
 }
-employeeDesktopViewport.addEventListener('change', syncEmployeePresentation);
+function syncKpiDesktopPresentation() {
+  const activeView = document.querySelector('.view-tab.active')?.dataset.view || 'my';
+  const period = document.querySelector('.period-panel');
+  const freshness = $('#freshness');
+  const myView = $('#myView');
+  const desktop = employeeDesktopViewport.matches;
+  const contextOnly = activeView === 'analytics' || activeView === 'settings';
+  const labels = {
+    my: state.me?.can_edit_settings ? 'Команда на дату' : 'Мой KPI на дату',
+    rating: 'Рейтинг на дату',
+    analytics: 'Аналитика KPI',
+    settings: 'Настройки KPI',
+  };
+  const contextTitles = {
+    analytics: 'Динамика и сравнение',
+    settings: 'Цели и нормы',
+  };
+
+  period.hidden = !desktop && contextOnly;
+  period.classList.toggle('context-only', desktop && contextOnly);
+  $('#kpiContextLabel').textContent = labels[activeView];
+  $('#dateDisplay').textContent = contextOnly && desktop
+    ? contextTitles[activeView]
+    : numericDayLabel(state.day);
+  $('#datePicker').disabled = contextOnly && desktop;
+
+  if (desktop && activeView === 'my') {
+    if (freshness.parentElement !== period) period.append(freshness);
+  } else if (freshness.parentElement !== myView) {
+    myView.prepend(freshness);
+  }
+  freshness.hidden = activeView !== 'my';
+}
+employeeDesktopViewport.addEventListener('change', () => {
+  syncEmployeePresentation();
+  syncKpiDesktopPresentation();
+});
 document.addEventListener('close', (event) => {
   if (event.target !== employeeDialog) syncEmployeePresentation();
 }, true);
@@ -1311,6 +1349,7 @@ async function initialize() {
     $('#kpiUserName').textContent = `Команда OMG VR · ${state.me.name}`;
     $('#userBadge').textContent = state.me.role_name;
     $('#userBadge').classList.remove('skeleton');
+    $('#myKpiTab').textContent = state.me.can_edit_settings ? 'Команда' : 'Мой KPI';
     if (state.me.can_edit_settings) {
       $('#settingsTab').hidden = false;
       document.querySelector('.view-tabs').classList.add('owner-tabs');
@@ -1415,7 +1454,7 @@ async function setKpiView(view) {
   $('#ratingView').hidden = view !== 'rating';
   $('#analyticsView').hidden = !analytics;
   $('#settingsView').hidden = !settings;
-  document.querySelector('.period-panel').hidden = analytics || settings;
+  syncKpiDesktopPresentation();
   if (analytics && !state.analytics) await loadAnalytics();
   if (settings && !state.settings) await loadSettings();
 }

@@ -21,7 +21,15 @@ EMPLOYEES = [{
     'weighted_shifts': 16 - i, 'clubs': [CLUBS[i % 5]], 'stream': False,
     **{key: 5 for key in ['reviews', 'forms', 'extensions', 'certificates', 'subscriptions', 'initiatives']},
     **{key + '_pct': .8 for key in ['reviews', 'forms', 'extensions', 'certificates', 'subscriptions', 'initiatives']},
-    'explanation': {'total_pct': .98, 'metric_contribution_pct': .98, 'metrics': [], 'pace': {}},
+    'explanation': {'total_pct': .98, 'metric_contribution_pct': .98, 'metrics': [
+        {'key': key, 'label': label, 'target': 14, 'fact': 11 + metric_index,
+         'ratio': .8 + metric_index * .04, 'contribution_pct': .12 + metric_index * .01,
+         'needed': max(0, 3 - metric_index)}
+        for metric_index, (key, label) in enumerate([
+            ('reviews', 'Отзывы'), ('forms', 'Анкеты'), ('extensions', 'Продления'),
+            ('certificates', 'Сертификаты'), ('subscriptions', 'Абонементы'),
+        ])
+    ], 'pace': {}},
 } for i, name in enumerate(['Миша', 'Мося', 'Настя', 'Ваня', 'Лиза', 'Паша'])]
 SHIFT_TASKS = [{
     'id': i * 5 + club_index + 1, 'template_id': i + 1, 'club': club,
@@ -276,12 +284,27 @@ def main():
         snapshot('kpi-analytics-1920')
         page.locator('[data-view="settings"]').click()
         page.locator('#settingsMetrics input').first.wait_for()
+        assert page.locator('.view-tabs').bounding_box()['x'] > page.locator('.period-panel').bounding_box()['x']
+        assert page.locator('#dateDisplay').text_content() == 'Цели и нормы'
         snapshot('kpi-settings-1920')
+        page.locator('[data-view="my"]').click()
+        assert page.locator('#myKpiTab').text_content() == 'Команда'
+        assert page.locator('#freshness').evaluate('(node) => node.parentElement.classList.contains("period-panel")')
+        assert page.locator('.freshness-card strong').evaluate('(node) => parseFloat(getComputedStyle(node).fontSize)') >= 14
+        assert page.locator('#freshness').bounding_box()['width'] < page.locator('#myView').bounding_box()['width'] * .8
+        snapshot('kpi-owner-1920')
         role[0] = 0
         page.goto('http://omg.test/kpi')
         page.wait_for_function('state.myKpi !== null')
         page.locator('[data-view="my"]').click()
         assert page.locator('#settingsTab').is_hidden()
+        assert page.locator('#myKpiTab').text_content() == 'Мой KPI'
+        assert page.locator('#kpiExplanation').evaluate('(node) => node.open')
+        assert page.locator('#freshness').evaluate('(node) => node.parentElement.classList.contains("period-panel")')
+        assert page.locator('[data-view="analytics"]').evaluate('(node) => getComputedStyle(node).gridColumnEnd') == '-1'
+        assert page.locator('.freshness-card strong').evaluate('(node) => parseFloat(getComputedStyle(node).fontSize)') >= 14
+        assert page.locator('.view-tab:visible').first.evaluate('(node) => parseFloat(getComputedStyle(node).fontSize)') >= 18
+        assert page.locator('#freshness').bounding_box()['width'] < page.locator('#myView').bounding_box()['width'] * .8
         snapshot('kpi-personal-1920')
         page.goto('http://omg.test/shift')
         page.locator('#shiftToday .today-shift-card').wait_for()

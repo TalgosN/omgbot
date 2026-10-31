@@ -36,7 +36,9 @@ textarea { min-height:46px; resize:vertical; }
 .edit-row { display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:9px; }
 .edit-row.question { grid-template-columns:34px minmax(0,1fr) 130px auto; }
 .question-fields { display:grid; gap:8px; }
-.question-fields textarea:last-child { border-color:rgba(168,121,255,.3); background:rgba(168,121,255,.07); }
+.question-field { display:contents; }
+.question-field > span { display:none; color:var(--muted); font-size:8px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+.question-field:last-child textarea { border-color:rgba(168,121,255,.3); background:rgba(168,121,255,.07); }
 .number { display:grid; width:30px; height:30px; place-items:center; border-radius:50%; color:#c7a9ff; background:rgba(168,121,255,.14); font-weight:800; }
 .row-actions { display:flex; gap:4px; }
 .icon-button { padding:7px 9px; color:var(--ink); background:rgba(168,121,255,.12); }

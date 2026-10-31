@@ -134,8 +134,8 @@ function renderTasks() {
             ? 'skipped'
             : 'progress';
       const groupLabel = completed.length === group.tasks.length
-        ? 'Всё готово'
-        : `${completed.length}/${group.tasks.length} готово`;
+        ? 'Выполнено во всех клубах'
+        : `Выполнено ${completed.length} из ${group.tasks.length}`;
       const performerLine = performers.length
         ? `Выполнили: ${performers.join(', ')}`
         : 'Пока никто не завершил';
@@ -150,13 +150,13 @@ function renderTasks() {
       const directTask = group.tasks.length === 1 ? group.tasks[0] : null;
       return `<article class="task-group ${groupClass}${expandedGroups.has(group.key) ? ' expanded' : ''}">
         <button class="task-group-toggle" type="button" data-group="${escapeHtml(group.key)}" data-direct-task="${directTask?.id || ''}" aria-expanded="${expandedGroups.has(group.key)}">
-          <span class="task-group-icon">${completed.length === group.tasks.length ? '✓' : completed.length}</span>
+          <span class="task-group-icon">${completed.length === group.tasks.length ? '✓' : overdue.length ? '!' : '→'}</span>
           <span class="task-group-copy">
-            <small>${state.scope === 'history' ? shortDate(group.date) : `${group.tasks.length} клуб.`}</small>
+            <small>${state.scope === 'history' ? shortDate(group.date) : `Задача для ${group.tasks.length} клубов`}</small>
             <strong>${escapeHtml(group.title)}</strong>
-            <em>${escapeHtml(performerLine)}</em>
+            ${performers.length ? `<em>${escapeHtml(performerLine)}</em>` : ''}
           </span>
-          <span class="task-group-progress"><b>${directTask ? status(directTask).label : `${groupLabel} · открыть`}</b><i>${directTask ? '→' : '⌄'}</i></span>
+          <span class="task-group-progress"><b>${directTask ? status(directTask).label : groupLabel}</b><i>${directTask ? '→' : '⌄'}</i></span>
         </button>
         <div class="task-group-details" ${expandedGroups.has(group.key) ? '' : 'hidden'}>${rows}</div>
       </article>`;

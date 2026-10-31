@@ -1,6 +1,7 @@
 @media (min-width:768px) {
   .shift-desktop .shift-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .shift-desktop .schedule-content { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:12px; }
+  .shift-desktop .shift-main-column { display:grid; gap:20px; }
 }
 @media (min-width:1024px) {
   .shift-desktop .shift-shell { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); align-items:start; gap:24px; }
@@ -41,8 +42,9 @@
   .shift-desktop .owner-club-row { min-height:60px; padding:16px; }
   .shift-desktop .owner-club-row strong { font-size:16px; }
   .shift-desktop .owner-club-row small,.shift-desktop .owner-club-row > b { font-size:12px; }
-  .shift-desktop #shiftSchedule { grid-column:span 8; }
-  .shift-desktop .shift-tools-workspace { grid-column:span 4; position:sticky; top:20px; }
+  .shift-desktop .shift-main-workspace { grid-column:1/-1; display:grid; grid-template-columns:minmax(0,2fr) minmax(300px,1fr); gap:24px; align-items:start; }
+  .shift-desktop .shift-main-column { min-width:0; gap:24px; }
+  .shift-desktop .shift-tools-workspace { min-width:0; position:sticky; top:20px; }
   .shift-desktop .shift-tools-heading { margin:0 0 16px; }
   .shift-desktop .shift-actions { grid-template-columns:1fr; gap:14px; }
   .shift-desktop .shift-action { min-height:112px; padding:22px; grid-template-columns:42px minmax(0,1fr); gap:14px; }
@@ -66,7 +68,6 @@
   .shift-desktop .schedule-shift { align-items:start; gap:10px; padding:12px; }
   .shift-desktop .schedule-shift strong { font-size:12px; }
   .shift-desktop .schedule-shift b,.shift-desktop .schedule-shift small { font-size:11px; }
-  .shift-desktop #shiftHistory { grid-column:span 8; }
   .shift-desktop .shift-history > summary { padding:22px; }
   .shift-desktop .shift-history > summary strong { font-size:22px; }
   .shift-desktop .shift-history > summary small { font-size:12px; }

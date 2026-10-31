@@ -185,6 +185,12 @@ def main():
             if width >= 1024:
                 header_heights = page.locator('.club-head').evaluate_all('(nodes) => nodes.map(node => node.getBoundingClientRect().height)')
                 assert max(header_heights) - min(header_heights) < 2, 'Club headers must align regardless of name length'
+                assert page.locator('.club-head').evaluate_all('''(nodes) => nodes.every(node => {
+                    const title = node.querySelector('h3').getBoundingClientRect();
+                    const statuses = node.querySelector('.club-live-statuses').getBoundingClientRect();
+                    return title.right <= statuses.left && Math.abs((title.top + title.bottom - statuses.top - statuses.bottom) / 2) < 2
+                        && node.scrollWidth <= node.clientWidth + 1;
+                })'''), 'Club name and statuses must fit on one line without overlap'
             role[0] = 0
             actor.update(name='Миша', role_name='Сотрудник')
             page.reload()

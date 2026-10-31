@@ -515,6 +515,7 @@ async function updateCreateFields() {
   if (availableClubs.includes(currentClub)) $('#createClub').value = currentClub;
   $('#repairFields').classList.toggle('hidden', !repair);
   $('#regularTitleField').classList.toggle('hidden', repair);
+  $('#createSubmit').textContent = repair ? 'Создать заявку' : 'Добавить анонимно';
   $('#createTitle').required = !repair;
   $('#repairItem').required = repair;
   if (repair && $('#createClub').value) await loadRepairCatalog();
@@ -886,11 +887,11 @@ async function openTask(taskId) {
       <div class="detail-description"><span>Описание</span><p>${escapeHtml(task.description)}</p></div>
       ${task.has_photo ? '<div id="detailPhoto" class="empty-card">Загрузка фото…</div>' : ''}
       ${task.has_video ? '<div id="detailVideo" class="empty-card">Загрузка видео…</div>' : ''}
+      ${actions ? `<div class="detail-actions primary-actions">${actions}</div>` : ''}
       ${activity}
       ${comments}
       <div class="detail-feedback"><span>История решения</span><p>${escapeHtml(task.feedback || 'Ожидает решения…')}</p></div>
       ${history}
-      ${actions ? `<div class="detail-actions">${actions}</div>` : ''}
     `;
     presentTaskDetail();
     if (task.has_photo) loadProblemPhoto(task.id, requestId);

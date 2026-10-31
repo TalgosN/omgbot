@@ -14,7 +14,7 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/app_ux.css?v=20260915-1">
   <link rel="stylesheet" href="/static/desktop_shell.css?v=20261030-2">
-  <link rel="stylesheet" href="/static/shift_desktop.css?v=20261030-2">
+  <link rel="stylesheet" href="/static/shift_desktop.css?v=20261031-1">
 </head>
 <body class="desktop-enabled desktop-dark shift-desktop">
   <main class="shift-shell">
@@ -75,6 +75,8 @@
       </div>
     </section>
 
+    <div class="shift-main-workspace">
+    <div class="shift-main-column">
     <details id="shiftSchedule" class="shift-schedule">
       <summary>
         <span class="schedule-summary-icon" aria-hidden="true">
@@ -99,6 +101,12 @@
         <div id="scheduleContent" class="schedule-content"><div class="shift-empty">Загружаю расписание…</div></div>
       </div>
     </details>
+
+    <details id="shiftHistory" class="shift-history">
+      <summary><span><small>Журнал смен</small><strong>Открытия и закрытия</strong></span><b id="shiftHistoryCount">0</b></summary>
+      <div id="shiftHistoryList" class="shift-history-list"><div class="shift-empty">Загружаю историю…</div></div>
+    </details>
+    </div>
 
     <div class="shift-tools-workspace">
     <div class="shift-section-heading shift-tools-heading">
@@ -145,10 +153,7 @@
     </section>
 
     </div>
-    <details id="shiftHistory" class="shift-history">
-      <summary><span><small>Журнал смен</small><strong>Открытия и закрытия</strong></span><b id="shiftHistoryCount">0</b></summary>
-      <div id="shiftHistoryList" class="shift-history-list"><div class="shift-empty">Загружаю историю…</div></div>
-    </details>
+    </div>
 
     <div id="shiftError" class="error-card" hidden></div>
   </main>
