@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import json
+import math
 from permissions import ROLE_OWNER, role_of
 import sql_scripts
 from sheets import *
@@ -45,6 +46,16 @@ LEGACY_BIRTHDAY_AMOUNT = 500
 HASHTAG_RULES_CACHE_SECONDS = 60
 _hashtag_rules_cache = {}
 _hashtag_rules_cache_until = 0.0
+LOCAL_HASHTAG_RULES = (
+    {'hashtag': '#др', 'type': 'fixed_bonus', 'valueUnit': 'rubles', 'amount': LEGACY_BIRTHDAY_AMOUNT},
+    {'hashtag': '#двойная', 'type': 'double_hours', 'valueUnit': 'hours'},
+    {'hashtag': '#автосим', 'type': 'message_bonus', 'valueUnit': 'rubles'},
+    {'hashtag': '#активация', 'type': 'message_bonus', 'valueUnit': 'rubles'},
+)
+
+
+def hashtags_local_only():
+    return os.getenv('HASHTAGS_LOCAL_ONLY', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # ==========================================
 # 1. ЗАГРУЗКА И ВЫГРУЗКА ДАННЫХ И СМЕН
@@ -219,6 +230,22 @@ def sql_select(command):
 def get_user_club_today(username, date_iso=None):
     """Определяет клуб сотрудника по API расписания на указанную дату или сегодня."""
     today_iso = date_iso or datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    if hashtags_local_only():
+        conn = sqlite3.connect('db/omgbot.sql')
+        try:
+            clubs = conn.execute(
+                '''SELECT DISTINCT trim(club) FROM shifts
+                   WHERE date(substr(dt_shift, 1, 10))=date(?)
+                     AND lower(ltrim(trim(shift_login), '@'))=?
+                     AND trim(COALESCE(club, ''))<>'' ''',
+                (today_iso, str(username or '').strip().lstrip('@').lower()),
+            ).fetchall()
+            return clubs[0][0] if len(clubs) == 1 else None
+        except sqlite3.OperationalError as error:
+            print(f'Не удалось определить клуб из локального расписания: {error}')
+            return None
+        finally:
+            conn.close()
     headers = {"Authorization": f"Bearer {SHIFTON_API_TOKEN}"}
     try:
         resp = requests.get(f"{SHIFTON_API_URL}/api/bot/schedule?date={today_iso}", headers=headers, timeout=5).json()
@@ -358,6 +385,8 @@ def _extract_remote_value(text_args):
 def get_remote_hashtag_rules():
     """Возвращает правила OMG Shift с коротким кешем для справки и метаданных."""
     global _hashtag_rules_cache, _hashtag_rules_cache_until
+    if hashtags_local_only():
+        return [dict(rule) for rule in LOCAL_HASHTAG_RULES]
     now = time.monotonic()
     if now < _hashtag_rules_cache_until:
         return list(_hashtag_rules_cache.values())
@@ -400,6 +429,7 @@ def _save_pending_hashtag(
     comment,
     event_date,
     hashtag_index=0,
+    source='omg_shift',
 ):
     ensure_hashtag_events_table()
     chat_id, message_id = _message_identity(message)
@@ -420,7 +450,7 @@ def _save_pending_hashtag(
                 INSERT INTO hashtag_events (
                     telegram, hashtag, value, value_unit, comment, event_date,
                     status, source, chat_id, message_id, hashtag_index
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'omg_shift', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                 ''',
                 (
                     f"@{message.from_user.username}",
@@ -429,6 +459,7 @@ def _save_pending_hashtag(
                     value_unit,
                     comment,
                     event_date,
+                    source,
                     chat_id,
                     message_id,
                     hashtag_index,
@@ -519,6 +550,8 @@ def _post_remote_hashtag(hashtag, username, value_text, comment, event_date):
 
 def do_remote_hashtag(hashtag, message, text_args, hashtag_index=0):
     """Передаёт начисление в OMG Shift и сохраняет подтверждённый результат."""
+    if hashtags_local_only():
+        return do_local_payroll_hashtag(hashtag, message, text_args, hashtag_index)
     username = getattr(message.from_user, 'username', None)
     if not username:
         return KPI_ERROR, "Не вижу Telegram username отправителя.", ""
@@ -564,6 +597,32 @@ def do_remote_hashtag(hashtag, message, text_args, hashtag_index=0):
         return KPI_IGNORED, "", ""
     return KPI_ERROR, message_text, ""
 
+
+def do_local_payroll_hashtag(hashtag, message, text_args, hashtag_index=0):
+    rule = next((rule for rule in LOCAL_HASHTAG_RULES if rule['hashtag'] == hashtag), None)
+    if not rule:
+        return KPI_IGNORED, '', ''
+    if not getattr(message.from_user, 'username', None):
+        return KPI_ERROR, 'Не вижу Telegram username отправителя.', ''
+    validation_error = _validate_local_payroll_entry(hashtag, text_args)
+    if validation_error:
+        return validation_error
+    if rule['type'] == 'fixed_bonus':
+        value, comment = rule['amount'], text_args.strip()
+    else:
+        value_text, comment = _extract_remote_value(text_args)
+        value = float(value_text) if value_text else 0
+    today = datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')
+    event_id, status, created = _save_pending_hashtag(
+        message, hashtag, value, rule['valueUnit'], comment, today, hashtag_index,
+        source='local_hashtag',
+    )
+    if created:
+        _finish_hashtag_event(event_id, 'applied', {'local_only': True})
+    elif status != 'applied':
+        return KPI_ERROR, 'Это сообщение уже обрабатывалось, но начисление не было подтверждено.', ''
+    return KPI_SUCCESS, random.choice(TEXTS['aff']), ''
+
 # ==========================================
 # 3. МОДУЛЬНЫЕ ОБРАБОТЧИКИ ХЕШТЕГОВ
 # ==========================================
@@ -589,7 +648,7 @@ def do_club_action(hashtag, message, text_args):
     Insert(table, today, user_name, club, text_args)
 
     # Формируем красивый ответ
-    if shift_not_found:
+    if shift_not_found and not hashtags_local_only():
         return KPI_SAVED_ERROR, "Запись сохранена локально, но смена сотрудника на сегодня не найдена в OMG Shift.", ""
     return KPI_SUCCESS, random.choice(TEXTS['aff']) + f" (Клуб: {club})", ""
 
@@ -749,6 +808,16 @@ def _parse_hashtag_entries(text):
     ]
 
 
+def _validate_local_payroll_entry(hashtag, text_args):
+    if hashtag not in ('#двойная', '#автосим', '#активация'):
+        return None
+    value_text, _comment = _extract_remote_value(text_args)
+    value = float(value_text) if value_text else 0
+    if not math.isfinite(value) or value <= 0:
+        return KPI_INVALID, f'После {hashtag} необходимо указать положительное число.', ''
+    return None
+
+
 def _validate_local_batch_entry(hashtag, text_args):
     if hashtag in bonus:
         parts = text_args.split()
@@ -769,6 +838,8 @@ def _validate_local_batch_entry(hashtag, text_args):
             return KPI_INVALID, 'Даже у меня есть имя, значит и у него есть!', "```Правильно!\nНикаких 'фактов'!```"
         if len(text_args) > 1024:
             return KPI_INVALID, 'Слишком длинно!', '```Правильно!\nПожалуйста, меньше 1024 символов```'
+    elif hashtags_local_only():
+        return _validate_local_payroll_entry(hashtag, text_args)
     return None
 
 
@@ -864,6 +935,9 @@ def do_local_custom_goal_hashtag(
     if not created:
         return KPI_SUCCESS, "", ""
 
+    if hashtags_local_only():
+        return KPI_SUCCESS, random.choice(TEXTS['aff']), ''
+
     try:
         remote_rule = _get_hashtag_rule(goal['hashtag'])
     except Exception as error:
@@ -906,6 +980,16 @@ def _hash_handle_one(message, hashtag, text_args, hashtag_index=0):
         else:
             local_result = kpi_dict[hashtag](message, text_args)
         if local_result[0] == KPI_INVALID or hashtag == '#штраф':
+            return local_result
+        if hashtags_local_only():
+            if local_result[0] == KPI_SUCCESS:
+                today = moscow_today.isoformat()
+                event_id, _status, created = _save_pending_hashtag(
+                    message, hashtag, None, None, text_args, today, hashtag_index,
+                    source='local_kpi',
+                )
+                if created:
+                    _finish_hashtag_event(event_id, 'applied', {'local_only': True})
             return local_result
         if hashtag_index:
             remote_result = do_remote_hashtag(

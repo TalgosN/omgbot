@@ -234,8 +234,10 @@ def help(bot, message):
 
 
 def kpi_help_text():
+    local_only = False
     try:
-        from kpi import get_remote_hashtag_rules
+        from kpi import get_remote_hashtag_rules, hashtags_local_only
+        local_only = hashtags_local_only()
         rules = get_remote_hashtag_rules()
     except Exception:
         rules = []
@@ -259,7 +261,7 @@ def kpi_help_text():
     ]
 
     if rules:
-        lines.extend(['', '<b>Начисления OMG Shift</b>'])
+        lines.extend(['', '<b>Локальные начисления</b>' if local_only else '<b>Начисления OMG Shift</b>'])
         for rule in rules:
             hashtag = escape(str(rule.get('hashtag', '')))
             if rule.get('type') == 'double_hours':
@@ -282,7 +284,8 @@ def kpi_help_text():
         '<b>#штраф</b> доступен только руководству:',
         '<code>#штраф @логин причина</code>',
         '',
-        'Клуб указывать не нужно — бот определит его по смене.',
+        ('Сверка с OMG Shift временно отключена. Записи сохраняются локально.'
+         if local_only else 'Клуб указывать не нужно — бот определит его по смене.'),
     ])
     return '\n'.join(lines)
 

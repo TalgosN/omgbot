@@ -81,6 +81,20 @@ class HelpMenuTest(unittest.TestCase):
     def setUpClass(cls):
         cls.menu = load_menu_module()
 
+    def test_kpi_help_describes_local_only_hashtags(self):
+        kpi = types.ModuleType('kpi')
+        kpi.hashtags_local_only = lambda: True
+        kpi.get_remote_hashtag_rules = lambda: [
+            {'hashtag': '#двойная', 'type': 'double_hours'},
+            {'hashtag': '#др', 'type': 'fixed_bonus'},
+        ]
+        with patch.dict(sys.modules, {'kpi': kpi}):
+            text = self.menu.kpi_help_text()
+        self.assertIn('Локальные начисления', text)
+        self.assertIn('#двойная', text)
+        self.assertIn('Записи сохраняются локально', text)
+        self.assertNotIn('Начисления OMG Shift', text)
+
     def test_help_opens_section_menu(self):
         bot = Mock()
         bot.send_message.return_value = object()
