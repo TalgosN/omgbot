@@ -470,6 +470,9 @@ function renderOwnerDashboard(dashboard) {
 
 async function loadShift() {
   const payload = await api('/api/shift');
+  if (payload.manual_club_mode && !payload.can_manage) {
+    document.querySelector('#shiftReportDescription').textContent = 'OMG Shift временно недоступен. Для открытия или закрытия выберите клуб вручную.';
+  }
   if (payload.preview_mode) {
     document.querySelector('#shiftReportDescription').textContent = 'Тестовый прогон работает полностью, но результат придёт только владельцу в ЛС и не изменит рабочие данные.';
   }

@@ -1,6 +1,6 @@
 const tg = window.Telegram?.WebApp;
 const dialog = document.querySelector('#taskDialog');
-const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null, submitting: false };
+const state = { scope: 'active', club: '', tasks: [], attachments: [], reportUrls: [], reportRequest: 0, current: null, submitting: false, manualClubMode: false, requestedTaskId: 0 };
 let restoringTask = false;
 let draftSaveVersion = 0;
 let taskListReady = false;
@@ -74,7 +74,7 @@ async function api(path, options = {}) {
 }
 
 async function authenticatedBlob(path) {
-  const response = await fetch(path, {
+  const response = await fetch(taskApiPath(path), {
     headers: { 'X-Telegram-Init-Data': tg?.initData || '' },
   });
   if (!response.ok) {
@@ -82,6 +82,13 @@ async function authenticatedBlob(path) {
     throw new Error(payload.error || 'Не удалось загрузить вложение');
   }
   return response.blob();
+}
+
+function taskApiPath(path) {
+  if (!state.manualClubMode || !state.club) return path;
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set('club', state.club);
+  return `${url.pathname}${url.search}`;
 }
 
 function status(task) {
@@ -99,11 +106,12 @@ function renderSummary(summary) {
   document.querySelector('#skippedCount').textContent = summary.skipped || 0;
 }
 
-function renderClubFilters(clubs, canManage) {
+function renderClubFilters(clubs, canManage, manualClubMode = false) {
   const panel = document.querySelector('#clubFilters');
-  panel.hidden = !canManage || clubs.length < 2;
+  panel.hidden = manualClubMode ? !clubs.length : (!canManage || clubs.length < 2);
   if (panel.hidden) return;
-  panel.innerHTML = ['Все', ...clubs].map((club) => `
+  const options = manualClubMode ? clubs : ['Все', ...clubs];
+  panel.innerHTML = options.map((club) => `
     <button type="button" class="${(!state.club && club === 'Все') || state.club === club ? 'active' : ''}" data-club="${club === 'Все' ? '' : escapeHtml(club)}">${escapeHtml(club)}</button>
   `).join('');
 }
@@ -170,11 +178,21 @@ async function loadTasks(scope = state.scope) {
   notice.hidden = true;
   document.querySelector('#taskList').innerHTML = '<div class="task-empty">Загружаю задачи…</div>';
   try {
-    const payload = await api(`/api/shift/tasks?scope=${scope}`);
+    const payload = await api(taskApiPath(`/api/shift/tasks?scope=${scope}`));
+    state.manualClubMode = Boolean(payload.manual_club_mode);
+    if (
+      payload.requires_club_selection
+      && state.club
+      && (payload.clubs || []).includes(state.club)
+    ) return loadTasks(scope);
     state.tasks = payload.tasks || [];
-    document.querySelector('#taskRole').textContent = payload.can_manage ? 'Контроль выполнения' : 'Моя смена';
+    document.querySelector('#taskRole').textContent = payload.can_manage ? 'Контроль выполнения' : (state.manualClubMode ? 'Аварийный режим' : 'Моя смена');
+    document.querySelector('#manualClubNote').hidden = !state.manualClubMode;
+    document.querySelector('#manualClubNote strong').textContent = state.club
+      ? `Выбран клуб: ${state.club}`
+      : 'Выберите клуб, в котором вы сейчас работаете';
     renderSummary(payload.summary || {});
-    renderClubFilters(payload.clubs || [], payload.can_manage);
+    renderClubFilters(payload.clubs || [], payload.can_manage, state.manualClubMode);
     renderTasks();
     return payload;
   } catch (error) {
@@ -207,7 +225,7 @@ async function loadTaskReport(task) {
   gallery.hidden = false;
   mediaPanel.innerHTML = '<div class="task-report-loading">Загружаю фотографии…</div>';
   telegramLink.hidden = true;
-  const report = await api(`/api/shift/tasks/${task.id}/report`);
+  const report = await api(taskApiPath(`/api/shift/tasks/${task.id}/report`));
   if (requestId !== state.reportRequest || state.current?.id !== task.id) return;
   document.querySelector('#taskReportMediaCount').textContent = report.media.length
     ? `${report.media.length} влож.`
@@ -355,7 +373,7 @@ async function startCurrentTask() {
   const button = document.querySelector('#startTask');
   button.disabled = true;
   try {
-    state.current = await api(`/api/shift/tasks/${state.current.id}/start`, { method: 'POST' });
+    state.current = await api(taskApiPath(`/api/shift/tasks/${state.current.id}/start`), { method: 'POST' });
     button.hidden = true;
     document.querySelector('#reportEditor').hidden = false;
     renderAttachments();
@@ -371,7 +389,7 @@ async function startCurrentTask() {
 
 function uploadTask(form, button) {
   const taskId = state.current.id;
-  return OmgApp.upload(`/api/shift/tasks/${taskId}/complete`, form, (text) => {
+  return OmgApp.upload(taskApiPath(`/api/shift/tasks/${taskId}/complete`), form, (text) => {
     button.textContent = text;
   }).then((payload) => {
     if (payload.status !== 'completed' || payload.id !== taskId) throw new Error('Сервер не подтвердил завершение задачи');
@@ -399,7 +417,7 @@ async function completeCurrentTask() {
     catch (_error) { /* Delivery does not depend on haptic feedback. */ }
   } catch (error) {
     try {
-      const current = await api(`/api/shift/tasks/${state.current.id}/report`);
+      const current = await api(taskApiPath(`/api/shift/tasks/${state.current.id}/report`));
       if (current.status === 'completed' || current.status === 'skipped') {
         await removeTaskDraft().catch(() => {});
         clearAttachments();
@@ -429,7 +447,7 @@ async function skipCurrentTask() {
   button.disabled = true;
   try {
     await saveTaskDraft();
-    await api(`/api/shift/tasks/${state.current.id}/skip`, {
+    await api(taskApiPath(`/api/shift/tasks/${state.current.id}/skip`), {
       method: 'POST', body: JSON.stringify({ reason }),
     });
     await removeTaskDraft().catch(() => {});
@@ -438,7 +456,7 @@ async function skipCurrentTask() {
     await loadTasks(state.scope);
   } catch (error) {
     try {
-      const current = await api(`/api/shift/tasks/${state.current.id}/report`);
+      const current = await api(taskApiPath(`/api/shift/tasks/${state.current.id}/report`));
       if (current.status === 'completed' || current.status === 'skipped') {
         await removeTaskDraft().catch(() => {});
         clearAttachments();
@@ -462,15 +480,19 @@ document.querySelector('.task-tabs').addEventListener('click', (event) => {
   const button = event.target.closest('button[data-scope]');
   if (!button) return;
   document.querySelectorAll('.task-tabs button').forEach((item) => item.classList.toggle('active', item === button));
-  state.club = '';
+  if (!state.manualClubMode) state.club = '';
   loadTasks(button.dataset.scope);
 });
-document.querySelector('#clubFilters').addEventListener('click', (event) => {
+document.querySelector('#clubFilters').addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-club]');
   if (!button) return;
   state.club = button.dataset.club;
   document.querySelectorAll('#clubFilters button').forEach((item) => item.classList.toggle('active', item === button));
-  renderTasks();
+  if (state.manualClubMode) {
+    await loadTasks(state.scope);
+    await openRequestedTask();
+  }
+  else renderTasks();
 });
 document.querySelector('#taskList').addEventListener('click', (event) => {
   const toggle = event.target.closest('[data-group]');
@@ -543,6 +565,20 @@ function saveTaskView() {
 window.addEventListener('pagehide', saveTaskView);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveTaskView(); });
 
+async function openRequestedTask() {
+  if (!state.requestedTaskId || !state.club && state.manualClubMode) return;
+  let task = state.tasks.find((item) => item.id === state.requestedTaskId);
+  if (!task && state.scope !== 'history') {
+    document.querySelectorAll('.task-tabs button').forEach((item) => item.classList.toggle('active', item.dataset.scope === 'history'));
+    await loadTasks('history');
+    task = state.tasks.find((item) => item.id === state.requestedTaskId);
+  }
+  if (task) {
+    state.requestedTaskId = 0;
+    await openTask(task);
+  }
+}
+
 (async () => {
   try { OmgApp.setIdentity(await api('/api/me')); }
   catch (error) {
@@ -551,6 +587,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveT
     return;
   }
   const requestedId = Number(new URLSearchParams(window.location.search).get('task'));
+  state.requestedTaskId = requestedId;
   const saved = requestedId ? {} : OmgApp.viewState();
   state.club = saved.club || '';
   (saved.expanded || []).forEach((key) => expandedGroups.add(key));
@@ -560,11 +597,5 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveT
   taskListReady = Boolean(payload);
   if (!requestedId) OmgApp.restoreScroll(saved);
   if (!payload || !requestedId) return;
-  let task = state.tasks.find((item) => item.id === requestedId);
-  if (!task) {
-    document.querySelectorAll('.task-tabs button').forEach((item) => item.classList.toggle('active', item.dataset.scope === 'history'));
-    await loadTasks('history');
-    task = state.tasks.find((item) => item.id === requestedId);
-  }
-  if (task) openTask(task);
+  await openRequestedTask();
 })();

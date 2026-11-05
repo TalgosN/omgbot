@@ -435,6 +435,7 @@ def _requirements_for(conn, template_id, club):
 
 def ensure_task_instances(
     occurrence_date=None, db_path=DB_PATH, now=None, skip_expired=False,
+    allow_unscheduled=False,
 ):
     current = _now(now)
     day = occurrence_date or current.date()
@@ -469,7 +470,12 @@ def ensure_task_instances(
                 if skip_expired and day == current.date() and current >= due_at:
                     continue
                 for club in _template_clubs(template):
-                    if not _club_has_scheduled_shift(conn, day.isoformat(), club):
+                    if (
+                        not allow_unscheduled
+                        and not _club_has_scheduled_shift(
+                            conn, day.isoformat(), club,
+                        )
+                    ):
                         continue
                     requirements = _requirements_for(conn, template['id'], club)
                     cursor = conn.execute(
@@ -1105,7 +1111,7 @@ def _actor_snapshot(update):
     }
 
 
-def _app_actor(user):
+def _app_actor(user, emergency_club=None):
     user = dict(user or {})
     login = str(user.get('login') or '')
     return {
@@ -1115,6 +1121,7 @@ def _app_actor(user):
             user.get('nick_name') or user.get('first_name') or login
         ),
         'role': int(user.get('status') or 0),
+        'emergency_club': str(emergency_club or '').strip(),
     }
 
 
@@ -1122,6 +1129,12 @@ def _task_accessible_to_actor(conn, instance, actor):
     if not instance or not actor.get('chatid'):
         return False
     if actor['role'] >= ROLE_MANAGER:
+        return True
+    if (
+        actor.get('emergency_club')
+        and str(instance['club']).strip().casefold()
+        == actor['emergency_club'].casefold()
+    ):
         return True
     notified = conn.execute(
         '''SELECT 1 FROM shift_task_notifications
@@ -1172,12 +1185,16 @@ def _app_task_payload(instance, current, can_execute=True):
 
 def app_task_list(
     user, scope='active', db_path=DB_PATH, now=None, ensure_instances=True,
+    emergency_club=None,
 ):
     current = _now(now)
     initialize_shift_tasks_schema(db_path)
     if ensure_instances:
-        ensure_task_instances(current.date(), db_path=db_path, now=current)
-    actor = _app_actor(user)
+        ensure_task_instances(
+            current.date(), db_path=db_path, now=current,
+            allow_unscheduled=bool(emergency_club),
+        )
+    actor = _app_actor(user, emergency_club=emergency_club)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -1211,6 +1228,7 @@ def app_task_list(
             for row in rows
             if (
                 row['status'] not in ('pending', 'in_progress')
+                or bool(emergency_club)
                 or _club_has_scheduled_shift(
                     conn, row['occurrence_date'], row['club'],
                 )
@@ -1220,9 +1238,11 @@ def app_task_list(
         conn.close()
 
 
-def app_task_report(user, instance_id, db_path=DB_PATH, now=None):
+def app_task_report(
+    user, instance_id, db_path=DB_PATH, now=None, emergency_club=None,
+):
     current = _now(now)
-    actor = _app_actor(user)
+    actor = _app_actor(user, emergency_club=emergency_club)
     initialize_shift_tasks_schema(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -1263,8 +1283,10 @@ def app_task_report(user, instance_id, db_path=DB_PATH, now=None):
         conn.close()
 
 
-def app_task_media_file(user, instance_id, media_id, db_path=DB_PATH):
-    actor = _app_actor(user)
+def app_task_media_file(
+    user, instance_id, media_id, db_path=DB_PATH, emergency_club=None,
+):
+    actor = _app_actor(user, emergency_club=emergency_club)
     initialize_shift_tasks_schema(db_path)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -1288,8 +1310,10 @@ def app_task_media_file(user, instance_id, media_id, db_path=DB_PATH):
         conn.close()
 
 
-def start_app_task(user, instance_id, db_path=DB_PATH):
-    actor = _app_actor(user)
+def start_app_task(
+    user, instance_id, db_path=DB_PATH, emergency_club=None,
+):
+    actor = _app_actor(user, emergency_club=emergency_club)
     if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     initialize_shift_tasks_schema(db_path)
@@ -1387,8 +1411,11 @@ def _send_app_task_report(bot, instance, actor, uploads):
     ]
 
 
-def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
-    actor = _app_actor(user)
+def complete_app_task(
+    user, instance_id, uploads, bot, db_path=DB_PATH,
+    emergency_club=None,
+):
+    actor = _app_actor(user, emergency_club=emergency_club)
     if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     with _task_app_completion_lock:
@@ -1467,8 +1494,11 @@ def complete_app_task(user, instance_id, uploads, bot, db_path=DB_PATH):
             conn.close()
 
 
-def skip_app_task(user, instance_id, reason, bot, db_path=DB_PATH):
-    actor = _app_actor(user)
+def skip_app_task(
+    user, instance_id, reason, bot, db_path=DB_PATH,
+    emergency_club=None,
+):
+    actor = _app_actor(user, emergency_club=emergency_club)
     if actor['role'] > ROLE_MANAGER:
         raise ValueError('Для менеджмента задачи доступны только для просмотра')
     reason = str(reason or '').strip()

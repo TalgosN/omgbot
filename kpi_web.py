@@ -140,6 +140,9 @@ OMG_SHIFT_URL = os.getenv(
     'OMG_SHIFT_URL',
     'http://31.129.109.167/?page=settings',
 ).strip()
+SHIFT_MANUAL_CLUB_MODE = str(
+    os.getenv('SHIFT_MANUAL_CLUB_MODE', 'false')
+).strip().lower() in {'1', 'true', 'yes', 'on'}
 CAMERA_TEST_RECIPIENT_CHAT_ID = str(
     os.getenv('CAMERA_TEST_RECIPIENT_CHAT_ID') or CHATS.get('me') or ''
 ).strip()
@@ -1045,7 +1048,7 @@ def _live_user_shifts(login, date_from, date_to):
 
 
 def _current_user_shifts(login, date_from, date_to, limit=50):
-    if not app.config.get('TESTING'):
+    if not app.config.get('TESTING') and not SHIFT_MANUAL_CLUB_MODE:
         try:
             live_shifts = _live_user_shifts(login, date_from, date_to)
         except Exception as error:
@@ -1074,7 +1077,11 @@ def _shift_schedule_range(date_from, date_to):
 
 
 def _refresh_app_schedule():
-    if app.config.get('TESTING') or getattr(g, 'kpi_preview', None):
+    if (
+        SHIFT_MANUAL_CLUB_MODE
+        or app.config.get('TESTING')
+        or getattr(g, 'kpi_preview', None)
+    ):
         return
     today = _moscow_today()
     try:
@@ -1169,8 +1176,12 @@ def _shift_week_payload(login, selected_date=None):
     source = 'omg_shift'
     warning = None
     grouped = {}
-    response = _shift_schedule_range(
-        week_start.isoformat(), week_end.isoformat(),
+    response = (
+        {'ok': False, 'error': 'Включён аварийный режим'}
+        if SHIFT_MANUAL_CLUB_MODE
+        else _shift_schedule_range(
+            week_start.isoformat(), week_end.isoformat(),
+        )
     )
     if isinstance(response, dict) and response.get('ok'):
         for raw_day in response.get('days', []):
@@ -1371,6 +1382,21 @@ def _shift_report_test_owner_clubs(action):
     )
 
 
+def _shift_manual_task_club():
+    if (
+        not SHIFT_MANUAL_CLUB_MODE
+        or int(g.kpi_user['status']) >= ROLE_MANAGER
+    ):
+        return None
+    requested = str(request.args.get('club') or '').strip()
+    if not requested:
+        return None
+    club_name, club = _shift_report_test_club(requested)
+    if not club:
+        raise ValueError('Выбранный клуб не найден в настройках OMG Shift')
+    return club_name
+
+
 def _initialize_shift_report_schema(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     try:
@@ -1507,6 +1533,22 @@ def _latest_shift_report_run_scenario(action, requested_club=None, now=None, shi
     if action not in SHIFT_ACTIONS:
         return None
     current = now or datetime.now(ZoneInfo('Europe/Moscow'))
+    if (
+        shift is None
+        and SHIFT_MANUAL_CLUB_MODE
+        and requested_club
+        and int(g.kpi_user['status']) != ROLE_OWNER
+    ):
+        club_name, club = _shift_report_test_club(requested_club)
+        if club:
+            shift = {
+                'date': current.date().isoformat(),
+                'club': club_name,
+                'duration': 0,
+                'start': None,
+                'end': None,
+                'manual': True,
+            }
     if shift is None:
         shift = _select_shift_report_test_shift(_actor_login(), action=action, now=current,
                                                 requested_club=requested_club)
@@ -1548,6 +1590,10 @@ def _shift_close_tasks(scenario):
 def _require_current_shift_report(scenario):
     if scenario.get('cancelled'):
         raise ValueError('Отчёт отменён. Начните новый отчёт')
+    if scenario['shift'].get('manual'):
+        if not _shift_report_test_club(scenario['club'])[1]:
+            raise ValueError('Выбранный клуб больше не доступен')
+        return
     current = _shift_report_test_scenario(
         scenario['action'],
         requested_club=scenario['club'] if scenario['shift'].get('manual') else None,
@@ -1659,16 +1705,26 @@ def _shift_report_test_scenario(
 ):
     if action not in SHIFT_ACTIONS:
         raise ValueError('Выберите открытие или закрытие')
-    shift = _select_shift_report_test_shift(
+    emergency_manual = (
+        SHIFT_MANUAL_CLUB_MODE
+        and requested_club
+        and int(g.kpi_user['status']) != ROLE_OWNER
+    )
+    shift = None if emergency_manual else _select_shift_report_test_shift(
         _actor_login(), action=action, now=now, requested_club=requested_club,
     )
     manual_club = None
     if (
         not shift
         and requested_club
-        and int(g.kpi_user['status']) == ROLE_OWNER
-        and not _select_shift_report_test_shift(
-            _actor_login(), action=action, now=now,
+        and (
+            emergency_manual
+            or (
+                int(g.kpi_user['status']) == ROLE_OWNER
+                and not _select_shift_report_test_shift(
+                    _actor_login(), action=action, now=now,
+                )
+            )
         )
     ):
         manual_club = _shift_report_test_club(requested_club)
@@ -4243,7 +4299,10 @@ def api_shift():
         ),
         'role_name': ROLE_NAMES[role],
         'can_manage': role >= ROLE_MANAGER,
-        'can_select_report_club': False,
+        'can_select_report_club': (
+            SHIFT_MANUAL_CLUB_MODE and role != ROLE_OWNER
+        ),
+        'manual_club_mode': SHIFT_MANUAL_CLUB_MODE,
         'camera_test_available': bool(
             TELEGRAM_API_KEY and CAMERA_TEST_RECIPIENT_CHAT_ID
         ),
@@ -4267,6 +4326,11 @@ def api_shift_overview():
     login = _actor_login()
     current = _effective_now()
     contexts = _today_shift_contexts(login, now=current)
+    if (
+        SHIFT_MANUAL_CLUB_MODE
+        and int(g.kpi_user['status']) != ROLE_OWNER
+    ):
+        contexts = []
     if int(g.kpi_user['status']) == ROLE_OWNER:
         for context in contexts:
             context['report_available'] = False
@@ -4292,23 +4356,42 @@ def api_shift_tasks():
     scope = str(request.args.get('scope') or 'active').strip().lower()
     if scope not in {'active', 'history'}:
         raise ValueError('Неизвестный раздел задач')
-    task_options = {}
+    emergency_club = _shift_manual_task_club()
+    task_options = {'emergency_club': emergency_club}
     if g.kpi_preview:
-        task_options = {
+        task_options.update({
             'now': _effective_now(),
             'ensure_instances': False,
-        }
+        })
     tasks = app_task_list(
         g.kpi_user, scope=scope, db_path=DB_PATH, **task_options,
     )
+    requires_club_selection = bool(
+        SHIFT_MANUAL_CLUB_MODE
+        and int(g.kpi_user['status']) < ROLE_MANAGER
+        and not emergency_club
+    )
+    if requires_club_selection:
+        tasks = []
     club = str(request.args.get('club') or '').strip()
     if club and int(g.kpi_user['status']) >= ROLE_MANAGER:
         tasks = [task for task in tasks if task['club'] == club]
+    manual_clubs = (
+        sorted(get_clubs(), key=str.casefold)
+        if SHIFT_MANUAL_CLUB_MODE
+        and int(g.kpi_user['status']) < ROLE_MANAGER
+        else sorted({task['club'] for task in tasks})
+    )
     return jsonify({
         'scope': scope,
         'can_manage': int(g.kpi_user['status']) >= ROLE_MANAGER,
+        'manual_club_mode': bool(
+            SHIFT_MANUAL_CLUB_MODE
+            and int(g.kpi_user['status']) < ROLE_MANAGER
+        ),
+        'requires_club_selection': requires_club_selection,
         'tasks': tasks,
-        'clubs': sorted({task['club'] for task in tasks}),
+        'clubs': manual_clubs,
         'summary': {
             'active': sum(
                 task['status'] in {'pending', 'in_progress'}
@@ -4332,7 +4415,10 @@ def _telegram_private_message_url(chatid, message_ids):
 @app.get('/api/shift/tasks/<int:instance_id>/report')
 @require_user
 def api_shift_task_report(instance_id):
-    task = app_task_report(g.kpi_user, instance_id, db_path=DB_PATH)
+    task = app_task_report(
+        g.kpi_user, instance_id, db_path=DB_PATH,
+        emergency_club=_shift_manual_task_club(),
+    )
     task['report_url'] = _telegram_private_message_url(
         task.pop('report_chatid', None),
         task.pop('report_message_ids', []),
@@ -4349,6 +4435,7 @@ def api_shift_task_report(instance_id):
 def api_shift_task_media(instance_id, media_id):
     media = app_task_media_file(
         g.kpi_user, instance_id, media_id, db_path=DB_PATH,
+        emergency_club=_shift_manual_task_club(),
     )
     bot = _notification_bot()
     if not bot:
@@ -4368,7 +4455,10 @@ def api_shift_task_media(instance_id, media_id):
 @app.post('/api/shift/tasks/<int:instance_id>/start')
 @require_user
 def api_shift_task_start(instance_id):
-    return jsonify(start_app_task(g.kpi_user, instance_id, db_path=DB_PATH))
+    return jsonify(start_app_task(
+        g.kpi_user, instance_id, db_path=DB_PATH,
+        emergency_club=_shift_manual_task_club(),
+    ))
 
 
 @app.post('/api/shift/tasks/<int:instance_id>/complete')
@@ -4378,7 +4468,7 @@ def api_shift_task_complete(instance_id):
     try:
         result = complete_app_task(
             g.kpi_user, instance_id, _shift_task_uploads(), bot,
-            db_path=DB_PATH,
+            db_path=DB_PATH, emergency_club=_shift_manual_task_club(),
         )
     except RuntimeError as error:
         return jsonify({'error': str(error)}), 502
@@ -4392,6 +4482,7 @@ def api_shift_task_skip(instance_id):
     return jsonify(skip_app_task(
         g.kpi_user, instance_id, payload.get('reason'),
         _notification_bot(), db_path=DB_PATH,
+        emergency_club=_shift_manual_task_club(),
     ))
 
 
@@ -4553,6 +4644,24 @@ def api_shift_test_scenario():
             if action and scenario['action'] != action:
                 raise ValueError('Сохранённый отчёт относится к другому действию')
             return jsonify(scenario)
+    if (
+        SHIFT_MANUAL_CLUB_MODE
+        and int(g.kpi_user['status']) != ROLE_OWNER
+        and not requested_club
+    ):
+        clubs = _shift_report_test_owner_clubs(action)
+        if not clubs:
+            raise ValueError('Не настроено ни одного клуба с таким сценарием')
+        return jsonify({
+            'production_mode': True,
+            'requires_club_selection': True,
+            'manual_club_mode': True,
+            'action': action,
+            'action_label': (
+                'Открытие' if action == 'open' else 'Закрытие'
+            ),
+            'clubs': clubs,
+        })
     scenario = None if preview_mode else _latest_shift_report_run_scenario(
         action, requested_club=requested_club, now=current,
     )

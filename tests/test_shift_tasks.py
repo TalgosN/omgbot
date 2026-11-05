@@ -529,6 +529,44 @@ class ShiftTasksTest(unittest.TestCase):
         self.assertEqual(stored, ('completed', '@employee', '-1001'))
         self.assertEqual(media_count, task['required_attachments'])
 
+    def test_emergency_club_allows_tasks_without_schedule_and_stays_scoped(self):
+        shift_tasks.initialize_shift_tasks_schema(self.db_path)
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=ZoneInfo('Europe/Moscow'))
+        actor = {
+            'chatid': '101', 'login': '@employee', 'nick_name': 'Иван',
+            'status': 0,
+        }
+
+        regular = shift_tasks.app_task_list(
+            actor, db_path=self.db_path, now=now,
+        )
+        emergency = shift_tasks.app_task_list(
+            actor, db_path=self.db_path, now=now,
+            emergency_club='Ленинский',
+        )
+
+        self.assertEqual(regular, [])
+        self.assertTrue(emergency)
+        self.assertTrue(all(task['club'] == 'Ленинский' for task in emergency))
+        started = shift_tasks.start_app_task(
+            actor, emergency[0]['id'], db_path=self.db_path,
+            emergency_club='Ленинский',
+        )
+        self.assertEqual(started['status'], 'in_progress')
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            other = conn.execute(
+                '''SELECT id FROM shift_task_instances
+                   WHERE occurrence_date='2026-09-01' AND club<>'Ленинский'
+                   ORDER BY id LIMIT 1'''
+            ).fetchone()
+        self.assertIsNotNone(other)
+        with self.assertRaisesRegex(ValueError, 'недоступна'):
+            shift_tasks.app_task_report(
+                actor, other[0], db_path=self.db_path, now=now,
+                emergency_club='Ленинский',
+            )
+
     def test_manager_can_complete_task_without_personal_shift(self):
         shift_tasks.initialize_shift_tasks_schema(self.db_path)
         self._add_shift()

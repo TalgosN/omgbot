@@ -1020,6 +1020,72 @@ class KpiWebTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn('На сегодня смена', response.get_json()['error'])
 
+    def test_shift_emergency_mode_allows_employee_to_select_club(self):
+        clubs = {
+            'Тестовый клуб': {
+                'shift_name': 'Тестовый клуб',
+                'questions': {
+                    '✅ Открыть смену': [[
+                        {'text': 'Комментарий', 'type': 'text'},
+                    ]],
+                },
+            },
+        }
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'SHIFT_MANUAL_CLUB_MODE', True),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, '_upcoming_shifts', return_value=[]),
+            patch.object(kpi_web.random, 'randrange', return_value=0),
+        ):
+            selection_response = self.client.get(
+                '/api/shift-test/scenario?action=open', headers=self.headers,
+            )
+            scenario_response = self.client.get(
+                '/api/shift-test/scenario?action=open&club=Тестовый+клуб',
+                headers=self.headers,
+            )
+
+        self.assertEqual(selection_response.status_code, 200)
+        selection = selection_response.get_json()
+        self.assertTrue(selection['requires_club_selection'])
+        self.assertTrue(selection['manual_club_mode'])
+        self.assertEqual(selection['clubs'], ['Тестовый клуб'])
+        self.assertEqual(scenario_response.status_code, 200)
+        scenario = scenario_response.get_json()
+        self.assertEqual(scenario['club'], 'Тестовый клуб')
+        self.assertTrue(scenario['shift']['manual'])
+
+    def test_shift_tasks_emergency_mode_requires_and_passes_selected_club(self):
+        tasks = [{
+            'id': 7, 'club': 'Ленинский', 'status': 'pending',
+            'overdue': False,
+        }]
+        clubs = {'Ленинский': {'shift_name': 'Ленинский', 'questions': {}}}
+        with (
+            patch.object(kpi_web, 'TELEGRAM_API_KEY', BOT_TOKEN),
+            patch.object(kpi_web, 'SHIFT_MANUAL_CLUB_MODE', True),
+            patch.object(kpi_web, 'get_user', return_value=user(0)),
+            patch.object(kpi_web, 'get_clubs', return_value=clubs),
+            patch.object(kpi_web, 'app_task_list', return_value=tasks) as task_list,
+        ):
+            selection_response = self.client.get(
+                '/api/shift/tasks?scope=active', headers=self.headers,
+            )
+            tasks_response = self.client.get(
+                '/api/shift/tasks?scope=active&club=Ленинский',
+                headers=self.headers,
+            )
+
+        self.assertTrue(selection_response.get_json()['requires_club_selection'])
+        self.assertEqual(selection_response.get_json()['tasks'], [])
+        self.assertEqual(tasks_response.get_json()['tasks'], tasks)
+        self.assertEqual(
+            task_list.call_args_list[-1].kwargs['emergency_club'],
+            'Ленинский',
+        )
+
     def test_shift_report_requires_confirmation_before_early_close(self):
         today = kpi_web._moscow_today().isoformat()
         clubs = {

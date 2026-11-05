@@ -322,7 +322,15 @@ function setWorkflowStep(step) {
 function renderOwnerClubSelection(selection) {
   const closing = selection.action === 'close';
   $('#pageTitle').textContent = closing ? 'ЗАКРЫТИЕ СМЕНЫ' : 'ОТКРЫТИЕ СМЕНЫ';
-  $('#pageDescription').textContent = 'Смена на сегодня не найдена · выберите клуб';
+  $('#pageDescription').textContent = selection.manual_club_mode
+    ? 'Аварийный режим · выберите клуб вручную'
+    : 'Смена на сегодня не найдена · выберите клуб';
+  $('#clubSelectionEyebrow').textContent = selection.manual_club_mode
+    ? 'Аварийный режим'
+    : 'Режим владельца';
+  $('#clubSelectionDescription').textContent = selection.manual_club_mode
+    ? 'OMG Shift временно недоступен. Выберите клуб, в котором вы сейчас работаете.'
+    : 'Сегодня у вас нет смены. Выберите клуб, статус которого нужно изменить.';
   const clubList = $('#ownerClubList');
   clubList.replaceChildren();
   selection.clubs.forEach((clubName) => {
