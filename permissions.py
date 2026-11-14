@@ -152,11 +152,22 @@ def require_role(update, bot, minimum=ROLE_EMPLOYEE, notify=True):
     status = user['status'] if user else None
     allowed = status in ACTIVE_ROLES and int(status) >= minimum
     if allowed:
-        allowed = is_main_group_member(
-            bot,
-            CHATS['main_group'],
-            user['chatid'],
+        chat = getattr(update, 'chat', None)
+        sender = getattr(update, 'from_user', None)
+        # A message from this user in MAIN GROUP already proves membership.
+        sent_in_main_group = (
+            CHATS.get('main_group') is not None
+            and str(getattr(chat, 'id', None)) == str(CHATS['main_group'])
+            and sender is not None
+            and not getattr(sender, 'is_bot', False)
+            and str(getattr(sender, 'id', None)) == str(user['chatid'])
         )
+        if not sent_in_main_group:
+            allowed = is_main_group_member(
+                bot,
+                CHATS['main_group'],
+                user['chatid'],
+            )
     if allowed:
         return user
 

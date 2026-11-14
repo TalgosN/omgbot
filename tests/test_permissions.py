@@ -90,6 +90,66 @@ class PermissionsTest(unittest.TestCase):
             'Бот доступен только участникам основной рабочей группы.',
         )
 
+    def test_main_group_message_does_not_need_remote_membership_check(self):
+        bot = Mock()
+        message = update(10)
+        message.chat = SimpleNamespace(id=-100)
+        with patch.dict(permissions.CHATS, {'main_group': '-100'}), \
+                patch.object(permissions, 'is_main_group_member', return_value=False) as check:
+            self.assertIsNotNone(permissions.require_role(message, bot))
+
+        check.assert_not_called()
+        bot.get_chat_member.assert_not_called()
+        bot.send_message.assert_not_called()
+
+    def test_private_and_other_group_messages_still_require_membership(self):
+        for chat_id in (10, -200):
+            with self.subTest(chat_id=chat_id):
+                bot = Mock()
+                message = update(10)
+                message.chat = SimpleNamespace(id=chat_id)
+                with patch.dict(permissions.CHATS, {'main_group': '-100'}), \
+                        patch.object(permissions, 'is_main_group_member', return_value=False) as check:
+                    self.assertIsNone(permissions.require_role(message, bot))
+
+                check.assert_called_once_with(bot, '-100', '10')
+
+    def test_callback_in_main_group_still_requires_membership(self):
+        bot = Mock()
+        callback = update(10)
+        callback.data = 'test'
+        callback.id = 'callback-id'
+        callback.message = SimpleNamespace(chat=SimpleNamespace(id=-100))
+        with patch.dict(permissions.CHATS, {'main_group': '-100'}), \
+                patch.object(permissions, 'is_main_group_member', return_value=False) as check:
+            self.assertIsNone(permissions.require_role(callback, bot))
+
+        check.assert_called_once_with(bot, '-100', '10')
+
+    def test_main_group_message_does_not_bypass_role_or_registration(self):
+        for user_id, minimum in ((10, permissions.ROLE_MANAGER), (999, permissions.ROLE_EMPLOYEE)):
+            with self.subTest(user_id=user_id):
+                bot = Mock()
+                message = update(user_id)
+                message.chat = SimpleNamespace(id=-100)
+                with patch.dict(permissions.CHATS, {'main_group': '-100'}):
+                    self.assertIsNone(permissions.require_role(message, bot, minimum))
+
+    def test_blocked_user_in_main_group_is_denied(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute('UPDATE users SET status=-1 WHERE chatid=?', ('10',))
+        conn.commit()
+        conn.close()
+        message = update(10)
+        message.chat = SimpleNamespace(id=-100)
+        bot = Mock()
+        with patch.dict(permissions.CHATS, {'main_group': '-100'}):
+            self.assertIsNone(permissions.require_role(message, bot))
+
+        bot.send_message.assert_called_once_with(
+            -100, 'Доступ запрещён. Учётная запись заблокирована.',
+        )
+
     def test_privileged_user_cannot_be_auto_bound_by_username(self):
         self.assertTrue(permissions.can_auto_bind_by_username({'status': None}))
         self.assertTrue(permissions.can_auto_bind_by_username({'status': 1}))
